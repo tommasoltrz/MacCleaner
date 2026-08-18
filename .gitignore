@@ -1,0 +1,8 @@
+# Generated from project.yml — never commit
+MacCleaner.xcodeproj/
+
+.DS_Store
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
