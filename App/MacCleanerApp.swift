@@ -4,6 +4,7 @@ import MacCleanerCore
 @main
 struct MacCleanerApp: App {
 
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
     @State private var settings = SettingsStore()
 
@@ -59,5 +60,39 @@ struct MacCleanerApp: App {
                 }
             }
         }
+    }
+}
+
+/// Keeps a login launch in the menu bar.
+///
+/// When loginwindow starts the app, only the status item should appear; the full
+/// window is for launches the user performs. The launch Apple event names the
+/// reason, so a Finder or Dock launch, which carries no such flag, keeps its window.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard Self.launchedAsLoginItem else { return }
+        closeMainWindows()
+        // SwiftUI can present the restored window just after this notification
+        // fires, so sweep once more on the next runloop turn.
+        DispatchQueue.main.async { self.closeMainWindows() }
+    }
+
+    /// Only windows that can become main: the status item's own window and panels
+    /// must survive, or the menu bar item dies with the launch.
+    private func closeMainWindows() {
+        for window in NSApp.windows where window.canBecomeMain && window.isVisible {
+            window.close()
+        }
+    }
+
+    private static var launchedAsLoginItem: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else {
+            return false
+        }
+        return event.eventID == kAEOpenApplication
+            && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
+                == keyAELaunchedAsLogInItem
     }
 }

@@ -6,3 +6,4 @@ MacCleaner.xcodeproj/
 DerivedData/
 *.xcuserstate
 xcuserdata/
+dist/
