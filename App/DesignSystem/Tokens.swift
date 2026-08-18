@@ -197,7 +197,7 @@ enum Token {
         /// and it needs more weight than the box hairline to do that.
         static let controlBorder = Token.ink(light: 0.13, dark: 0.10)
         static let well = Token.dynamic(
-            light: .black.withAlphaComponent(0.07),
+            light: .black.withAlphaComponent(0.04),
             dark: .black.withAlphaComponent(0.22)
         )
         static let control = Token.ink(light: 0.07, dark: 0.09)
@@ -205,7 +205,9 @@ enum Token {
         /// opposite direction, which is what `ink` already does.
         static let controlHover = Token.ink(light: 0.12, dark: 0.14)
         static let rowHover = Token.ink(light: 0.04, dark: 0.03)
-        static let sidebarSelection = Token.ink(light: 0.10, dark: 0.13)
+        // Light matches the App Store's pill: about 4% black over the sidebar
+        // material, a hint rather than a block.
+        static let sidebarSelection = Token.ink(light: 0.045, dark: 0.13)
     }
 
     /// The drop shadow under a floating chip — the capacity bar's tooltip and the
