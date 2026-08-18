@@ -19,16 +19,24 @@ struct DashboardView: View {
                     lowSpaceBanner(volume)
                 }
 
-                if let volume = model.volume, let breakdown = model.breakdown {
+                if model.isLoadingBreakdown {
+                    // Bones, not stale figures: showing yesterday's numbers under a
+                    // spinner invites reading them as current.
+                    CapacityCardSkeleton()
+                } else if let volume = model.volume, let breakdown = model.breakdown {
                     CapacityCard(volume: volume, breakdown: breakdown)
-                    if model.breakdownIsStale, !model.isLoadingBreakdown {
+                    if model.breakdownIsStale {
                         staleNote
                     }
                 } else {
                     measuringPlaceholder
                 }
 
-                StatTiles(results: model.scanResults)
+                StatTiles(
+                    results: model.scanResults,
+                    onSafeTap: { model.view = .safeToRemove },
+                    onReviewTap: { model.view = .needsReview }
+                )
 
                 SnapshotsDisclosureRow(
                     snapshots: model.snapshots,
@@ -59,7 +67,9 @@ struct DashboardView: View {
     private func lowSpaceBanner(_ volume: VolumeInfo) -> some View {
         HStack(spacing: 9) {
             Image(systemName: "exclamationmark.triangle")
-                .foregroundStyle(Token.color(.orange))
+                // The readable orange, not the fill one: on the light banner the
+                // system colour all but disappears into its own tint.
+                .foregroundStyle(Token.textColor(.orange))
             Text("\(ByteFormatting.string(volume.freeBytes)) free. This is below your "
                  + "\(settings?.warnBelowGB ?? 0) GB warning threshold.")
                 .font(.mcSubtitle)

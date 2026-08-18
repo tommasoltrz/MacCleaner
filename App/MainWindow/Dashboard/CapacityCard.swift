@@ -92,7 +92,7 @@ struct CapacityCard: View {
                 Text(ByteFormatting.string(freeBytes))
                     .font(.mcSecondaryHero)
                     .mcTracked(-0.26)   // -0.01em
-                    .foregroundStyle(Token.color(.green))
+                    .foregroundStyle(Token.textColor(.green))
                     .lineLimit(1)
             }
             // Sit the free figure on the used figure's baseline — not the eyebrow
@@ -209,6 +209,11 @@ private struct CapacityBar: View {
     /// Measured so the tooltip can be centred over its segment and clamped.
     @State private var tooltipWidth: CGFloat = 0
 
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// Away from the surface, whichever way that is.
+    private var hoverLift: Double { colorScheme == .dark ? 0.12 : -0.10 }
+
     var body: some View {
         GeometryReader { proxy in
             let slices = layout(in: proxy.size.width)
@@ -228,8 +233,10 @@ private struct CapacityBar: View {
                     )
                     .fill(Token.color(slice.segment.color))
                     // Lifts the hovered segment out of the track so the pointer has
-                    // visible feedback, not just a floating label.
-                    .brightness(hovered == slice.id ? 0.12 : 0)
+                    // visible feedback, not just a floating label. The lift has to
+                    // reverse in light: brightening a segment on a white card walks it
+                    // toward the background, so the feedback reads as fading out.
+                    .brightness(hovered == slice.id ? hoverLift : 0)
                     .frame(width: slice.width)
                     .contentShape(Rectangle())
                     .onHover { inside in
@@ -279,7 +286,7 @@ private struct CapacityBar: View {
                 RoundedRectangle(cornerRadius: Token.Radius.control)
                     .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
             )
-            .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+            .shadow(color: Token.chipShadow, radius: 8, y: 2)
             // Plain offsets, not alignment guides: guides resolved the label to a
             // position outside the 13pt bar's bounds and it never appeared. The
             // width is measured so the label can be centred over its segment and

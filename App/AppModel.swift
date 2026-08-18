@@ -15,24 +15,34 @@ final class AppModel {
 
     enum View: String, CaseIterable, Identifiable {
         case dashboard, scanner, large, trash
+        // Reached from the Dashboard tiles, not the sidebar. Back returns.
+        case safeToRemove, needsReview
         var id: String { rawValue }
+
+        /// The sidebar's rows. The tile views stay out: they are drill-downs from
+        /// the Dashboard, and listing them as siblings would make four views six.
+        static var sidebarCases: [View] { [.dashboard, .scanner, .large, .trash] }
 
         var title: String {
             switch self {
-            case .dashboard: "Dashboard"
-            case .scanner:   "Scanner"
-            case .large:     "Large & Old Files"
-            case .trash:     "Trash"
+            case .dashboard:    "Dashboard"
+            case .scanner:      "Scanner"
+            case .large:        "Large & Old Files"
+            case .trash:        "Trash"
+            case .safeToRemove: "Safe to Remove"
+            case .needsReview:  "Needs Review"
             }
         }
 
         /// SF Symbols, per the design's icon table.
         var symbol: String {
             switch self {
-            case .dashboard: "speedometer"
-            case .scanner:   "magnifyingglass"
-            case .large:     "folder"
-            case .trash:     "trash"
+            case .dashboard:    "speedometer"
+            case .scanner:      "magnifyingglass"
+            case .large:        "folder"
+            case .trash:        "trash"
+            case .safeToRemove: "checkmark.shield"
+            case .needsReview:  "questionmark.folder"
             }
         }
     }

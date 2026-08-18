@@ -128,7 +128,9 @@ struct CategoriesPane: View {
         return HStack(alignment: .top, spacing: 9) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 15))
-                .foregroundStyle(Token.color(.orange))
+                // The readable orange: the glyph sits on its own orange tint, which
+                // leaves the system colour with nothing to stand against in light.
+                .foregroundStyle(Token.textColor(.orange))
                 .accessibilityHidden(true)
 
             sentence

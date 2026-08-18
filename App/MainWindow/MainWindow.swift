@@ -42,9 +42,14 @@ struct MainWindow: View {
                 LargeFilesView(model: model)
             case .trash:
                 TrashView(model: model)
+            case .safeToRemove:
+                FilteredEntriesView(model: model, filter: .safeToRemove)
+            case .needsReview:
+                FilteredEntriesView(model: model, filter: .needsReview)
             }
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
+        .background(Token.pageBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             StatusBarView(message: model.statusMessage) {
                 statusBarTrailing
@@ -97,7 +102,7 @@ struct MainWindow: View {
             .buttonStyle(SecondaryButtonStyle())
             .disabled(model.isLoadingBreakdown)
 
-        case .scanner, .large:
+        case .scanner, .large, .safeToRemove, .needsReview:
             Button("Deselect All") { model.deselectAll() }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(!model.hasSelection)

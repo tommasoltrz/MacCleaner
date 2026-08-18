@@ -102,7 +102,9 @@ struct ConfirmationSheet: View {
             .overlay(
                 Image(systemName: "trash")
                     .font(.system(size: 20))
-                    .foregroundStyle(isReversible ? Token.Text.primary : Token.color(.red))
+                    // The readable red rather than `systemRed`, which is a fill colour
+                    // and washes out against the light tile behind it.
+                    .foregroundStyle(isReversible ? Token.Text.primary : Token.textColor(.red))
             )
     }
 

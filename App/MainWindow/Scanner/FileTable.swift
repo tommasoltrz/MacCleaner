@@ -272,7 +272,8 @@ private struct FileRow: View {
 
             Text(lastOpenedText)
                 .font(.mcRowValue)
-                .foregroundStyle(entry.lastOpened == nil ? Token.color(.orange) : Token.Text.secondary)
+                .foregroundStyle(entry.lastOpened == nil
+                    ? Token.textColor(.orange) : Token.Text.secondary)
                 .lineLimit(1)
                 .frame(width: Metrics.lastOpened, alignment: .leading)
 

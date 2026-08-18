@@ -54,7 +54,9 @@ struct Badge: View {
     var body: some View {
         Text(text)
             .font(.mcBadge)
-            .foregroundStyle(style == .safe ? Token.color(.green) : Token.Text.secondary)
+            // The label is read, so it takes the readable green; the capsule behind it
+            // is a fill and keeps the system one.
+            .foregroundStyle(style == .safe ? Token.textColor(.green) : Token.Text.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
             .background(
@@ -103,8 +105,10 @@ struct SecondaryButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Token.Radius.control)
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: Token.hairline)
+                    .strokeBorder(Token.Fill.controlBorder, lineWidth: Token.hairline)
             )
+            // Pressing darkens in both appearances. In light that is the platform's
+            // own pressed state; in dark it is the design's.
             .brightness(configuration.isPressed ? -0.05 : 0)
             .onHover { isHovering = $0 }
     }
@@ -118,7 +122,7 @@ struct DestructiveButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.mcControlLabel.weight(.medium))
-            .foregroundStyle(Color(red: 1.0, green: 0.478, blue: 0.439))   // #FF7A70
+            .foregroundStyle(Token.Text.destructive)
             .padding(.horizontal, 14)
             .frame(height: 26)
             .background(
@@ -164,7 +168,7 @@ struct HoverTip: View {
             RoundedRectangle(cornerRadius: Token.Radius.control)
                 .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
         )
-        .shadow(color: .black.opacity(0.4), radius: 8, y: 2)
+        .shadow(color: Token.chipShadow, radius: 8, y: 2)
         .allowsHitTesting(false)
     }
 }

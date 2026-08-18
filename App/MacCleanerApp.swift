@@ -7,11 +7,10 @@ struct MacCleanerApp: App {
     @State private var model = AppModel()
     @State private var settings = SettingsStore()
 
-    // The design specifies a single dark appearance — there is no light variant in
-    // the handoff, and the token set is macOS dark-mode system colours throughout.
-    init() {
-        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
-    }
+    // No forced appearance. The handoff was authored dark and only dark, and the app
+    // used to pin `darkAqua` to match it. The light variant is now derived from that
+    // same design in `Token` rather than being absent, so the system decides which one
+    // a person sees and the app follows System Settings like any other Mac app.
 
     var body: some Scene {
         WindowGroup(id: "main") {

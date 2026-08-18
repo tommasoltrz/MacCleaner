@@ -62,13 +62,8 @@ struct MenuBarLabel: View {
     let volume: VolumeInfo?
 
     var body: some View {
-        // An icon plus the free figure, which is the whole reason to have this.
-        HStack(spacing: 4) {
-            Image(systemName: "internaldrive")
-            if let volume {
-                Text(ByteFormatting.string(volume.freeBytes))
-                    .monospacedDigit()
-            }
-        }
+        // Icon only: the menu bar is crowded real estate, and the figure is one
+        // click away inside the menu.
+        Image(systemName: "internaldrive")
     }
 }
