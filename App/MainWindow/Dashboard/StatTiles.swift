@@ -12,16 +12,27 @@ struct StatTiles: View {
     private let needsReviewBytes: Int64?
     private let lastScanAt: Date?
     private let reclaimedBytes: Int64?
+    /// Tap targets for the two counting tiles. `nil` leaves a tile inert, which is
+    /// also the pre-scan state: an em dash placeholder leads nowhere.
+    private let onSafeTap: (() -> Void)?
+    private let onReviewTap: (() -> Void)?
 
     /// `nil` results means no scan has run: every figure falls back to a placeholder.
     ///
     /// `reclaimedBytes` comes from the clean-up history rather than from the scan, so
     /// it is passed in; without it the "Last scan" tile shows the timestamp alone.
-    init(results: ScanResults?, reclaimedBytes: Int64? = nil) {
+    init(
+        results: ScanResults?,
+        reclaimedBytes: Int64? = nil,
+        onSafeTap: (() -> Void)? = nil,
+        onReviewTap: (() -> Void)? = nil
+    ) {
         self.safeToRemoveBytes = results?.safeToRemoveBytes
         self.needsReviewBytes = results?.needsReviewBytes
         self.lastScanAt = results?.finishedAt
         self.reclaimedBytes = reclaimedBytes
+        self.onSafeTap = onSafeTap
+        self.onReviewTap = onReviewTap
     }
 
     /// Figures directly. `ScanResults` has no public initializer, so a preview of the
@@ -36,6 +47,8 @@ struct StatTiles: View {
         self.needsReviewBytes = needsReviewBytes
         self.lastScanAt = lastScanAt
         self.reclaimedBytes = reclaimedBytes
+        self.onSafeTap = nil
+        self.onReviewTap = nil
     }
 
     var body: some View {
@@ -45,15 +58,19 @@ struct StatTiles: View {
         // the three stay equal as the window resizes.
         Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
             GridRow {
-                StatTile(
+                // The two counting tiles open the list they counted. Links only once
+                // there are figures: an em dash placeholder leads nowhere.
+                linkedTile(
                     label: "Safe to remove",
                     value: safeToRemoveBytes.map { ByteFormatting.string($0) },
-                    description: "Caches, logs and package tarballs that regenerate on demand."
+                    description: "Caches, logs and package tarballs that regenerate on demand.",
+                    action: onSafeTap
                 )
-                StatTile(
+                linkedTile(
                     label: "Needs review",
                     value: needsReviewBytes.map { ByteFormatting.string($0) },
-                    description: "Large files and unused apps. You decide, nothing is automatic."
+                    description: "Large files and unused apps. You decide, nothing is automatic.",
+                    action: onReviewTap
                 )
                 StatTile(
                     label: "Last scan",
@@ -68,6 +85,25 @@ struct StatTiles: View {
         // vertically flexible so they fill the grid cell, and without this the whole
         // row would stretch into whatever height a tall window offers it.
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func linkedTile(
+        label: String,
+        value: String?,
+        description: String,
+        action: (() -> Void)?
+    ) -> some View {
+        if let action, value != nil {
+            Button(action: action) {
+                StatTile(label: label, value: value, description: description, showsChevron: true)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show these items")
+        } else {
+            StatTile(label: label, value: value, description: description)
+        }
     }
 
     /// Relative first: how stale the numbers are matters more than the exact moment
@@ -106,15 +142,25 @@ private struct StatTile: View {
     /// Used in place of the em dash where the empty state has a word for itself.
     var emptyValue: String?
     let description: String
+    /// Set on a tile that opens a list, so the affordance is visible before hover.
+    var showsChevron: Bool = false
 
     private var isPlaceholder: Bool { value == nil }
 
     var body: some View {
         GroupedBox {
             VStack(alignment: .leading, spacing: 0) {
-                Text(label)
-                    .font(.mcControlLabel)
-                    .foregroundStyle(Token.Text.secondary)
+                HStack(spacing: 0) {
+                    Text(label)
+                        .font(.mcControlLabel)
+                        .foregroundStyle(Token.Text.secondary)
+                    if showsChevron {
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Token.Text.quaternary)
+                    }
+                }
 
                 Text(value ?? emptyValue ?? "—")
                     .font(.mcStatValue)

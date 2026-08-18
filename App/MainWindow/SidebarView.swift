@@ -18,7 +18,7 @@ struct SidebarView: View {
         // row *content*, not the selection fill).
         List {
             Section("MacCleaner") {
-                ForEach(AppModel.View.allCases) { view in
+                ForEach(AppModel.View.sidebarCases) { view in
                     Button {
                         model.view = view
                     } label: {

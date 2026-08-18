@@ -8,6 +8,7 @@ import MacCleanerCore
 //     swift run maccleaner-cli volume
 //     swift run maccleaner-cli snapshots
 //     swift run maccleaner-cli measure <path>
+//     swift run maccleaner-cli apps
 
 @main
 struct CLI {
@@ -23,6 +24,8 @@ struct CLI {
                 try await breakdown()
             case "scan":
                 try await scan()
+            case "apps":
+                try await apps()
             case "measure":
                 guard arguments.count > 1 else {
                     throw CLIError.usage("measure needs a path")
@@ -30,7 +33,7 @@ struct CLI {
                 try await measure(path: arguments[1])
             default:
                 print("maccleaner-cli — MacCleanerCore engine harness")
-                print("commands: volume | snapshots | measure <path>")
+                print("commands: volume | snapshots | breakdown | scan | apps | measure <path>")
             }
         } catch {
             FileHandle.standardError.write(Data("error: \(error)\n".utf8))
@@ -53,6 +56,26 @@ struct CLI {
             .measure(URL(fileURLWithPath: "/System/Volumes/Data/System"))
         print("  data-side /System \(ByteFormatting.string(dataSystem.allocatedBytes))"
               + "  (\(dataSystem.fileCount) files, \(dataSystem.unreadableCount) unreadable)")
+    }
+
+    /// Every application with its leftovers, one line each.
+    ///
+    /// `scan` prints category totals and the top three rows, which is the wrong
+    /// shape for checking curation: the interesting part is the children, and
+    /// specifically whether the locked entry and the cache entries add up to the
+    /// folder they came from. This prints them, so the split can be read against
+    /// `measure <path>` on the same folder.
+    static func apps() async throws {
+        let result = try await ApplicationsScanner().scan(context: ScanContext())
+        for entry in result.entries where !entry.children.isEmpty {
+            print("\(entry.displayName)  \(ByteFormatting.string(entry.totalBytesIncludingChildren))")
+            for child in entry.children {
+                let flag = child.isRemovalLocked ? "LOCKED" : (child.isRegenerable ? "cache " : "      ")
+                print("    [\(flag)] \(ByteFormatting.string(child.allocatedBytes).padding(toLength: 10, withPad: " ", startingAt: 0)) "
+                      + "\(child.displayName)  (\(FileEntry.abbreviate(child.url.path)))"
+                      + (child.childCount.map { " · \($0) items" } ?? ""))
+            }
+        }
     }
 
     static func scan() async throws {

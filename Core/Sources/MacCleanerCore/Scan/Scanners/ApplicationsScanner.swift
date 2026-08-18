@@ -73,8 +73,21 @@ public struct ApplicationsScanner: CategoryScanner {
                 let bundleID = Bundle(url: appURL)?.bundleIdentifier
                 let baseName = String(name.dropLast(".app".count))
 
+                // Curation, where it applies, takes over the whole support folder:
+                // it splits those bytes into cache entries plus one locked
+                // remainder. The plain leftover row for the same folder is dropped,
+                // because listing both would offer the same bytes twice.
+                let curation = Self.curation(bundleID: bundleID, baseName: baseName, home: home)
+                let curatedRoot = curation.map {
+                    home.appendingPathComponent($0.root).standardizedFileURL.path
+                }
+
                 var children: [FileEntry] = []
                 for candidate in Self.leftoverCandidates(baseName: baseName, bundleID: bundleID) {
+                    if let curatedRoot,
+                       Self.overlaps(candidate.url.standardizedFileURL.path, curatedRoot) {
+                        continue
+                    }
                     // A leftover can be excluded on its own — an explicit exclusion
                     // path means "never touch this". Such a file is simply skipped.
                     guard !context.isExcluded(candidate.url) else { continue }
@@ -93,10 +106,12 @@ public struct ApplicationsScanner: CategoryScanner {
                     ))
                 }
 
-                if let curated = try await Self.curatedChildren(
-                    bundleID: bundleID, home: home, context: context
-                ) {
-                    children.append(contentsOf: curated)
+                if let curation,
+                   let curated = try await Self.curatedChildren(
+                       curation, home: home, context: context
+                   ) {
+                    children.append(contentsOf: curated.entries)
+                    unreadableCount += curated.unreadableCount
                 }
 
                 let bundleSize = try await context.measurer.measure(appURL)
@@ -219,78 +234,268 @@ public struct ApplicationsScanner: CategoryScanner {
 
     // MARK: - Curated app data
 
-    /// Per-app knowledge of which support data is disposable and which must never
-    /// go by accident.
+    /// Which parts of one app's support folder are disposable, and which are the
+    /// user's account.
     ///
-    /// This is inherently per-app work, so it is done only where the payoff is
-    /// large. Chrome is first: its support folder mixes multi-gigabyte regenerable
-    /// caches (on-device models, shader caches, service-worker storage) with the
-    /// user's logins, history and bookmarks, and the generic leftover candidates
-    /// cannot see the difference. Everything is measured, split into removable
-    /// cache entries and one locked "profiles and settings" entry for the rest.
-    private static func curatedChildren(
-        bundleID: String?,
+    /// Nothing here is inferred from a name. A folder called `Local Storage` holds
+    /// the user's session and a folder called `Code Cache` holds compiled
+    /// JavaScript, and only knowledge of the app tells them apart. So the split is
+    /// a table: paths named here regenerate on next launch and get their own
+    /// checkbox, and everything not named here is folded into one locked entry.
+    /// The asymmetry is deliberate. Missing a cache costs the user some disk;
+    /// mistaking their logins for a cache costs them their logins.
+    struct AppDataCuration: Sendable, Equatable {
+
+        /// The app's support folder, relative to the home directory.
+        let root: String
+
+        /// Subpaths under `root` that the app rebuilds by itself.
+        ///
+        /// One component may be a glob, matched against the folder's real
+        /// contents. That is how per-profile caches are reached without this
+        /// table knowing profile names: Chrome writes a cache set inside every
+        /// `Default` and `Profile N` folder, and the user decides how many of
+        /// those exist.
+        let regenerable: [String]
+
+        /// Name for the single locked entry holding everything else.
+        let remainderName: String
+    }
+
+    /// Apps whose layout the Electron rule below does not describe.
+    ///
+    /// Kept small on purpose. Every line is a claim about a real folder on a real
+    /// disk, so a path goes in only after it has been seen there.
+    static let curations: [String: AppDataCuration] = [
+        // Chrome mixes multi-gigabyte regenerable trees with the user's logins,
+        // history and bookmarks, and the generic leftover candidates cannot see
+        // the difference. The on-device models are routinely the largest single
+        // item in the folder.
+        "com.google.Chrome": AppDataCuration(
+            root: "Library/Application Support/Google/Chrome",
+            regenerable: [
+                "OptGuideOnDeviceModel", "OptGuideOnDeviceClassifierModel",
+                "optimization_guide_model_store", "component_crx_cache",
+                "SODA", "SODALanguagePacks", "screen_ai", "WasmTtsEngine",
+                "GrShaderCache", "ShaderCache", "Crashpad",
+                // Per-profile caches. The caches inside a profile regenerate, the
+                // databases beside them are the user's life.
+                "Default/Service Worker/CacheStorage",
+                "Default/Code Cache",
+                "Default/GPUCache",
+                "Profile */Service Worker/CacheStorage",
+                "Profile */Code Cache",
+                "Profile */GPUCache"
+            ],
+            remainderName: "Chrome profiles and settings"
+        ),
+
+        // Claude Desktop is Electron, but it keeps its renderers in per-feature
+        // partitions, so its Chromium caches sit one level down and the marker
+        // test below never sees them at the top of the folder. Verified against a
+        // real install.
+        //
+        // `claude-code` and `claude-code-vm` are the two largest items here and
+        // are deliberately left in the locked remainder: an installed CLI and its
+        // VM image are not caches, and nothing observed says the app rebuilds
+        // them on demand.
+        "com.anthropic.claudefordesktop": AppDataCuration(
+            root: "Library/Application Support/Claude",
+            regenerable: ["Crashpad", "Partitions/*/Cache", "Partitions/*/Code Cache"],
+            remainderName: "Claude settings and data"
+        )
+    ]
+
+    // MARK: - The Electron rule
+
+    /// Either of these at the top of a support folder means a Chromium renderer
+    /// lives there, which is what every Electron app ships. VS Code, Slack,
+    /// Discord, Notion and hundreds more write the identical layout, so one rule
+    /// covers all of them and the table above stays short.
+    static let electronMarkers = ["Code Cache", "GPUCache"]
+
+    /// The regenerable set shared by every Electron app.
+    ///
+    /// All of it is Chromium scratch space: compiled script, GPU shaders, the
+    /// service-worker response cache, crash dumps waiting to upload. Deleting any
+    /// of it costs one slower launch.
+    ///
+    /// `Session Storage` is not in this list even though it looks like one more
+    /// cache. It holds live per-window state, not a cache, and removing it loses
+    /// what the user had open. `blob_storage`, `Partitions` and `Local State` are
+    /// left out for the same reason.
+    static let electronRegenerable = [
+        "Cache", "Code Cache", "GPUCache",
+        "DawnWebGPUCache", "DawnGraphiteCache", "DawnCache",
+        "Service Worker/CacheStorage", "Crashpad", "component_crx_cache"
+    ]
+
+    /// Name for the locked entry an Electron app gets for everything else.
+    ///
+    /// What sits in there is `Cookies`, `Local Storage`, `IndexedDB` and
+    /// `Preferences`: the user's logins, their open sessions, their settings.
+    /// That is why the entry is locked rather than merely unchecked. Removing it
+    /// signs the user out of the app, and the row exists to say so plainly rather
+    /// than to hide bytes the user can see in Finder.
+    static func electronRemainderName(for appName: String) -> String {
+        "\(appName) settings and data"
+    }
+
+    /// The curation for one app, if there is one.
+    ///
+    /// Explicit table first: an app listed there has been looked at, and the
+    /// generic rule must not override that judgement. Otherwise the support
+    /// folder is found exactly the way `leftoverCandidates` finds it, by bundle
+    /// identifier and then by app name, and the Electron rule decides.
+    static func curation(bundleID: String?, baseName: String, home: URL) -> AppDataCuration? {
+        let fileManager = FileManager.default
+
+        func exists(_ relative: String) -> Bool {
+            fileManager.fileExists(atPath: home.appendingPathComponent(relative).path)
+        }
+
+        // A table entry names a path that need not exist on this Mac.
+        if let bundleID, let explicit = curations[bundleID] {
+            return exists(explicit.root) ? explicit : nil
+        }
+
+        // An empty identifier would name `Application Support` itself.
+        for name in [bundleID, baseName].compactMap({ $0 }) where !name.isEmpty {
+            let relative = "Library/Application Support/\(name)"
+            guard electronMarkers.contains(where: { exists("\(relative)/\($0)") }) else { continue }
+            return AppDataCuration(
+                root: relative,
+                regenerable: electronRegenerable,
+                remainderName: electronRemainderName(for: baseName)
+            )
+        }
+        return nil
+    }
+
+    // MARK: - Applying a curation
+
+    /// Curated entries plus the measurement gaps found on the way, which the
+    /// category reports rather than swallows.
+    struct CuratedData {
+        var entries: [FileEntry]
+        var unreadableCount: Int
+    }
+
+    /// Measures one curated folder and splits it into cache entries plus the
+    /// locked remainder.
+    ///
+    /// The remainder is arithmetic, never an estimate: the measured folder minus
+    /// exactly the bytes carved out of it, floored at zero. That is what keeps the
+    /// two halves from double-counting, and it stays true when a cache path is
+    /// skipped, because a skipped path adds nothing to the curated total and so
+    /// its bytes stay inside the remainder where they still are on disk.
+    static func curatedChildren(
+        _ curation: AppDataCuration,
         home: URL,
         context: ScanContext
-    ) async throws -> [FileEntry]? {
-        guard bundleID == "com.google.Chrome" else { return nil }
+    ) async throws -> CuratedData? {
         let fileManager = FileManager.default
-        let root = home.appendingPathComponent("Library/Application Support/Google/Chrome")
+        let root = home.appendingPathComponent(curation.root)
         guard fileManager.fileExists(atPath: root.path) else { return nil }
-
-        // Fixed regenerable trees at the top of Chrome's support folder. The
-        // on-device model is routinely the single largest item in it.
-        var cachePaths = [
-            "OptGuideOnDeviceModel", "OptGuideOnDeviceClassifierModel",
-            "optimization_guide_model_store", "component_crx_cache",
-            "SODA", "SODALanguagePacks", "screen_ai", "WasmTtsEngine",
-            "GrShaderCache", "ShaderCache", "Crashpad"
-        ].map { root.appendingPathComponent($0) }
-
-        // Per-profile caches. Profiles are "Default" and "Profile N"; the caches
-        // inside them regenerate, the databases beside them are the user's life.
-        let profiles = ((try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [])
-            .filter { $0 == "Default" || $0.hasPrefix("Profile ") }
-        for profile in profiles {
-            let base = root.appendingPathComponent(profile)
-            cachePaths.append(base.appendingPathComponent("Service Worker/CacheStorage"))
-            cachePaths.append(base.appendingPathComponent("Code Cache"))
-            cachePaths.append(base.appendingPathComponent("GPUCache"))
-        }
 
         var entries: [FileEntry] = []
         var curatedBytes: Int64 = 0
-        for url in cachePaths where fileManager.fileExists(atPath: url.path) {
-            guard !context.isExcluded(url) else { continue }
-            let size = try await context.measurer.measure(url)
-            guard size.allocatedBytes > 0 else { continue }
-            curatedBytes += size.allocatedBytes
-            entries.append(FileEntry(
-                url: url,
-                kind: .cache,
-                allocatedBytes: size.allocatedBytes,
-                lastOpened: nil,
-                isRegenerable: true
-            ))
+        var seen = Set<String>()
+        // Top-level items swallowed whole by a cache entry. They are the only ones
+        // that stop being part of the remainder.
+        var curatedTopLevel = Set<String>()
+
+        for subpath in curation.regenerable {
+            for url in expand(subpath, under: root) {
+                // Expanding globs and skipping absent paths can run for a while
+                // without reaching the measurer, which is the other place that
+                // notices cancellation.
+                try Task.checkCancellation()
+
+                let path = url.standardizedFileURL.path
+                // Two rules could name one path; measuring it twice would inflate
+                // the curated total and shrink the remainder below the truth.
+                guard seen.insert(path).inserted else { continue }
+                guard fileManager.fileExists(atPath: path) else { continue }
+                // An explicit exclusion means "never touch this" and outranks
+                // everything this table knows.
+                guard !context.isExcluded(url) else { continue }
+
+                let size = try await context.measurer.measure(url)
+                guard size.allocatedBytes > 0 else { continue }
+
+                curatedBytes += size.allocatedBytes
+                if url.deletingLastPathComponent().standardizedFileURL.path
+                    == root.standardizedFileURL.path {
+                    curatedTopLevel.insert(url.lastPathComponent)
+                }
+                entries.append(FileEntry(
+                    url: url,
+                    kind: .cache,
+                    allocatedBytes: size.allocatedBytes,
+                    lastOpened: nil,
+                    isRegenerable: true
+                ))
+            }
         }
 
-        // Everything else in the folder is treated as the user's data. The figure
-        // is the measured remainder, and the entry is locked: it goes only when
-        // the whole app goes.
+        // Everything else is the user's data. The entry is listed so the bytes are
+        // visible, and locked so they go only when the whole app goes.
         let total = try await context.measurer.measure(root)
         let preserveBytes = max(0, total.allocatedBytes - curatedBytes)
         if preserveBytes > 0 {
+            // The remaining items, which is what `· N items` is supposed to mean.
+            // Measuring the root already walked the curated subtrees, so its
+            // `unreadableCount` covers them too and adding theirs would count the
+            // same gaps twice.
+            let remaining = ((try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [])
+                .filter { !curatedTopLevel.contains($0) }
             entries.append(FileEntry(
                 url: root,
-                displayName: "Chrome profiles and settings",
+                displayName: curation.remainderName,
                 kind: .folder,
                 allocatedBytes: preserveBytes,
                 lastOpened: nil,
                 protectionReason: .userData,
-                childCount: profiles.count
+                childCount: remaining.count
             ))
         }
-        return entries.isEmpty ? nil : entries
+        return entries.isEmpty
+            ? nil
+            : CuratedData(entries: entries, unreadableCount: total.unreadableCount)
+    }
+
+    /// Expands one regenerable subpath into the paths it actually names.
+    ///
+    /// A component containing a glob character is matched against the folder's
+    /// real contents; every other component is appended as written, so the common
+    /// case reads no directories at all.
+    static func expand(_ subpath: String, under root: URL) -> [URL] {
+        var urls = [root]
+        for component in subpath.split(separator: "/").map(String.init) {
+            guard component.contains(where: { "*?[".contains($0) }) else {
+                urls = urls.map { $0.appendingPathComponent(component) }
+                continue
+            }
+            urls = urls.flatMap { base in
+                ((try? FileManager.default.contentsOfDirectory(atPath: base.path)) ?? [])
+                    .filter { fnmatch(component, $0, 0) == 0 }
+                    // Directory order is undefined; sort so two scans of an
+                    // unchanged disk produce the same list.
+                    .sorted()
+                    .map { base.appendingPathComponent($0) }
+            }
+        }
+        return urls
+    }
+
+    /// True when one path contains the other, in either direction.
+    ///
+    /// Either way round is a double count: the curated folder and a leftover
+    /// candidate would both claim the same bytes. The test is component-aware, so
+    /// `…/Chrome` does not claim `…/ChromeBeta`.
+    static func overlaps(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
     }
 
     // MARK: - Leftovers
