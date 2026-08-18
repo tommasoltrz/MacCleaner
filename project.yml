@@ -1,0 +1,62 @@
+name: MacCleaner
+
+# The .xcodeproj is generated from this file — never hand-edited. Regenerate with:
+#   xcodegen generate
+options:
+  bundleIdPrefix: com.tommasolaterza
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  MacCleanerCore:
+    path: Core
+
+targets:
+  MacCleaner:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: MacCleanerCore
+        product: MacCleanerCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.MacCleaner
+        PRODUCT_NAME: MacCleaner
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+
+        # MacCleaner must traverse the whole disk, read other volumes, and shell out
+        # to diskutil. A sandboxed app cannot do any of that, and Full Disk Access is
+        # granted to an unsandboxed bundle identity.
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+
+        # A real Apple Development identity: the signature's team+bundle identity
+        # is stable across rebuilds, so TCC grants (Full Disk Access) finally
+        # survive. Ad-hoc signing changed hash every build and macOS forgot the
+        # grant each time.
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: L2P2KC4C69
+        CODE_SIGN_STYLE: Manual
+
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
+
+schemes:
+  MacCleaner:
+    build:
+      targets:
+        MacCleaner: all
+    run:
+      config: Debug
+    archive:
+      config: Release
