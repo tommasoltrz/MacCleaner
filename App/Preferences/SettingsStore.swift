@@ -333,6 +333,12 @@ final class SettingsStore {
             // absent, every launch looks like the first, and a login item the user
             // later removed in System Settings would be silently put back.
             defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
+        } else if managesLoginItem, launchAtLogin {
+            // Re-register on every launch, not just the first: the record points at
+            // whichever copy registered it, and a person who ran a development build
+            // and later installed the app proper wants login opening the installed
+            // copy, which is the one they are running now.
+            LoginItem.setEnabled(true)
         }
     }
 
@@ -449,7 +455,8 @@ private extension Comparable {
     }
 }
 
-#if DEBUG
+// Not under `#if DEBUG`: the `#Preview` bodies that call this still compile in
+// Release, so the helper must exist there too.
 extension SettingsStore {
     /// A throwaway store for `#Preview`, on its own volatile domain so a preview can
     /// never write to the real preferences or touch the real login item.
@@ -462,4 +469,3 @@ extension SettingsStore {
         return store
     }
 }
-#endif
