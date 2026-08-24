@@ -55,12 +55,16 @@ struct AdvancedPane: View {
                 title: "Confirm before every clean-up",
                 isOn: $settings.confirmBeforeCleanup
             )
-            PrefDivider()
-            PrefToggleRow(
-                title: "Follow symlinks while measuring",
-                description: "Slower, and can double-count linked build outputs.",
-                isOn: $settings.followSymlinks
-            )
+            // "Follow symlinks while measuring" used to live here. It was removed
+            // rather than repaired: following a link counts its target a second
+            // time, under a name that does not own those bytes. That breaks the
+            // capacity card's one contract — every byte of the disk accounted for
+            // exactly once — and with it on, a 228 GB disk measured 274 GB, the
+            // Unmeasured residual floored to zero and the bar ran off the card.
+            // Scans must not follow links either (removing a link frees the link,
+            // not its target), so the option had no correct consumer left. The
+            // measurer still supports it as a primitive for anything that one day
+            // genuinely wants "how big is this tree, links included".
         }
     }
 

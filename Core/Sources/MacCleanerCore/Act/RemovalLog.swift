@@ -7,6 +7,10 @@ import Foundation
 public enum RemovalDisposition: String, Sendable, CaseIterable {
     case trashed
     case deleted
+    /// A Put Back consumed the matching `trashed` record. Appended as a tombstone
+    /// (the log is append-only), so the Trash path it names cannot match a later,
+    /// unrelated occupant of the same path.
+    case restored
 }
 
 /// One logged removal.
@@ -17,12 +21,51 @@ public struct RemovalRecord: Sendable, Equatable {
     public var originalPath: String
     public var bytes: Int64
     public var disposition: RemovalDisposition
+    /// Where a `trashed` item actually landed, as reported by `trashItem` — the
+    /// Trash renames on collision, so the basename alone identifies nothing. Put
+    /// Back matches on this, never on the name: a filename match once offered to
+    /// restore an unrelated, Finder-trashed `Report.pdf` to an old record's folder.
+    /// `nil` for permanent deletions and for privileged moves, which do not report
+    /// their destination.
+    public var trashedPath: String?
+    /// The trashed file's `device:inode`, which is what actually identifies it.
+    /// A path is a location, not an identity: once the item leaves the Trash the
+    /// same path can be handed to an unrelated file, and Put Back would then
+    /// restore a stranger to this record's folder. `nil` on records written before
+    /// this field existed, which fall back to the timestamp window.
+    public var trashedIdentity: String?
 
-    public init(timestamp: Date, originalPath: String, bytes: Int64, disposition: RemovalDisposition) {
+    public init(
+        timestamp: Date,
+        originalPath: String,
+        bytes: Int64,
+        disposition: RemovalDisposition,
+        trashedPath: String? = nil,
+        trashedIdentity: String? = nil
+    ) {
         self.timestamp = timestamp
         self.originalPath = originalPath
         self.bytes = bytes
         self.disposition = disposition
+        self.trashedPath = trashedPath
+        self.trashedIdentity = trashedIdentity
+    }
+}
+
+/// `device:inode` for a path, the pair the filesystem uses to tell files apart.
+///
+/// Read through `lstat`, deliberately: `stat` follows a symlink and would identify
+/// its *target*, so a trashed link would be indistinguishable from a replacement
+/// link pointing at the same place — and a broken link, whose target does not
+/// exist, would have no identity at all. `lstat` identifies the link itself.
+///
+/// Read through the filesystem rather than `URLResourceValues.fileResourceIdentifier`,
+/// which is an opaque object that cannot be written to a log and compared later.
+public enum FileIdentity {
+    public static func of(_ url: URL) -> String? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else { return nil }
+        return "\(Int64(info.st_dev)):\(UInt64(info.st_ino))"
     }
 }
 
@@ -146,10 +189,17 @@ public struct RemovalLog: Sendable {
 
     private static let timestampStyle = Date.ISO8601FormatStyle()
 
+    /// `<timestamp> "<original>" <bytes> <disposition> ["<trash path>" [dev:ino]]`
+    /// — the trailing fields are optional, so older lines still parse.
     static func line(for record: RemovalRecord) -> String {
         let timestamp = record.timestamp.formatted(timestampStyle)
         let path = quote(record.originalPath)
-        return "\(timestamp) \(path) \(record.bytes) \(record.disposition.rawValue)"
+        var line = "\(timestamp) \(path) \(record.bytes) \(record.disposition.rawValue)"
+        if let trashed = record.trashedPath {
+            line += " " + quote(trashed)
+            if let identity = record.trashedIdentity { line += " " + identity }
+        }
+        return line
     }
 
     static func record(from line: Substring) -> RemovalRecord? {
@@ -157,18 +207,28 @@ public struct RemovalLog: Sendable {
         let stamp = String(line[..<firstSpace])
         guard let (path, tail) = unquote(line[line.index(after: firstSpace)...]) else { return nil }
 
-        let fields = tail.split(separator: " ", omittingEmptySubsequences: true)
-        guard fields.count == 2,
+        // Two bare fields, then optionally one more quoted path.
+        let fields = tail.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+        guard fields.count >= 2,
               let bytes = Int64(fields[0]),
               let disposition = RemovalDisposition(rawValue: String(fields[1])),
               let timestamp = try? timestampStyle.parse(stamp)
         else { return nil }
+        var trashedPath: String?
+        var trashedIdentity: String?
+        if fields.count == 3, let (trashed, rest) = unquote(fields[2]) {
+            trashedPath = trashed
+            let tail = rest.trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { trashedIdentity = tail }
+        }
 
         return RemovalRecord(
             timestamp: timestamp,
             originalPath: path,
             bytes: bytes,
-            disposition: disposition
+            disposition: disposition,
+            trashedPath: trashedPath,
+            trashedIdentity: trashedIdentity
         )
     }
 

@@ -141,6 +141,95 @@ struct CleanupServiceTests {
         #expect(!CleanupService.alwaysMovesToTrash(entry(URL(fileURLWithPath: "/tmp/x.bin"))))
     }
 
+    @Test("only an explicitly unlocked user-data row bypasses protection")
+    func userDataRequiresItsExactOverride() {
+        let userData = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo profiles"),
+            kind: .folder,
+            allocatedBytes: 1,
+            protectionReason: .userData
+        )
+        let running = FileEntry(
+            url: URL(fileURLWithPath: "/Applications/Demo.app"),
+            kind: .appBundle,
+            allocatedBytes: 1,
+            protectionReason: .running
+        )
+        let toolManaged = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/runtime"),
+            kind: .folder,
+            allocatedBytes: 1,
+            manualRemoval: .init(explanation: "Use its tool", command: "tool remove")
+        )
+
+        #expect(!CleanupService.removalAllowed(userData, userDataRemovalOverrides: []))
+        #expect(!CleanupService.removalAllowed(
+            userData, userDataRemovalOverrides: ["/tmp/somewhere-else"]
+        ))
+        #expect(CleanupService.removalAllowed(
+            userData, userDataRemovalOverrides: [userData.id]
+        ))
+        // An override cannot turn a genuinely unavailable operation into a checkbox.
+        #expect(!CleanupService.removalAllowed(
+            running, userDataRemovalOverrides: [running.id]
+        ))
+        #expect(!CleanupService.removalAllowed(
+            toolManaged, userDataRemovalOverrides: [toolManaged.id]
+        ))
+    }
+
+    @Test("an unlocked user-data row always moves to the Trash")
+    func userDataAlwaysMovesToTrash() {
+        let userData = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo profiles"),
+            kind: .folder,
+            allocatedBytes: 1,
+            protectionReason: .userData
+        )
+        #expect(CleanupService.alwaysMovesToTrash(userData))
+    }
+
+    @Test("removing an app preserves user data unless the parent is explicitly overridden")
+    func appRemovalNeedsItsOwnOverrideForUserData() {
+        let cache = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo cache"),
+            kind: .cache,
+            allocatedBytes: 10,
+            isRegenerable: true
+        )
+        let profile = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo profile"),
+            kind: .folder,
+            allocatedBytes: 20,
+            protectionReason: .userData
+        )
+        let runningChild = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo helper"),
+            kind: .folder,
+            allocatedBytes: 1,
+            protectionReason: .running
+        )
+        let toolManagedChild = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/Demo managed data"),
+            kind: .folder,
+            allocatedBytes: 1,
+            manualRemoval: .init(explanation: "Use its tool", command: "tool remove")
+        )
+        let app = FileEntry(
+            url: URL(fileURLWithPath: "/Applications/Demo.app"),
+            kind: .appBundle,
+            allocatedBytes: 30,
+            children: [cache, profile, runningChild, toolManagedChild]
+        )
+
+        #expect(CleanupService.removalTargets(
+            for: app, removeProtectedAppData: false
+        ).map(\.id) == [cache.id, app.id])
+        #expect(CleanupService.removalTargets(
+            for: app, removeProtectedAppData: true
+        ).map(\.id) == [cache.id, profile.id, app.id])
+    }
+
     @Test("a cancelled cleanup stops between entries")
     func cancellationStopsTheBatch() async throws {
         let sandbox = try Sandbox()
@@ -284,7 +373,13 @@ struct TrashServiceTests {
         let original = sandbox.root.appendingPathComponent("home/Documents/Old Notes 2019.rtf")
 
         let log = RemovalLog(directory: sandbox.root.appendingPathComponent("logs"))
-        try log.append(entries: [entry(original, bytes: Int64(oneMB))], disposition: .trashed)
+        // As the app logs it: the destination `trashItem` reported, plus the
+        // file's identity. Put Back matches on the identity, never on the name.
+        try log.append([RemovalRecord(
+            timestamp: Date(), originalPath: original.path, bytes: Int64(oneMB),
+            disposition: .trashed, trashedPath: inTrash.path,
+            trashedIdentity: FileIdentity.of(inTrash)
+        )])
 
         let trash = service(sandbox, log: log)
         let item = try #require(try await trash.summary().items.first)
@@ -299,11 +394,15 @@ struct TrashServiceTests {
     func putBackRefusesToOverwrite() async throws {
         let sandbox = try Sandbox()
         _ = try makeTrash(sandbox)
-        try sandbox.writeFile("home/.Trash/Budget 2026.numbers", bytes: oneMB)
+        let inTrash = try sandbox.writeFile("home/.Trash/Budget 2026.numbers", bytes: oneMB)
         let original = try sandbox.writeFile("home/Documents/Budget 2026.numbers", bytes: 64)
 
         let log = RemovalLog(directory: sandbox.root.appendingPathComponent("logs"))
-        try log.append(entries: [entry(original, bytes: Int64(oneMB))], disposition: .trashed)
+        try log.append([RemovalRecord(
+            timestamp: Date(), originalPath: original.path, bytes: Int64(oneMB),
+            disposition: .trashed, trashedPath: inTrash.path,
+            trashedIdentity: FileIdentity.of(inTrash)
+        )])
 
         let trash = service(sandbox, log: log)
         let item = try #require(try await trash.summary().items.first)

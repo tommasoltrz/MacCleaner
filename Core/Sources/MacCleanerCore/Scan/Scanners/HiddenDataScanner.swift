@@ -407,6 +407,8 @@ public struct HiddenDataScanner: CategoryScanner {
 
         guard measurement.allocatedBytes >= minimumBytes else { return }
         guard !context.isExcluded(url, lastOpened: lastOpened) else { return }
+        // See `SizeMeasurement.containsProtectedPattern`.
+        guard !measurement.containsProtectedPattern else { return }
 
         found.entries.append(FileEntry(
             url: url,

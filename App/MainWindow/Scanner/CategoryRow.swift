@@ -156,8 +156,11 @@ struct CategoryRow: View {
             // even read is exactly the unearned claim this app exists to stop making.
             Badge(text: "unavailable").fixedSize()
         } else {
-            if category.isSafe {
-                Badge(text: "safe", style: .safe).fixedSize()
+            // The result, not the static flag: the Xcode category is marked safe
+            // but can hold an archive that is not, and a "safe" badge over a list
+            // containing it would be the unearned claim the app exists to avoid.
+            if category.isSafe && result.needsReviewBytes == 0 {
+                Badge(text: "safe to delete", style: .safe).fixedSize()
             }
             if category.alwaysMovesToTrash {
                 Badge(text: "moves to Trash").fixedSize()
@@ -266,7 +269,8 @@ struct CategoryRow: View {
             parts.append("nothing to clean")
         }
 
-        if category.isSafe { parts.append("safe to remove") }
+        // The same words the badge shows, so VoiceOver and the screen agree.
+        if category.isSafe && result.needsReviewBytes == 0 { parts.append("safe to delete") }
         if category.alwaysMovesToTrash { parts.append("moves to Trash") }
 
         return parts.joined(separator: ", ")

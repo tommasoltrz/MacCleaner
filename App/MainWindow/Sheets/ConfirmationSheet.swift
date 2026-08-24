@@ -9,7 +9,16 @@ import MacCleanerCore
 struct ConfirmationSheet: View {
 
     enum Variant {
-        case cleanUp(itemCount: Int, totalBytes: Int64)
+        /// `permanentCount` is how many of the items will be deleted outright —
+        /// non-zero when "Always move to Trash" is off in Advanced. The copy, the
+        /// tint and the receipt row all key off it: a permanent deletion presented
+        /// with Trash language would promise an undo that does not exist.
+        case cleanUp(
+            itemCount: Int,
+            totalBytes: Int64,
+            permanentCount: Int,
+            protectedDataCount: Int
+        )
         case emptyTrash(itemCount: Int, totalBytes: Int64)
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
         /// says how many photographs go and stays silent about megabytes rather
@@ -70,9 +79,10 @@ struct ConfirmationSheet: View {
     // MARK: - Variant copy
 
     /// Only the Trash keeps a receipt; a deleted photo is recovered in Photos'
-    /// own Recently Deleted, which this app has no hand in.
+    /// own Recently Deleted, which this app has no hand in — and a wholly
+    /// permanent clean-up has nothing a receipt could bring back.
     private var showsReceipt: Bool {
-        if case .cleanUp = variant { return true }
+        if case .cleanUp(let count, _, let permanent, _) = variant { return permanent < count }
         return false
     }
 
@@ -81,15 +91,24 @@ struct ConfirmationSheet: View {
     /// the destructive tint rather than the neutral one.
     private var isDestructive: Bool {
         switch variant {
-        case .cleanUp: false
+        case .cleanUp(_, _, let permanent, let protected): permanent > 0 || protected > 0
         case .emptyTrash, .deletePhotos: true
         }
     }
 
     private var title: String {
         switch variant {
-        case .cleanUp(let count, _):
+        case .cleanUp(let count, _, let permanent, let protected):
             let noun = count == 1 ? "item" : "items"
+            if protected > 0 {
+                return "Remove \(count) \(noun), including protected data?"
+            }
+            if permanent == count {
+                return "Permanently delete \(count) \(noun)?"
+            }
+            if permanent > 0 {
+                return "Remove \(count) \(noun)?"
+            }
             return "Move \(count) \(noun) to the Trash?"
         case .emptyTrash(let count, _):
             return "Permanently erase the \(count) items in the Trash?"
@@ -101,9 +120,36 @@ struct ConfirmationSheet: View {
 
     private var message: String {
         switch variant {
-        case .cleanUp(_, let bytes):
+        case .cleanUp(let count, let bytes, let permanent, let protected):
+            let warning: String
+            if protected > 0 {
+                let noun = protected == 1 ? "item" : "items"
+                let pronoun = protected == 1 ? "it" : "them"
+                warning = " This includes \(protected) protected user-data \(noun); "
+                    + "removing \(pronoun) can sign you out and erase profiles, history, or settings."
+            } else {
+                warning = ""
+            }
+            if permanent == count {
+                return "\(ByteFormatting.string(bytes)) will be deleted immediately — "
+                    + "not moved to the Trash — because \u{201C}Always move to Trash\u{201D} "
+                    + "is off in Advanced. This cannot be undone." + warning
+            }
+            if permanent > 0 {
+                let noun = permanent == 1 ? "item is" : "items are"
+                return "\(ByteFormatting.string(bytes)) will be removed. Apps go to "
+                    + "the Trash, but \(permanent) \(noun) deleted immediately and "
+                    + "cannot be put back." + warning
+            }
+            // The receipt line states what the checkbox below it is currently set
+            // to do: promising a removal log while it is unchecked was a lie the
+            // user could see through by unticking the box.
             return "\(ByteFormatting.string(bytes)) will be moved to the Trash. "
-                + "Nothing is erased until you empty it, and every path is written to the removal log."
+                + "Nothing is erased until you empty it. "
+                + (keepReceipt
+                    ? "Every path is written to the removal log."
+                    : "No receipt will be kept, so Put Back will not be available here.")
+                + warning
         case .emptyTrash(_, let bytes):
             return "This erases \(ByteFormatting.string(bytes)) immediately. "
                 + "Items already in the Trash cannot be put back afterwards."
@@ -120,9 +166,12 @@ struct ConfirmationSheet: View {
 
     private var confirmLabel: String {
         switch variant {
-        case .cleanUp:      "Move to Trash"
-        case .emptyTrash:   "Erase"
-        case .deletePhotos: "Delete Everywhere"
+        case .cleanUp(let count, _, let permanent, let protected):
+            if protected > 0 { return "Remove Anyway" }
+            if permanent == count { return "Delete" }
+            return permanent > 0 ? "Remove" : "Move to Trash"
+        case .emptyTrash:   return "Erase"
+        case .deletePhotos: return "Delete Everywhere"
         }
     }
 
@@ -141,6 +190,9 @@ struct ConfirmationSheet: View {
 
     private var iconName: String {
         if case .deletePhotos = variant { return "photo.badge.minus" }
+        if case .cleanUp(_, _, _, let protected) = variant, protected > 0 {
+            return "exclamationmark.triangle"
+        }
         return "trash"
     }
 
@@ -161,7 +213,32 @@ struct ConfirmationSheet: View {
 
 #Preview("Clean up") {
     ConfirmationSheet(
-        variant: .cleanUp(itemCount: 4, totalBytes: 4_512_000_000),
+        variant: .cleanUp(
+            itemCount: 4, totalBytes: 4_512_000_000,
+            permanentCount: 0, protectedDataCount: 0
+        ),
+        keepReceipt: .constant(true),
+        onConfirm: {}, onCancel: {}
+    )
+}
+
+#Preview("Clean up — permanent") {
+    ConfirmationSheet(
+        variant: .cleanUp(
+            itemCount: 4, totalBytes: 4_512_000_000,
+            permanentCount: 4, protectedDataCount: 0
+        ),
+        keepReceipt: .constant(true),
+        onConfirm: {}, onCancel: {}
+    )
+}
+
+#Preview("Clean up — protected data") {
+    ConfirmationSheet(
+        variant: .cleanUp(
+            itemCount: 2, totalBytes: 2_400_000_000,
+            permanentCount: 0, protectedDataCount: 1
+        ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
     )

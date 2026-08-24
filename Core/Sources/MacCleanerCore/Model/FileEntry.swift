@@ -56,7 +56,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         case running
         /// Activity inside the user's protection window (Preferences › Exclusions).
         case recentUse
-        /// Profiles, logins, history, documents. Removable only with the whole app.
+        /// Profiles, logins, history, documents. Locked by default; an interactive
+        /// caller may authorize this exact row after a destructive warning.
         case userData
     }
 
@@ -86,17 +87,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     /// Whether removal is actually refused.
     ///
-    /// Only two reasons lock: a running app (Finder refuses the same trash
-    /// operation, and it would fail), and user data (removable with its whole
-    /// app, never alone). Recent use is information, not a veto. The user, not a
-    /// date heuristic, decides whether last week's download stays.
+    /// Only two reasons lock by default: a running app (Finder refuses the same
+    /// trash operation, and it would fail), and user data (which needs an explicit
+    /// row-specific override, or the parent app's “Remove Everything” choice).
+    /// Recent use is information, not a veto. The user, not a date heuristic,
+    /// decides whether last week's download stays.
     public var isRemovalLocked: Bool {
         protectionReason == .running || protectionReason == .userData
             || manualRemoval != nil
     }
     /// Item count for folders, shown as `· 1,204 items`.
     public var childCount: Int?
-    /// Associated files for an app bundle, trashed with it.
+    /// Associated files for an app bundle. Regenerable children follow the bundle;
+    /// protected children do so only after “Remove Everything”.
     public var children: [FileEntry]
 
     public init(
@@ -139,6 +142,20 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
             .filter { !$0.isRemovalLocked }
             .reduce(Int64(0)) { $0 + $1.allocatedBytes }
         return isRemovalLocked ? childBytes : allocatedBytes + childBytes
+    }
+
+    /// The figure a row advertises, and the one every *display* total sums —
+    /// category totals, tiles, list headers. `reclaimableBytes` answers a different
+    /// question, "what would removal free", and belongs to cleanup arithmetic only.
+    ///
+    /// For an ordinary entry this is what removal frees. A manual-removal row
+    /// frees nothing *through this app* — Docker's images, a sealed simulator
+    /// runtime — but the space is real and the row states it, so the tile above the
+    /// list and the list header have to agree with the rows. Summing
+    /// `reclaimableBytes` instead made Docker's 5 GB appear as "0 B" over a list of
+    /// gigabyte rows.
+    public var displayBytes: Int64 {
+        manualRemoval != nil ? totalBytesIncludingChildren : reclaimableBytes
     }
 
     /// `/Users/me/Downloads` → `~/Downloads`

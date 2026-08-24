@@ -71,7 +71,7 @@ public struct DockerScanner: CategoryScanner {
 
         // Pruning frees space inside Docker's container folder, so a user who has
         // excluded that folder has already said to leave it alone.
-        if context.isExcluded(URL(fileURLWithPath: Self.dataDirectory)) {
+        if context.isWithinExclusion(URL(fileURLWithPath: Self.dataDirectory)) {
             return ScanCategoryResult(categoryID: id, availability: .empty)
         }
 
@@ -147,7 +147,16 @@ public struct DockerScanner: CategoryScanner {
             // `docker system df` carries no last-used date without `-v`, which is a
             // far more expensive call. The column stays empty rather than guessing.
             lastOpened: nil,
-            isRegenerable: isBuildCache
+            isRegenerable: isBuildCache,
+            // Nothing here is a path this app can trash: every byte lives inside
+            // Docker's VM disk image, and only Docker can give it back. The row
+            // therefore hands over the exact command, like a simulator runtime does,
+            // instead of a checkbox that would fail on confirm.
+            manualRemoval: FileEntry.ManualRemoval(
+                explanation: "This space lives inside Docker Desktop's disk image, "
+                    + "and only Docker can release it.",
+                command: pruneCommand(for: row.type)
+            )
         )
     }
 
@@ -157,6 +166,16 @@ public struct DockerScanner: CategoryScanner {
     /// by unlinking anything — only `docker system prune` frees them — so a
     /// plausible-looking path here would be an invitation for a file-based remover
     /// to act on one by mistake.
+    /// Docker's own prune command for one `system df` row.
+    static func pruneCommand(for type: String) -> String {
+        let lowered = type.lowercased()
+        if lowered.contains("build") { return "docker builder prune" }
+        if lowered.contains("image") { return "docker image prune -a" }
+        if lowered.contains("container") { return "docker container prune" }
+        if lowered.contains("volume") { return "docker volume prune" }
+        return "docker system prune"
+    }
+
     static func identityURL(for type: String) -> URL? {
         let slug = String(type.lowercased().map { character in
             character.isASCII && (character.isLetter || character.isNumber) ? character : "-"

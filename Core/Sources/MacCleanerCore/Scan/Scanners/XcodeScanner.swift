@@ -19,7 +19,16 @@ public struct XcodeScanner: CategoryScanner {
 
     public let id: CategoryID = .xcode
 
-    public init() {}
+    /// The `~/Library/Developer` tree to scan. Injectable so a test can lay out a
+    /// real Archives/DerivedData fixture instead of reading the machine's own.
+    private let developerRoot: URL
+
+    public init(
+        developerRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appending(path: "Library/Developer", directoryHint: .isDirectory)
+    ) {
+        self.developerRoot = developerRoot
+    }
 
     // MARK: - Roots
 
@@ -29,6 +38,11 @@ public struct XcodeScanner: CategoryScanner {
         /// the whole tree. Per-child rows are what make the category actionable: a
         /// single 12 GB `DerivedData` row cannot be refined, one row per project can.
         let expandsChildren: Bool
+        /// Whether this root's contents come back on the next build. Carried on the
+        /// root, not inferred from emitted paths: Archives emits one row per *date
+        /// directory*, so a per-path `.xcarchive` test never fired and irreplaceable
+        /// archives sailed through as "safe". The root knows what it holds.
+        var regenerable: Bool = true
     }
 
     /// The original hardcoded `iOS DeviceSupport`, so symbol copies from a Watch or
@@ -36,14 +50,13 @@ public struct XcodeScanner: CategoryScanner {
     /// invisible and accumulated forever.
     private static let deviceSupportPlatforms = ["iOS", "watchOS", "tvOS", "visionOS"]
 
-    private static func roots() -> [Root] {
-        let developer = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appending(path: "Library/Developer", directoryHint: .isDirectory)
+    private static func roots(developer: URL) -> [Root] {
 
-        func root(_ relative: String, expandsChildren: Bool) -> Root {
+        func root(_ relative: String, expandsChildren: Bool, regenerable: Bool = true) -> Root {
             Root(
                 url: developer.appending(path: relative, directoryHint: .isDirectory),
-                expandsChildren: expandsChildren
+                expandsChildren: expandsChildren,
+                regenerable: regenerable
             )
         }
 
@@ -52,9 +65,12 @@ public struct XcodeScanner: CategoryScanner {
             root("Xcode/DerivedData", expandsChildren: true),
 
             // `<date>/<name>.xcarchive`. Expanded per build date so a user can drop
-            // last year's archives and keep this week's. See the note on
-            // `isRegenerable` in `makeCacheEntry`.
-            root("Xcode/Archives", expandsChildren: true),
+            // last year's archives and keep this week's. Not regenerable: an
+            // archive holds the only dSYMs for a build that has shipped, and once
+            // it is gone crash reports from that build can never be symbolicated.
+            // Stale archives stay listed — they really are the biggest win here —
+            // but under "Needs review", never as "removal loses nothing".
+            root("Xcode/Archives", expandsChildren: true, regenerable: false),
 
             // SwiftUI preview build products, regenerated the next time a preview
             // renders. One blob, not per-project subdirectories.
@@ -130,12 +146,12 @@ public struct XcodeScanner: CategoryScanner {
         var entries: [FileEntry] = []
         var unreadableCount = 0
 
-        for root in Self.roots() {
+        for root in Self.roots(developer: developerRoot) {
             try Task.checkCancellation()
             guard fileManager.fileExists(atPath: root.url.path) else { continue }
             // Excluding a root excludes everything beneath it, so test it before
             // paying for the walk rather than filtering the children afterwards.
-            guard !context.isExcluded(root.url) else { continue }
+            guard !context.isWithinExclusion(root.url) else { continue }
 
             if root.expandsChildren {
                 // One `measureChildren` call rather than a `measure` per child: it
@@ -155,7 +171,8 @@ public struct XcodeScanner: CategoryScanner {
                     guard isDirectory(childURL) else { continue }
 
                     if let entry = makeCacheEntry(
-                        url: childURL, measurement: measurement, context: context
+                        url: childURL, measurement: measurement, context: context,
+                        isRegenerable: root.regenerable
                     ) {
                         entries.append(entry)
                     }
@@ -165,7 +182,8 @@ public struct XcodeScanner: CategoryScanner {
                 unreadableCount += measurement.unreadableCount
 
                 if let entry = makeCacheEntry(
-                    url: root.url, measurement: measurement, context: context
+                    url: root.url, measurement: measurement, context: context,
+                    isRegenerable: root.regenerable
                 ) {
                     entries.append(entry)
                 }
@@ -224,7 +242,8 @@ public struct XcodeScanner: CategoryScanner {
     private func makeCacheEntry(
         url: URL,
         measurement: SizeMeasurement,
-        context: ScanContext
+        context: ScanContext,
+        isRegenerable: Bool = true
     ) -> FileEntry? {
         guard measurement.allocatedBytes > 0 else { return nil }
 
@@ -234,21 +253,16 @@ public struct XcodeScanner: CategoryScanner {
         // every DerivedData worth showing. The same leak hid Chrome's caches from
         // the System Caches category.
         guard !context.isExcluded(url) else { return nil }
+        // See `SizeMeasurement.containsProtectedPattern`.
+        guard !measurement.containsProtectedPattern else { return nil }
 
         return FileEntry(
             url: url,
             kind: .cache,
             allocatedBytes: measurement.allocatedBytes,
             lastOpened: lastOpened,
-            // The category is badged safe and every row is `.cache · regenerable`.
-            // True of DerivedData, device symbols, previews and simulator state.
-            // Archives are the exception worth flagging to whoever owns the design:
-            // an `.xcarchive` holds the only dSYMs for a build that has shipped, and
-            // once it is gone, crash reports from that build can no longer be
-            // symbolicated. Nothing regenerates it. It is listed here because the
-            // spec calls for it and because stale archives really are the biggest
-            // win in this category, but "regenerable" overstates the case.
-            isRegenerable: true,
+            // From the root that emitted this row — see `Root.regenerable`.
+            isRegenerable: isRegenerable,
             childCount: (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
         )
     }
@@ -270,7 +284,7 @@ public struct XcodeScanner: CategoryScanner {
     private func simulatorRuntimeEntry(context: ScanContext) async throws -> FileEntry? {
         let root = URL(fileURLWithPath: "/Library/Developer/CoreSimulator")
         guard FileManager.default.fileExists(atPath: root.path) else { return nil }
-        guard !context.isExcluded(root) else { return nil }
+        guard !context.isWithinExclusion(root) else { return nil }
 
         // Inventory. A missing or broken xcrun means no runtimes to describe, and a
         // wedged one must not hang the scan.
@@ -301,7 +315,7 @@ public struct XcodeScanner: CategoryScanner {
         guard !commands.isEmpty else { return nil }
 
         let size = try await context.measurer.measure(root)
-        guard size.allocatedBytes > 0 else { return nil }
+        guard size.allocatedBytes > 0, !size.containsProtectedPattern else { return nil }
 
         // Much of this tree is root-only, so the measured figure is a lower bound.
         // The explanation says so rather than letting the number pose as exact.

@@ -63,13 +63,17 @@ struct MainWindow: View {
             switch sheet {
             case .cleanUp:
                 ConfirmationSheet(
+                    // Every figure from the captured plan, so the sheet describes
+                    // the operation that will actually run.
                     variant: .cleanUp(
-                        itemCount: model.selectedEntries.count,
-                        totalBytes: model.selectedBytes
+                        itemCount: model.pendingCleanUp?.itemCount ?? 0,
+                        totalBytes: model.pendingCleanUp?.totalBytes ?? 0,
+                        permanentCount: model.pendingCleanUp?.permanentCount ?? 0,
+                        protectedDataCount: model.pendingCleanUp?.protectedDataCount ?? 0
                     ),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performCleanUp() } },
-                    onCancel: { model.activeSheet = nil }
+                    onCancel: { model.cancelCleanUp() }
                 )
             case .deletePhotos:
                 ConfirmationSheet(
@@ -112,11 +116,23 @@ struct MainWindow: View {
             .disabled(model.isLoadingBreakdown)
 
         case .scanner, .large, .safeToRemove, .needsReview:
+            // The tile drill-downs promise a sweep — "safe to remove" especially —
+            // and a sweep should not mean ticking every row by hand. It sits beside
+            // Deselect All rather than up in the header, where the two halves of
+            // one decision were a window apart. The Scanner and Large & Old Files
+            // are browsing views with their own per-category controls, so they keep
+            // Deselect All alone.
+            if model.view == .safeToRemove || model.view == .needsReview {
+                Button("Select All") { model.selectAllInCurrentView() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(!model.canSelectAllInCurrentView)
+            }
+
             Button("Deselect All") { model.deselectAll() }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(!model.hasSelection)
 
-            Button(model.cleanUpLabel) { model.activeSheet = .cleanUp }
+            Button(model.cleanUpLabel) { model.requestCleanUp() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 // Nothing selected means nothing to confirm; the design renders the

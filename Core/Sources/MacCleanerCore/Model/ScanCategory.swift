@@ -94,6 +94,27 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
 
     public var id: String { categoryID.rawValue }
 
+    /// This category's contribution to "Safe to remove": regenerable entries in a
+    /// category badged safe. Judged per entry — a safe category can hold the one
+    /// thing that does not come back (an `.xcarchive` with shipped dSYMs), and the
+    /// tile's promise has to hold for every row it counts.
+    public var safeToRemoveBytes: Int64 {
+        guard categoryID.isSafe else { return 0 }
+        return entries.filter(\.isRegenerable).reduce(0) { $0 + $1.displayBytes }
+    }
+
+    /// Everything else: the whole category when it is not badged safe, plus any
+    /// non-regenerable entry inside one that is.
+    /// Summed from the rows the list will show, never from `totalBytes`: the tile
+    /// and the list it opens must state the same figure. A category with no entries
+    /// keeps its own total — that is a scanner reporting an aggregate it did not
+    /// break into rows.
+    public var needsReviewBytes: Int64 {
+        guard !entries.isEmpty else { return categoryID.isSafe ? 0 : totalBytes }
+        guard categoryID.isSafe else { return entries.reduce(0) { $0 + $1.displayBytes } }
+        return entries.filter { !$0.isRegenerable }.reduce(0) { $0 + $1.displayBytes }
+    }
+
     public init(
         categoryID: CategoryID,
         totalBytes: Int64 = 0,
@@ -117,10 +138,13 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// Only entry-backed categories are filtered: Docker reports totals from its own
     /// accounting rather than from files on disk, so its rows are left alone.
     public func filteringNoise(below floor: Int64) -> Self {
-        guard !entries.isEmpty else { return self }
+        // Docker's rows are manual-removal aggregates: `reclaimableBytes` is zero
+        // by definition, so recomputing the total from it would erase the `system
+        // df` figure the category exists to show.
+        guard categoryID != .docker, !entries.isEmpty else { return self }
         var copy = self
         copy.entries = entries.filter { $0.totalBytesIncludingChildren >= floor }
-        copy.totalBytes = copy.entries.reduce(0) { $0 + $1.reclaimableBytes }
+        copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }
         // Everything it found was noise — that is "nothing worth cleaning", not a
         // category with an empty table.
         if copy.entries.isEmpty, availability == .available {

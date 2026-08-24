@@ -5,8 +5,16 @@ import MacCleanerCore
 struct MacCleanerApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var model = AppModel()
-    @State private var settings = SettingsStore()
+    @State private var model: AppModel
+    @State private var settings: SettingsStore
+
+    init() {
+        // One store, handed to the model so the engine actually receives the
+        // preferences the panes edit.
+        let settings = SettingsStore()
+        _settings = State(initialValue: settings)
+        _model = State(initialValue: AppModel(settings: settings))
+    }
 
     // No forced appearance. The handoff was authored dark and only dark, and the app
     // used to pin `darkAqua` to match it. The light variant is now derived from that
@@ -37,7 +45,7 @@ struct MacCleanerApp: App {
         // its content; the design specifies a fixed 660 x 484.
         .windowResizability(.contentSize)
 
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $settings.showInMenuBar) {
             MenuBarView(model: model)
         } label: {
             MenuBarLabel(volume: model.volume)
@@ -82,9 +90,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the window observer would promote the app straight back to the Dock.
     private var isSettlingLoginLaunch = false
 
+    /// Whether the status item is on screen — the app's only face once the last
+    /// window closes. Read from defaults rather than the store, which the delegate
+    /// has no handle on; `SettingsStore` writes this key and defaults it to true.
+    private static var menuBarItemIsVisible: Bool {
+        UserDefaults.standard.object(forKey: "settings.showInMenuBar") as? Bool ?? true
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         observeWindows()
-        guard Self.launchedAsLoginItem else { return }
+        // With the menu bar item switched off there is nothing to become: an
+        // accessory app with no status item and no window is a process the user
+        // can neither see nor quit. It keeps its Dock icon instead.
+        guard Self.launchedAsLoginItem, Self.menuBarItemIsVisible else { return }
         isSettlingLoginLaunch = true
         Self.setPolicy(.accessory)
         closeMainWindows()
@@ -143,7 +161,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let remaining = NSApp.windows.filter {
                 $0 !== closing && $0.canBecomeMain && $0.isVisible
             }
-            guard remaining.isEmpty, NSApp.activationPolicy() == .regular else { return }
+            guard remaining.isEmpty, NSApp.activationPolicy() == .regular,
+                  // Same rule as at launch: the Dock icon stays when it is the only
+                  // way left to reach the app.
+                  Self.menuBarItemIsVisible
+            else { return }
             Self.setPolicy(.accessory)
             // An accessory app with no windows has nothing to be active for; hiding
             // hands focus to the next app the way ⌘H would. The status item is

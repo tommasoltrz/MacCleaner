@@ -87,7 +87,12 @@ struct ScannerView: View {
             )
 
             if isExpanded, !category.entries.isEmpty {
-                FileTable(entries: category.entries, selection: $model.scannerSelection)
+                FileTable(
+                    entries: category.entries,
+                    selection: $model.scannerSelection,
+                    userDataRemovalOverrides: $model.userDataRemovalOverrides,
+                    appDataRemovalOverrides: $model.appDataRemovalOverrides
+                )
             }
         }
     }

@@ -327,7 +327,7 @@ private struct LargeFileRow: View {
     var body: some View {
         HStack(spacing: Metrics.gap) {
             // The label is hidden but not dropped — it is what VoiceOver reads.
-            Toggle(entry.url.path, isOn: Binding(get: { isSelected }, set: onToggle))
+            Toggle(entry.url.path, isOn: Binding(get: { isSelected }, set: { onToggle($0) }))
                 .disabled(entry.isRemovalLocked)
                 .help(largeRowHelp)
                 .toggleStyle(.checkbox)

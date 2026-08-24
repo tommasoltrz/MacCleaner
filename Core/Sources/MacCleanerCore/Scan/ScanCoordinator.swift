@@ -28,13 +28,19 @@ public struct ScanResults: Sendable, Equatable {
 
     /// The Dashboard's "Safe to remove" tile: caches and package tarballs that
     /// regenerate on demand, cleanable without human judgement.
+    ///
+    /// Judged per entry, not per category. A safe category can still hold the one
+    /// thing that does not come back — an `.xcarchive` with a shipped build's only
+    /// dSYMs — and the tile's promise, "removal loses nothing", has to hold for
+    /// every row it counts.
     public var safeToRemoveBytes: Int64 {
-        categories.filter { $0.categoryID.isSafe }.reduce(0) { $0 + $1.totalBytes }
+        categories.reduce(0) { $0 + $1.safeToRemoveBytes }
     }
 
-    /// The "Needs review" tile: large files and unused apps — the user decides.
+    /// The "Needs review" tile: large files, unused apps, and anything in a safe
+    /// category that does not regenerate — the user decides.
     public var needsReviewBytes: Int64 {
-        categories.filter { !$0.categoryID.isSafe }.reduce(0) { $0 + $1.totalBytes }
+        categories.reduce(0) { $0 + $1.needsReviewBytes }
     }
 
     /// Categories with something to show, in the design's fixed order.

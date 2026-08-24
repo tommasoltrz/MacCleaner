@@ -39,7 +39,12 @@ struct FilteredEntriesView: View {
                         nothingHere
                     } else {
                         GroupedBox {
-                            FileTable(entries: entries, selection: $model.scannerSelection)
+                            FileTable(
+                                entries: entries,
+                                selection: $model.scannerSelection,
+                                userDataRemovalOverrides: $model.userDataRemovalOverrides,
+                                appDataRemovalOverrides: $model.appDataRemovalOverrides
+                            )
                                 .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
                         }
                     }
@@ -49,22 +54,25 @@ struct FilteredEntriesView: View {
             .padding(.top, 4)
             .padding(.bottom, 22)
         }
+        // Only this list opens pre-selected — see `seedSafeToRemoveSelection`.
+        // Keyed on the scan, so a fresh scan seeds again and a return visit does
+        // not overwrite what the user chose.
+        .task(id: model.scanResults?.finishedAt) {
+            guard filter == .safeToRemove else { return }
+            model.seedSafeToRemoveSelection()
+        }
     }
 
     private func header(_ entries: [FileEntry]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
+                // `displayBytes`, the same arithmetic the tile above used: summing
+                // what cleanup can free instead showed "0 B" over a list of
+                // gigabyte rows whenever those rows were manual-removal ones.
                 Text("\(entries.count) \(entries.count == 1 ? "item" : "items") · "
-                     + ByteFormatting.string(entries.reduce(0) { $0 + $1.reclaimableBytes }))
+                     + ByteFormatting.string(entries.reduce(0) { $0 + $1.displayBytes }))
                 Spacer(minLength: 12)
                 Text(selectionText)
-                // One gesture for the whole list. "Safe to remove" promises a sweep,
-                // and a sweep should not require ticking every row by hand.
-                Button(allSelected(entries) ? "Deselect All" : "Select All") {
-                    toggleAll(entries)
-                }
-                .buttonStyle(.borderless)
-                .font(.mcControlLabel)
             }
             Text(filter.explanation)
         }
@@ -73,41 +81,17 @@ struct FilteredEntriesView: View {
         .padding(.horizontal, 2)
     }
 
-    private func allSelected(_ entries: [FileEntry]) -> Bool {
-        !entries.isEmpty && entries.allSatisfy { model.scannerSelection.contains($0.id) }
-    }
-
-    /// Selecting a parent strips its children from the pool — the same rule the
-    /// table applies row by row — so the sweep never counts a byte twice.
-    private func toggleAll(_ entries: [FileEntry]) {
-        let parents = entries.map(\.id)
-        let children = entries.flatMap(\.children).map(\.id)
-        if allSelected(entries) {
-            model.scannerSelection.subtract(parents)
-        } else {
-            model.scannerSelection.formUnion(parents)
-        }
-        model.scannerSelection.subtract(children)
-    }
-
     private var selectionText: String {
         let count = model.scannerSelection.count
         guard count > 0 else { return "nothing selected yet" }
         return "\(count) selected · \(ByteFormatting.string(model.selectedBytes))"
     }
 
-    /// The same arithmetic as the tile, so the list always sums to the figure the
-    /// user clicked. Deduplicated by path: an entry two categories both claim is
-    /// one thing to remove, not two.
+    /// The model owns this list: the status bar's Select All has to act on exactly
+    /// the rows shown here, and two copies of the arithmetic would eventually
+    /// disagree about what "exactly" meant.
     private var filteredEntries: [FileEntry] {
-        guard let results = model.scanResults else { return [] }
-        let wantSafe = filter == .safeToRemove
-        var seen: Set<FileEntry.ID> = []
-        return results.categories
-            .filter { $0.categoryID.isSafe == wantSafe }
-            .flatMap(\.entries)
-            .filter { seen.insert($0.id).inserted }
-            .sorted { $0.allocatedBytes > $1.allocatedBytes }
+        model.tileEntries(safeToRemove: filter == .safeToRemove)
     }
 
     private var nothingHere: some View {

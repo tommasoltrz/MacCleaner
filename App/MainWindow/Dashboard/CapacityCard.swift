@@ -358,9 +358,18 @@ private struct CapacityBar: View {
             max(0, totalWidth - gap * CGFloat(max(count - 1, 0)))
         }
 
+        // Percentages are of capacity, which is right whenever the segments sum to
+        // capacity — the invariant the breakdown is built to hold. If a measurement
+        // fault ever breaks it, the bar still may not draw outside itself, so the
+        // denominator is whichever is larger. Proportions between segments stay
+        // exactly as measured; nothing is invented to make them fit.
+        let denominator = max(breakdown.capacityBytes, breakdown.segments.reduce(0) { $0 + $1.bytes })
+
         func widths(of segments: [StorageSegment]) -> [CGFloat] {
             let available = space(for: segments.count)
-            return segments.map { available * CGFloat(breakdown.percent(of: $0) / 100) }
+            return segments.map {
+                available * CGFloat(Double($0.bytes) / Double(max(denominator, 1)))
+            }
         }
 
         // A segment narrower than a point reads as a rendering artifact wedged between

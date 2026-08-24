@@ -94,6 +94,8 @@ public struct ApplicationsScanner: CategoryScanner {
                     let childOpened = lastOpenedDate(for: candidate.url)
                     let size = try await context.measurer.measure(candidate.url)
                     guard size.allocatedBytes > 0 else { continue }
+                    // See `SizeMeasurement.containsProtectedPattern`.
+                    guard !size.containsProtectedPattern else { continue }
 
                     unreadableCount += size.unreadableCount
                     children.append(FileEntry(
@@ -106,16 +108,23 @@ public struct ApplicationsScanner: CategoryScanner {
                     ))
                 }
 
+                var supportIsProtected = false
                 if let curation,
                    let curated = try await Self.curatedChildren(
                        curation, home: home, context: context
                    ) {
-                    children.append(contentsOf: curated.entries)
                     unreadableCount += curated.unreadableCount
+                    supportIsProtected = curated.holdsProtectedContent
+                    children.append(contentsOf: curated.entries)
                 }
+                // See `SizeMeasurement.containsProtectedPattern`. Both halves of
+                // the app matter: the bundle itself can ship a keychain, and so can
+                // its support folder — and removing the app row takes both.
+                guard !supportIsProtected else { continue }
 
                 let bundleSize = try await context.measurer.measure(appURL)
                 guard bundleSize.allocatedBytes > 0 else { continue }
+                guard !bundleSize.containsProtectedPattern else { continue }
                 unreadableCount += bundleSize.unreadableCount
 
                 // The bundle's own dates lie in both directions: Spotlight's
@@ -133,19 +142,18 @@ public struct ApplicationsScanner: CategoryScanner {
                 // fact (the set comes from NSWorkspace via the app layer); recent
                 // activity is the user's Preferences window doing its job. Either
                 // way the row still appears — the useful fact that a daily app has
-                // grown gigabytes survives — with its own checkbox locked. Leftovers
-                // stay individually removable, except the non-regenerable ones
-                // (profiles, user data), which inherit the lock.
+                // grown gigabytes survives — with its own checkbox locked.
                 let reason: FileEntry.ProtectionReason? =
                     context.runningApplicationPaths.contains(appURL.path) ? .running
                     : context.isRecencyProtected(lastActivity) ? .recentUse
                     : nil
-                if reason != nil {
-                    // The non-regenerable leftovers are the app's user data; that is
-                    // their own reason, not the parent's.
-                    for index in children.indices where !children[index].isRegenerable {
-                        children[index].protectionReason = .userData
-                    }
+
+                // A preference, container or support folder is user data whether
+                // the app ran today or four years ago. Recency controls the parent
+                // app row; it must never decide whether deleting a child alone gets
+                // a destructive warning.
+                for index in children.indices where !children[index].isRegenerable {
+                    children[index].protectionReason = .userData
                 }
 
                 entries.append(FileEntry(
@@ -192,7 +200,7 @@ public struct ApplicationsScanner: CategoryScanner {
 
         return ScanCategoryResult(
             categoryID: id,
-            totalBytes: entries.reduce(Int64(0)) { $0 + $1.reclaimableBytes },
+            totalBytes: entries.reduce(Int64(0)) { $0 + $1.displayBytes },
             entries: entries,
             availability: availability,
             unreadableCount: unreadableCount
@@ -220,6 +228,8 @@ public struct ApplicationsScanner: CategoryScanner {
         // Matching the original, which only recorded an associated file when its size
         // came back above zero. Nothing is freed by trashing an empty path.
         guard size.allocatedBytes > 0 else { return nil }
+        // See `SizeMeasurement.containsProtectedPattern`.
+        guard !size.containsProtectedPattern else { return nil }
 
         return (lastOpened, size)
     }
@@ -379,6 +389,12 @@ public struct ApplicationsScanner: CategoryScanner {
     struct CuratedData {
         var entries: [FileEntry]
         var unreadableCount: Int
+        /// The support folder holds something that must not be removed — a
+        /// protected glob, or an explicit exclusion the user added. The app row is
+        /// dropped entirely when this is set. The safe uninstall scope would keep
+        /// the remainder, but “Remove Everything” can carry it with the bundle; an
+        /// explicit exclusion must remain absolute under either choice.
+        var holdsProtectedContent = false
     }
 
     /// Measures one curated folder and splits it into cache entries plus the
@@ -397,6 +413,16 @@ public struct ApplicationsScanner: CategoryScanner {
         let fileManager = FileManager.default
         let root = home.appendingPathComponent(curation.root)
         guard fileManager.fileExists(atPath: root.path) else { return nil }
+
+        // An explicit exclusion anywhere inside the support folder protects the
+        // whole application. Only the curated cache paths were checked before, so
+        // an excluded path elsewhere in the folder stayed in the locked remainder,
+        // where “Remove Everything” could still reach it. `isExcluded` answers true
+        // for a directory that merely *contains* an exclusion, which is exactly the
+        // question here.
+        guard !context.isExcluded(root) else {
+            return CuratedData(entries: [], unreadableCount: 0, holdsProtectedContent: true)
+        }
 
         var entries: [FileEntry] = []
         var curatedBytes: Int64 = 0
@@ -423,6 +449,9 @@ public struct ApplicationsScanner: CategoryScanner {
 
                 let size = try await context.measurer.measure(url)
                 guard size.allocatedBytes > 0 else { continue }
+                // See `SizeMeasurement.containsProtectedPattern`. Skipped rather
+                // than carved out, so the bytes stay inside the locked remainder.
+                guard !size.containsProtectedPattern else { continue }
 
                 curatedBytes += size.allocatedBytes
                 if url.deletingLastPathComponent().standardizedFileURL.path
@@ -440,7 +469,8 @@ public struct ApplicationsScanner: CategoryScanner {
         }
 
         // Everything else is the user's data. The entry is listed so the bytes are
-        // visible, and locked so they go only when the whole app goes.
+        // visible and locked by default; the app can authorize this exact row only
+        // after showing the destructive warning.
         let total = try await context.measurer.measure(root)
         let preserveBytes = max(0, total.allocatedBytes - curatedBytes)
         if preserveBytes > 0 {
@@ -459,6 +489,14 @@ public struct ApplicationsScanner: CategoryScanner {
                 protectionReason: .userData,
                 childCount: remaining.count
             ))
+        }
+        // `total` measured the whole support root, so its flag covers every part
+        // of it — including the bytes inside the locked remainder.
+        guard !total.containsProtectedPattern else {
+            return CuratedData(
+                entries: [], unreadableCount: total.unreadableCount,
+                holdsProtectedContent: true
+            )
         }
         return entries.isEmpty
             ? nil
