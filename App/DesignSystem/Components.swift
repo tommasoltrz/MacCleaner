@@ -89,6 +89,21 @@ struct ProportionBar: View {
 
 // MARK: - Button styles
 
+/// A sidebar row: the label, and nothing else.
+///
+/// `.buttonStyle(.plain)` fades its label while the mouse is held down. No Mac source
+/// list does that — press a row in Finder and the only thing that moves is the
+/// selection. The moving pill is the whole feedback here, so this style reads
+/// `configuration.isPressed` nowhere.
+///
+/// The row's other half of the fix lives at the call site: the selection is made on
+/// mouse *down*, because a `Button` alone acts on mouse up and the delay reads as lag.
+struct SidebarRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+    }
+}
+
 /// Secondary button — the design's gradient-filled control with a specular top edge.
 struct SecondaryButtonStyle: ButtonStyle {
     @State private var isHovering = false
