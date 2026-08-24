@@ -13,6 +13,16 @@ enum ScanSchedule: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// The Core policy's vocabulary. The display order here is the design's
+    /// segmented control; the policy cares only about the interval.
+    var cadence: AutomaticScanPolicy.Cadence {
+        switch self {
+        case .never:  .never
+        case .weekly: .weekly
+        case .daily:  .daily
+        }
+    }
+
     var displayName: String {
         switch self {
         case .never:  "Never"
@@ -140,7 +150,6 @@ final class SettingsStore {
         static let warnBelowGB = 20
         static let trashFirst = true
         static let confirmBeforeCleanup = true
-        static let followSymlinks = false
         static let protectRecentDays = ProtectWindow.month
 
         /// Two categories ship off, per the design.
@@ -191,7 +200,6 @@ final class SettingsStore {
         static let categoryEnabled = "settings.categoryEnabled"
         static let trashFirst = "settings.trashFirst"
         static let confirmBeforeCleanup = "settings.confirmBeforeCleanup"
-        static let followSymlinks = "settings.followSymlinks"
         static let protectRecentDays = "settings.protectRecentDays"
         static let exclusions = "settings.exclusions"
     }
@@ -267,10 +275,6 @@ final class SettingsStore {
         didSet { defaults.set(confirmBeforeCleanup, forKey: Key.confirmBeforeCleanup) }
     }
 
-    var followSymlinks: Bool {
-        didSet { defaults.set(followSymlinks, forKey: Key.followSymlinks) }
-    }
-
     // MARK: Exclusions
 
     var protectRecentDays: ProtectWindow {
@@ -282,6 +286,14 @@ final class SettingsStore {
             guard let data = try? JSONEncoder().encode(exclusions) else { return }
             defaults.set(data, forKey: Key.exclusions)
         }
+    }
+
+    /// The rules split the way `ScanContext` consumes them.
+    var excludedFolderPaths: [String] {
+        exclusions.filter { $0.kind == .folder }.map(\.value)
+    }
+    var excludedPatterns: [String] {
+        exclusions.filter { $0.kind == .pattern }.map(\.value)
     }
 
     /// Adds folder rules, ignoring anything that is not a directory or is already
@@ -367,7 +379,6 @@ final class SettingsStore {
 
         self.trashFirst = bool(Key.trashFirst, or: Defaults.trashFirst)
         self.confirmBeforeCleanup = bool(Key.confirmBeforeCleanup, or: Defaults.confirmBeforeCleanup)
-        self.followSymlinks = bool(Key.followSymlinks, or: Defaults.followSymlinks)
         self.protectRecentDays = (defaults.object(forKey: Key.protectRecentDays) as? Int)
             .flatMap(ProtectWindow.init(rawValue:)) ?? Defaults.protectRecentDays
 
@@ -404,7 +415,6 @@ final class SettingsStore {
         )
         trashFirst = Defaults.trashFirst
         confirmBeforeCleanup = Defaults.confirmBeforeCleanup
-        followSymlinks = Defaults.followSymlinks
         protectRecentDays = Defaults.protectRecentDays
         exclusions = Defaults.exclusions
     }

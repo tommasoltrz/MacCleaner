@@ -2,6 +2,8 @@ import Foundation
 
 /// Rules a scan must respect, supplied by settings and the exclusion list.
 public struct ScanContext: Sendable {
+    /// Measures every tree this scan sizes. Carries the protected globs, so a
+    /// candidate holding one comes back flagged — see `isExcluded`.
     public var measurer: AllocatedSizeMeasurer
     /// Absolute paths skipped entirely, from Preferences → Exclusions.
     public var excludedPaths: [String]
@@ -22,6 +24,11 @@ public struct ScanContext: Sendable {
         protectRecentDays: Int = 30,
         runningApplicationPaths: Set<String> = []
     ) {
+        // The measurer must know the globs or nothing detects a protected tree.
+        // Taking them from the same argument keeps the two halves of the rule from
+        // drifting apart.
+        var measurer = measurer
+        if measurer.protectedPatterns.isEmpty { measurer.protectedPatterns = excludedPatterns }
         self.measurer = measurer
         self.excludedPaths = excludedPaths
         self.excludedPatterns = excludedPatterns
@@ -36,23 +43,53 @@ public struct ScanContext: Sendable {
         return lastOpened > Date().addingTimeInterval(-Double(protectRecentDays) * 86_400)
     }
 
-    /// True when a path is excluded, protected by recency, or inside an excluded
-    /// folder. Every scanner must consult this before emitting an entry.
+    /// True when a path is excluded, protected by recency, inside an excluded
+    /// folder — **or contains one**. Every scanner must consult this before emitting
+    /// an entry.
+    ///
+    /// The ancestor rule matters as much as the descendant one: with
+    /// `~/Documents/Project/Secrets` excluded, a row for `~/Documents/Project` would
+    /// remove the secrets along with everything else. An exclusion protects its
+    /// subtree from whichever row reaches it. Category roots are gated with
+    /// ``isWithinExclusion(_:)`` instead, or one deep exclusion would switch off the
+    /// whole category above it.
     public func isExcluded(_ url: URL, lastOpened: Date? = nil) -> Bool {
         let path = url.standardizedFileURL.path
 
-        for excluded in excludedPaths {
-            if path == excluded || path.hasPrefix(excluded + "/") { return true }
+        if isWithinExclusion(url) { return true }
+        for excluded in excludedPaths where excluded.hasPrefix(path + "/") {
+            return true
         }
-        let name = url.lastPathComponent
-        for pattern in excludedPatterns {
-            if fnmatch(pattern, name, 0) == 0 { return true }
+        // Patterns protect the match itself and everything inside it — a path
+        // component test, no attributes read, no walk.
+        //
+        // The other half of the rule, "a folder *containing* a match is not
+        // removable", is not decided here: it needs to know what is inside, and a
+        // recursive enumeration per candidate would double the cost of every scan.
+        // `AllocatedSizeMeasurer` detects it during the walk the caller already
+        // pays for and returns `SizeMeasurement.containsProtectedPattern`; every
+        // scanner refuses to emit a flagged tree. That walk is also the one that
+        // polls cancellation, which an enumeration here would not.
+        if !excludedPatterns.isEmpty {
+            for component in url.pathComponents {
+                for pattern in excludedPatterns where fnmatch(pattern, component, 0) == 0 {
+                    return true
+                }
+            }
         }
         if let lastOpened, protectRecentDays > 0 {
             let cutoff = Date().addingTimeInterval(-Double(protectRecentDays) * 86_400)
             if lastOpened > cutoff { return true }
         }
         return false
+    }
+
+    /// True when the path is an excluded folder or lies inside one. The narrow
+    /// check for category roots: a root that merely *contains* an exclusion is
+    /// still walked, and the exclusion is honoured row by row.
+    public func isWithinExclusion(_ url: URL) -> Bool {
+        let path = url.standardizedFileURL.path
+        return excludedPaths.contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 }
 

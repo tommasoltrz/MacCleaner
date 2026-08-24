@@ -112,7 +112,7 @@ public struct DocumentsFilesScanner: CategoryScanner {
             // Excluding a whole root should make the scan faster, not merely quieter,
             // so the check happens before anything is walked. No `lastOpened` here:
             // recency protects individual items, never an entire folder.
-            guard !context.isExcluded(root) else { continue }
+            guard !context.isWithinExclusion(root) else { continue }
 
             guard let listing = Self.listing(of: root) else {
                 // Where a TCC denial on ~/Desktop, ~/Documents or ~/Downloads lands.
@@ -129,6 +129,8 @@ public struct DocumentsFilesScanner: CategoryScanner {
 
                 let measured = try await measure(candidate, context: context)
                 unreadableCount += measured.unreadableCount
+                // See `SizeMeasurement.containsProtectedPattern`.
+                guard !measured.containsProtectedPattern else { continue }
 
                 let minimum = candidate.isDirectory
                     ? Self.minimumFolderBytes
@@ -175,6 +177,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
         var unreadableCount = 0
         /// `· N items` for folders, `nil` for files.
         var childCount: Int?
+        /// See `SizeMeasurement.containsProtectedPattern`. A candidate carrying
+        /// this is never emitted: the row would offer to remove a vault with it.
+        var containsProtectedPattern = false
     }
 
     /// Sizes one top-level item.
@@ -195,7 +200,8 @@ public struct DocumentsFilesScanner: CategoryScanner {
             let measurement = try await context.measurer.measure(candidate.url)
             return Measured(
                 bytes: measurement.allocatedBytes,
-                unreadableCount: measurement.unreadableCount
+                unreadableCount: measurement.unreadableCount,
+                containsProtectedPattern: measurement.containsProtectedPattern
             )
         }
 
@@ -206,7 +212,8 @@ public struct DocumentsFilesScanner: CategoryScanner {
             let measurement = try await context.measurer.measure(candidate.url)
             return Measured(
                 bytes: measurement.allocatedBytes,
-                unreadableCount: measurement.unreadableCount
+                unreadableCount: measurement.unreadableCount,
+                containsProtectedPattern: measurement.containsProtectedPattern
             )
         }
 
@@ -223,6 +230,7 @@ public struct DocumentsFilesScanner: CategoryScanner {
             let measurement = try await context.measurer.measure(candidate.url)
             result.bytes = measurement.allocatedBytes
             result.unreadableCount = measurement.unreadableCount
+            result.containsProtectedPattern = measurement.containsProtectedPattern
             return result
         }
 
@@ -234,6 +242,8 @@ public struct DocumentsFilesScanner: CategoryScanner {
         for measurement in measured.values {
             result.bytes += measurement.allocatedBytes
             result.unreadableCount += measurement.unreadableCount
+            result.containsProtectedPattern =
+                result.containsProtectedPattern || measurement.containsProtectedPattern
         }
         return result
     }

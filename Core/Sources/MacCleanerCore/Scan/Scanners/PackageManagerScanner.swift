@@ -162,6 +162,8 @@ public struct PackageManagerScanner: CategoryScanner {
             }
 
             unreadableCount += measured.unreadableCount
+            // See `SizeMeasurement.containsProtectedPattern`.
+            guard !measured.containsProtectedPattern else { continue }
 
             // The original's only threshold: an empty cache is not a cleanup
             // candidate, it is noise in a list the user has to read.

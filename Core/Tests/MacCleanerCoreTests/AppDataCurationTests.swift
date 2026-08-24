@@ -222,7 +222,12 @@ struct AppDataCurationTests {
         #expect(Self.remainder(data) == nil)
     }
 
-    @Test("an excluded cache keeps its bytes inside the remainder")
+    /// This test used to assert something weaker and wrong: that an excluded cache
+    /// is merely left out of the offered entries while its bytes rest in the locked
+    /// remainder. They do — but the remainder travels with the application bundle,
+    /// so removing the app deleted the excluded folder anyway. An exclusion means
+    /// "never touch this", so it now protects the whole application.
+    @Test("an excluded cache protects the whole application")
     func exclusionOutranksCuration() async throws {
         let sandbox = try Sandbox()
         let folder = Self.support("Fixture")
@@ -237,19 +242,10 @@ struct AppDataCurationTests {
         let context = ScanContext(excludedPaths: [excluded.standardizedFileURL.path])
         let data = try await Self.curated(curation, home: sandbox.root, context: context)
 
-        // The excluded path is never offered.
-        #expect(!data.entries.contains { $0.url.lastPathComponent == "Code Cache" })
-
-        // And the arithmetic still adds up, because bytes that were not carved
-        // out stay where they are on disk: inside the remainder.
-        let locked = try #require(Self.remainder(data))
-        let whole = try await AllocatedSizeMeasurer()
-            .measure(sandbox.root.appendingPathComponent(folder))
-        let curatedBytes = data.entries
-            .filter(\.isRegenerable)
-            .reduce(Int64(0)) { $0 + $1.allocatedBytes }
-        #expect(locked.allocatedBytes == whole.allocatedBytes - curatedBytes)
-        #expect(locked.allocatedBytes >= 2 * Int64(Self.oneMB))
+        #expect(data.holdsProtectedContent)
+        // Nothing from this folder is offered — not the excluded cache, and not the
+        // siblings that would have gone with the bundle.
+        #expect(data.entries.isEmpty)
     }
 
     // MARK: - Glob expansion

@@ -21,14 +21,22 @@ enum PrivilegedShell {
             && (underlying?.code == 1 || underlying?.code == 13)   // EPERM, EACCES
     }
 
+    /// Runs the script and returns whatever it printed.
+    ///
+    /// The output matters: a batch that must not abort on its first failure cannot
+    /// report per-item success through an exit status, so callers echo a marker per
+    /// item and read the result back from here.
+    ///
     /// Throws when the user declines the prompt or the script fails.
-    static func run(_ script: String) async throws {
+    @discardableResult
+    static func run(_ script: String) async throws -> String {
         let appleScript = "do shell script \""
             + script.replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "\"", with: "\\\"")
             + "\" with administrator privileges"
-        _ = try await ProcessRunner().run(
+        let output = try await ProcessRunner().run(
             SystemExecutable.osascript, ["-e", appleScript], timeout: .seconds(180)
         )
+        return String(decoding: output, as: UTF8.self)
     }
 }

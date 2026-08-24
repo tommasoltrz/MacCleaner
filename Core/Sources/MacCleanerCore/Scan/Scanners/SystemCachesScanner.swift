@@ -148,6 +148,10 @@ public struct SystemCachesScanner: CategoryScanner {
                 // of removal here is regeneration, not loss, which is what the
                 // category's `safe` badge already tells the user.
                 guard !context.isExcluded(url) else { continue }
+                // Detected by the measurer during the walk above: a tree holding a
+                // protected bundle or keychain is never offered, because removing
+                // the row would take it too.
+                guard !measurement.containsProtectedPattern else { continue }
 
                 entries.append(FileEntry(
                     url: url,

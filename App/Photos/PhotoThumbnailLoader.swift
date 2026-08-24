@@ -14,7 +14,7 @@ import AppKit
 final class PhotoThumbnailLoader {
 
     /// Retina-friendly for the grid's ~120pt cells without holding full previews.
-    private static let edge: CGFloat = 320
+    private nonisolated static let edge: CGFloat = 320
 
     /// Full-size previews are expensive to hold, so only the last few are kept.
     /// Opening a photo, stepping through its group and closing again must not
@@ -89,7 +89,7 @@ final class PhotoThumbnailLoader {
         }
     }
 
-    private static func fetchOriginal(
+    private nonisolated static func fetchOriginal(
         _ assetID: String,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async -> NSImage? {
@@ -106,19 +106,18 @@ final class PhotoThumbnailLoader {
         options.resizeMode = .none
         options.progressHandler = { fraction, _, _, _ in onProgress(fraction) }
 
-        return await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: PHImageManagerMaximumSize,
-                contentMode: .aspectFit,
-                options: options
-            ) { image, _ in
-                continuation.resume(returning: image)
-            }
-        }
+        // Bounded like the fingerprint path: PhotoKit sometimes never calls back,
+        // and an unbounded continuation here left the preview hung forever. Long,
+        // because a full-quality original may be coming down from iCloud.
+        return await TimedImageRequest().image(
+            for: asset,
+            size: PHImageManagerMaximumSize,
+            options: options,
+            timeout: 60
+        )
     }
 
-    private static func fetch(
+    private nonisolated static func fetch(
         _ assetID: String,
         edge: CGFloat = PhotoThumbnailLoader.edge,
         mode: PHImageContentMode = .aspectFill
@@ -134,15 +133,14 @@ final class PhotoThumbnailLoader {
         options.deliveryMode = .fastFormat
         options.resizeMode = .fast
 
-        return await withCheckedContinuation { continuation in
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: edge, height: edge),
-                contentMode: mode,
-                options: options
-            ) { image, _ in
-                continuation.resume(returning: image)
-            }
-        }
+        // Same guard as the preview path: a grid tile that never resolves is a
+        // leaked task per photo. Short, because these are fast-format requests.
+        return await TimedImageRequest().image(
+            for: asset,
+            size: CGSize(width: edge, height: edge),
+            contentMode: mode,
+            options: options,
+            timeout: 20
+        )
     }
 }

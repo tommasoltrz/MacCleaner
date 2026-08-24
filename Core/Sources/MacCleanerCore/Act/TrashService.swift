@@ -87,10 +87,15 @@ public enum TrashError: Error, Equatable {
 /// enabled button that cannot know where the file belongs would either guess or
 /// fail, and both are worse than being told up front that Finder owns this one.
 ///
-/// Matching is by file name, because that is what survives the move into the Trash.
-/// When macOS renames on a collision — a second `Report.pdf` becoming
-/// `Report 2.pdf` — the names no longer agree and the item is treated as
-/// unrecoverable rather than restored over the top of an unrelated file.
+/// Matching is by the destination path `trashItem` reported *and* by the file's
+/// `device:inode`, which is what actually identifies it. The path alone is a
+/// location: once the logged item leaves the Trash, an unrelated Finder item can
+/// land on the very same path, and a restore would send a stranger's file to this
+/// record's folder. A record without a logged identity — written by a build older
+/// than this one — is not offered at all: matching it would be a guess about which
+/// file the record meant, and this app does not guess about restoring data. A
+/// consumed record is retired with a `restored` tombstone, so one grant restores
+/// one item.
 public struct TrashService: Sendable {
 
     private let home: URL
@@ -151,6 +156,9 @@ public struct TrashService: Sendable {
     /// emptied in months, short of parsing a log that has been growing for years.
     private static let putBackLookback = 5_000
 
+    /// Printed by the privileged script for each item it really erased.
+    private static let eraseMarker = "MacCleaner-erased:"
+
     // MARK: - Reading
 
     /// - Parameter limit: how many rows to return. The totals always cover the whole
@@ -201,7 +209,9 @@ public struct TrashService: Sendable {
                 url: url,
                 bytes: bytes,
                 deletedAt: values?.addedToDirectoryDate,
-                canPutBack: restorable[url.lastPathComponent] != nil
+                canPutBack: Self.match(
+                    restorable[url.resolvingSymlinksInPath().path], at: url
+                ) != nil
             ))
         }
 
@@ -271,12 +281,26 @@ public struct TrashService: Sendable {
         }
 
         if !stuck.isEmpty {
-            let script = stuck
-                .map { "rm -rf \(PrivilegedShell.shellQuoted($0.url.path))" }
-                .joined(separator: " && ")
+            // One statement per item, each announcing itself, and `exit 0` at the
+            // end. Chained with `&&`, one failure abandoned the rest *and* reported
+            // items that were already permanently erased as skipped, crediting the
+            // user none of the space they had just lost.
+            let statements = stuck.enumerated().map { index, item in
+                "if rm -rf \(PrivilegedShell.shellQuoted(item.url.path)); then"
+                    + " echo \(Self.eraseMarker)\(index); fi"
+            }
+            let script = (statements + ["exit 0"]).joined(separator: "; ")
             do {
-                try await PrivilegedShell.run(script)
-                freedBytes += stuck.reduce(0) { $0 + $1.bytes }
+                let output = try await PrivilegedShell.run(script)
+                let erased = Set(output.split(whereSeparator: \.isNewline)
+                    .compactMap { line -> Int? in
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        guard trimmed.hasPrefix(Self.eraseMarker) else { return nil }
+                        return Int(trimmed.dropFirst(Self.eraseMarker.count))
+                    })
+                for (index, item) in stuck.enumerated() {
+                    if erased.contains(index) { freedBytes += item.bytes } else { skipped += 1 }
+                }
             } catch {
                 // A declined prompt fails every queued item, honestly.
                 skipped += stuck.count
@@ -289,9 +313,11 @@ public struct TrashService: Sendable {
 
     /// Restores an item to the path ``RemovalLog`` recorded for it.
     public func putBack(_ item: TrashItem) async throws {
-        guard let originalPath = originalPaths()[item.name] else {
+        let key = item.url.resolvingSymlinksInPath().path
+        guard let record = Self.match(originalPaths()[key], at: item.url) else {
             throw TrashError.putBackUnavailable(item.id)
         }
+        let originalPath = record.originalPath
         let destination = URL(fileURLWithPath: originalPath)
 
         let fileManager = FileManager.default
@@ -306,22 +332,58 @@ public struct TrashService: Sendable {
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         try fileManager.moveItem(at: item.url, to: destination)
+        // Retire the record: its Trash path is vacant now, and whoever occupies it
+        // next is a stranger.
+        try? log.append([RemovalRecord(
+            timestamp: Date(),
+            originalPath: originalPath,
+            bytes: item.bytes,
+            disposition: .restored,
+            trashedPath: key,
+            trashedIdentity: record.trashedIdentity
+        )])
     }
 
-    /// Trash file name → the path it came from, most recent removal winning.
+    /// The record that really describes the item at `url`, or nil.
     ///
-    /// Only `trashed` removals qualify. A `deleted` one left nothing to put back, and
-    /// treating its record as a restore target would offer to recover a file that no
-    /// longer exists.
-    private func originalPaths() -> [String: String] {
-        var byName: [String: String] = [:]
-        // `recentEntries` is newest first, so the first sighting of a name is the one
-        // that matters and later, older duplicates are ignored.
-        for record in log.recentEntries(limit: Self.putBackLookback)
-        where record.disposition == .trashed {
-            let name = URL(fileURLWithPath: record.originalPath).lastPathComponent
-            if byName[name] == nil { byName[name] = record.originalPath }
+    /// Identity or nothing. The timestamp window this used to fall back on could
+    /// still match an unrelated file that happened to reach the same Trash path
+    /// within the window, and "probably the right file" is not a standard worth
+    /// restoring someone's data on.
+    private static func match(_ record: RemovalRecord?, at url: URL) -> RemovalRecord? {
+        guard let record, let logged = record.trashedIdentity else { return nil }
+        // Definitive: same device, same inode, same file.
+        return FileIdentity.of(url) == logged ? record : nil
+    }
+
+    /// Path inside the Trash → the path it came from, most recent removal winning.
+    ///
+    /// Keyed by the destination `trashItem` reported, never by name: the Trash
+    /// renames on collision, and a bare filename once matched an unrelated item the
+    /// user had trashed from Finder. Only `trashed` removals with a recorded
+    /// destination qualify — a `deleted` one left nothing to put back, and a
+    /// privileged move does not report where it landed.
+    private func originalPaths() -> [String: RemovalRecord] {
+        var byTrashPath: [String: RemovalRecord] = [:]
+        var retired: Set<String> = []
+        // `recentEntries` is newest first, so a `restored` tombstone is seen before
+        // the older `trashed` record it consumes, and the first live sighting of a
+        // path wins over older duplicates.
+        for record in log.recentEntries(limit: Self.putBackLookback) {
+            guard let trashed = record.trashedPath else { continue }
+            // Symlinks resolved on both sides of the match: the same file is
+            // `/var/...` from one API and `/private/var/...` from another.
+            let key = URL(fileURLWithPath: trashed).resolvingSymlinksInPath().path
+            switch record.disposition {
+            case .restored:
+                retired.insert(key)
+            case .trashed:
+                if retired.remove(key) != nil { continue }
+                if byTrashPath[key] == nil { byTrashPath[key] = record }
+            case .deleted:
+                continue
+            }
         }
-        return byName
+        return byTrashPath
     }
 }

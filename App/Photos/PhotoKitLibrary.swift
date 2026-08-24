@@ -118,7 +118,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
 
     /// Runs the Vision request off the cooperative pool. See `visionQueue`.
     private static func featurePrint(from cgImage: CGImage) async -> PhotoFingerprint? {
-        nonisolated(unsafe) let image = cgImage
+        let image = cgImage
         return await withCheckedContinuation { continuation in
             visionQueue.async {
                 let request = VNGenerateImageFeaturePrintRequest()
@@ -216,7 +216,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
 /// two racing events happens first — PhotoKit's handler, or the deadline. Resuming a
 /// `CheckedContinuation` twice traps, and never resuming it leaks the task forever;
 /// both were reachable without this. The lock makes the winner unambiguous.
-private final class TimedImageRequest: @unchecked Sendable {
+final class TimedImageRequest: @unchecked Sendable {
 
     private let lock = NSLock()
     private var continuation: CheckedContinuation<NSImage?, Never>?
@@ -227,6 +227,7 @@ private final class TimedImageRequest: @unchecked Sendable {
     func image(
         for asset: PHAsset,
         size: CGSize,
+        contentMode: PHImageContentMode = .aspectFit,
         options: PHImageRequestOptions,
         timeout: TimeInterval
     ) async -> NSImage? {
@@ -236,7 +237,7 @@ private final class TimedImageRequest: @unchecked Sendable {
             lock.unlock()
 
             let id = PHImageManager.default().requestImage(
-                for: asset, targetSize: size, contentMode: .aspectFit, options: options
+                for: asset, targetSize: size, contentMode: contentMode, options: options
             ) { image, _ in
                 // Strong, deliberately. Nothing else holds this object once the
                 // synchronous part of `withCheckedContinuation` returns, so a weak

@@ -10,20 +10,34 @@ public struct SizeMeasurement: Sendable, Equatable {
     public var allocatedBytes: Int64
     public var fileCount: Int
     public var unreadableCount: Int
+    /// True when something under this tree matched a protected glob — a
+    /// `*.sparsebundle`, a keychain. Detected *during* the walk the caller was
+    /// paying for anyway: the alternative, a second recursive enumeration per
+    /// candidate at emission time, doubled the cost of every scan. A tree carrying
+    /// this flag must not be offered for removal, because removing it recursively
+    /// would take the protected thing with it.
+    public var containsProtectedPattern: Bool
 
     public static let zero = SizeMeasurement(allocatedBytes: 0, fileCount: 0, unreadableCount: 0)
 
-    public init(allocatedBytes: Int64 = 0, fileCount: Int = 0, unreadableCount: Int = 0) {
+    public init(
+        allocatedBytes: Int64 = 0,
+        fileCount: Int = 0,
+        unreadableCount: Int = 0,
+        containsProtectedPattern: Bool = false
+    ) {
         self.allocatedBytes = allocatedBytes
         self.fileCount = fileCount
         self.unreadableCount = unreadableCount
+        self.containsProtectedPattern = containsProtectedPattern
     }
 
     public static func + (lhs: Self, rhs: Self) -> Self {
         SizeMeasurement(
             allocatedBytes: lhs.allocatedBytes + rhs.allocatedBytes,
             fileCount: lhs.fileCount + rhs.fileCount,
-            unreadableCount: lhs.unreadableCount + rhs.unreadableCount
+            unreadableCount: lhs.unreadableCount + rhs.unreadableCount,
+            containsProtectedPattern: lhs.containsProtectedPattern || rhs.containsProtectedPattern
         )
     }
 }
@@ -63,11 +77,17 @@ public struct AllocatedSizeMeasurer: Sendable {
     /// Off by default — the setting's own description warns it can double-count.
     public var followSymlinks: Bool
 
+    /// Globs from Preferences › Exclusions, matched against every name the walk
+    /// meets. A tree containing a match comes back flagged rather than being
+    /// enumerated a second time by the caller.
+    public var protectedPatterns: [String]
+
     /// How often to check for cancellation, in entries.
     private let cancellationCheckInterval = 512
 
-    public init(followSymlinks: Bool = false) {
+    public init(followSymlinks: Bool = false, protectedPatterns: [String] = []) {
         self.followSymlinks = followSymlinks
+        self.protectedPatterns = protectedPatterns
     }
 
     fileprivate static let keys: [URLResourceKey] = [
@@ -102,6 +122,8 @@ public struct AllocatedSizeMeasurer: Sendable {
         _ url: URL,
         progress: (@Sendable (SizeMeasurement) -> Void)? = nil
     ) async throws -> SizeMeasurement {
+        // With the follow setting on, a symlink root means its target.
+        let url = followSymlinks ? url.resolvingSymlinksInPath() : url
         // A plain file, or a symlink we are not following: measure and return.
         let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
         if rootValues?.isDirectory != true {
@@ -113,6 +135,7 @@ public struct AllocatedSizeMeasurer: Sendable {
         }
 
         let followSymlinks = self.followSymlinks
+        let protectedPatterns = self.protectedPatterns
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
@@ -120,6 +143,7 @@ public struct AllocatedSizeMeasurer: Sendable {
                 let detachedValues = try? url.resourceValues(forKeys: Set(Self.keys))
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
+                    protectedPatterns: protectedPatterns,
                     rootVolume: detachedValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
@@ -149,6 +173,7 @@ public struct AllocatedSizeMeasurer: Sendable {
     ) async throws -> [URL: SizeMeasurement] {
         precondition(depth >= 1, "depth must be at least 1")
         let followSymlinks = self.followSymlinks
+        let protectedPatterns = self.protectedPatterns
         let cancelled = CancellationFlag()
 
         return try await withTaskCancellationHandler {
@@ -157,6 +182,7 @@ public struct AllocatedSizeMeasurer: Sendable {
                 let rootValues = try? standardRoot.resourceValues(forKeys: Set(Self.keys))
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
+                    protectedPatterns: protectedPatterns,
                     rootVolume: rootValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
@@ -180,6 +206,7 @@ public struct AllocatedSizeMeasurer: Sendable {
         progress: (@Sendable (SizeMeasurement) -> Void)? = nil
     ) async throws -> [URL: SizeMeasurement] {
         let followSymlinks = self.followSymlinks
+        let protectedPatterns = self.protectedPatterns
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
@@ -195,17 +222,42 @@ public struct AllocatedSizeMeasurer: Sendable {
                 // parent rather than exceeding it.
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
+                    protectedPatterns: protectedPatterns,
                     rootVolume: parentValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
                 )
                 for child in children {
                     walker.prefill(child)
+                    // A child that is itself a protected bundle: the listing loop
+                    // inside the walker never sees it, because this level was
+                    // listed here.
+                    if walker.matchesProtectedPattern(child.lastPathComponent) {
+                        walker.markProtected(child)
+                    }
                     guard let values = try? child.resourceValues(forKeys: Set(Self.keys)) else {
                         walker.recordUnreadable(at: child)
                         continue
                     }
-                    if values.isSymbolicLink == true && !followSymlinks { continue }
+                    if values.isSymbolicLink == true {
+                        guard followSymlinks else { continue }
+                        // A direct symlink child reports neither directory nor
+                        // regular file for itself; resolve it or the row measures
+                        // nothing with the follow setting on.
+                        let resolved = child.resolvingSymlinksInPath()
+                        guard let target = try? resolved.resourceValues(
+                            forKeys: Set(Self.keys)
+                        ) else {
+                            walker.recordUnreadable(at: child)
+                            continue
+                        }
+                        if target.isDirectory == true {
+                            walker.enqueue(listing: resolved, attribution: [child], grow: 0)
+                        } else {
+                            walker.measureLooseFile(target, at: child)
+                        }
+                        continue
+                    }
                     if values.isDirectory == true {
                         walker.enqueue(listing: child, attribution: [child], grow: 0)
                     } else {
@@ -251,6 +303,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     }
 
     private let followSymlinks: Bool
+    private let protectedPatterns: [String]
     private let rootVolume: NSObject?
     private let cancelled: CancellationFlag
     private let progress: (@Sendable (SizeMeasurement) -> Void)?
@@ -261,6 +314,12 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     private var totals: [URL: SizeMeasurement] = [:]
     private var unreadable: [URL: Int] = [:]
     private var claimedInodes = Set<NSObject>()
+    /// Directories already queued, tracked only when following symlinks: a link
+    /// into a subtree that is walked anyway must not count it twice, and a link to
+    /// an ancestor must not walk forever. Keyed by resolved path.
+    private var visitedDirectories = Set<String>()
+    /// Attribution keys whose subtree holds something matching a protected glob.
+    private var protectedKeys = Set<URL>()
     /// Every file once, regardless of how many ancestors it is attributed to —
     /// what the progress callback reports.
     private var grandTotal = SizeMeasurement.zero
@@ -271,11 +330,13 @@ private final class ParallelTreeWalker: @unchecked Sendable {
 
     init(
         followSymlinks: Bool,
+        protectedPatterns: [String] = [],
         rootVolume: NSObject?,
         cancelled: CancellationFlag,
         progress: (@Sendable (SizeMeasurement) -> Void)?
     ) {
         self.followSymlinks = followSymlinks
+        self.protectedPatterns = protectedPatterns
         self.rootVolume = rootVolume
         self.cancelled = cancelled
         self.progress = progress
@@ -283,8 +344,30 @@ private final class ParallelTreeWalker: @unchecked Sendable {
 
     func enqueue(listing: URL, attribution: [URL], grow: Int) {
         condition.lock()
+        if followSymlinks {
+            // Every directory funnels through here, so this one check is the whole
+            // cycle- and double-count guard.
+            let canonical = listing.resolvingSymlinksInPath().standardizedFileURL.path
+            guard visitedDirectories.insert(canonical).inserted else {
+                condition.unlock()
+                return
+            }
+        }
         stack.append(WorkItem(listing: listing, attribution: attribution, grow: grow))
         condition.signal()
+        condition.unlock()
+    }
+
+    /// Whether a bare name matches any configured glob. Cheap: no attributes are
+    /// read, and it is skipped entirely when no patterns are configured.
+    func matchesProtectedPattern(_ name: String) -> Bool {
+        guard !protectedPatterns.isEmpty else { return false }
+        return protectedPatterns.contains { fnmatch($0, name, 0) == 0 }
+    }
+
+    func markProtected(_ key: URL) {
+        condition.lock()
+        protectedKeys.insert(key)
         condition.unlock()
     }
 
@@ -350,6 +433,9 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         for (key, count) in unreadable {
             totals[key, default: .zero].unreadableCount += count
         }
+        for key in protectedKeys {
+            totals[key, default: .zero].containsProtectedPattern = true
+        }
         return totals
     }
 
@@ -398,6 +484,11 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         var report: SizeMeasurement?
 
         for entry in entries {
+            // Name check first: it needs no attributes, so a protected bundle is
+            // recognised even where the entry itself cannot be read.
+            if matchesProtectedPattern(entry.lastPathComponent) {
+                for key in item.attribution { markProtected(key) }
+            }
             guard let values = try? entry.resourceValues(
                 forKeys: Set(AllocatedSizeMeasurer.keys)
             ) else {
@@ -412,10 +503,42 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 continue
             }
             if values.isSymbolicLink == true {
-                // Directories behind symlinks are never descended — the serial
-                // enumerator this replaces did not either — and the link entry
-                // itself is skipped unless the follow setting keeps it.
-                if !followSymlinks { continue }
+                guard followSymlinks else { continue }
+                // The setting is on: measure the target as if it lived here. The
+                // visited set breaks cycles and stops a target that is walked
+                // anyway from counting twice; Advanced warns this can double-count
+                // across *distinct* links to the same files, which inode dedup
+                // catches for hard content and misses for directories re-linked
+                // under different names — the disclosed price of the option.
+                let resolved = entry.resolvingSymlinksInPath()
+                guard let target = try? resolved.resourceValues(
+                    forKeys: Set(AllocatedSizeMeasurer.keys)
+                ) else {
+                    recordUnreadable(at: item.attribution[0])
+                    continue
+                }
+                if let rootVolume, let targetVolume = target.volumeIdentifier as? NSObject,
+                   !targetVolume.isEqual(rootVolume) {
+                    continue
+                }
+                if target.isDirectory == true {
+                    let childKey = item.attribution[item.attribution.count - 1]
+                        .appendingPathComponent(entry.lastPathComponent)
+                    let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
+                    enqueue(listing: resolved, attribution: attribution, grow: max(0, item.grow - 1))
+                } else if target.isRegularFile == true {
+                    if (target.linkCount ?? 1) > 1 {
+                        condition.lock()
+                        let fresh = (target.fileResourceIdentifier as? NSObject).map {
+                            claimedInodes.insert($0).inserted
+                        } ?? true
+                        condition.unlock()
+                        guard fresh else { continue }
+                    }
+                    if let bytes = AllocatedSizeMeasurer.allocatedSize(of: target) {
+                        localFiles.append(bytes)
+                    }
+                }
                 continue
             }
 

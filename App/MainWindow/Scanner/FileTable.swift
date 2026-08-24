@@ -13,6 +13,8 @@ import MacCleanerCore
 struct FileTable: View {
     let entries: [FileEntry]
     @Binding var selection: Set<FileEntry.ID>
+    @Binding var userDataRemovalOverrides: Set<FileEntry.ID>
+    @Binding var appDataRemovalOverrides: Set<FileEntry.ID>
 
     /// Anchor for shift-click: the row whose checkbox was clicked last, `nil` until
     /// the first click. Indices into `entries`, so it is the visible row order the
@@ -21,6 +23,12 @@ struct FileTable: View {
 
     /// Rows disclosed to show their associated files (an app's leftovers).
     @State private var expandedRows: Set<FileEntry.ID> = []
+    /// The user-data row whose lock was clicked. Confirmation is local to the table
+    /// because this is permission to select a row, not permission to run cleanup yet.
+    @State private var pendingUserDataOverride: FileEntry?
+    /// An app with non-regenerable children needs a deliberate uninstall scope:
+    /// keep those children (the default) or remove everything.
+    @State private var pendingAppSelection: FileEntry?
 
     enum SortKey { case name, lastOpened, size }
     @State private var sortKey: SortKey = .size
@@ -75,6 +83,51 @@ struct FileTable: View {
             }
         }
         .overlay(alignment: .top) { Hairline() }
+        .alert(item: $pendingUserDataOverride) { entry in
+            Alert(
+                title: Text("Remove \(entry.displayName)?"),
+                message: Text(
+                    "This folder can contain profiles, logins, history, and settings. "
+                    + "Removing it may sign you out or reset the app. Quit the app first. "
+                    + "MacCleaner will always move this protected data to the Trash."
+                ),
+                primaryButton: .destructive(Text("Unlock & Select")) {
+                    userDataRemovalOverrides.insert(entry.id)
+                    selection.insert(entry.id)
+                    pendingUserDataOverride = nil
+                },
+                secondaryButton: .cancel { pendingUserDataOverride = nil }
+            )
+        }
+        .confirmationDialog(
+            pendingAppSelection.map { "Remove \($0.displayName)?" } ?? "Remove application?",
+            isPresented: Binding(
+                get: { pendingAppSelection != nil },
+                set: { if !$0 { pendingAppSelection = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let entry = pendingAppSelection {
+                Button("Remove App, Keep Profiles & Settings") {
+                    selectApp(entry, removeProtectedData: false)
+                }
+                Button("Remove Everything", role: .destructive) {
+                    selectApp(entry, removeProtectedData: true)
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingAppSelection = nil }
+        } message: {
+            if let entry = pendingAppSelection {
+                let protected = protectedAppChildren(entry)
+                let noun = protected.count == 1 ? "item" : "items"
+                Text(
+                    "MacCleaner found \(protected.count) protected \(noun) "
+                    + "(\(ByteFormatting.string(protected.reduce(0) { $0 + $1.allocatedBytes }))). "
+                    + "Keep them to preserve profiles, logins and settings, or remove "
+                    + "them with the app. Everything removed still goes to the Trash."
+                )
+            }
+        }
     }
 
     // MARK: - Column header
@@ -135,30 +188,42 @@ struct FileTable: View {
                 FileRow(
                     entry: entry,
                     isSelected: selection.contains(entry.id),
+                    hasUserDataOverride: userDataRemovalOverrides.contains(entry.id),
+                    removesProtectedAppData: appDataRemovalOverrides.contains(entry.id),
                     isExpanded: expandedRows.contains(entry.id),
                     onToggle: { isOn in setSelected(isOn, at: index) },
+                    onRequestUserDataOverride: { pendingUserDataOverride = entry },
                     onDisclose: { toggleDisclosure(entry.id) }
                 )
                 // An entry with associated files (an app and its leftovers)
-                // discloses into them. Children select individually — a cache can go
-                // while the app stays — but a selected parent implies all of them,
-                // because the reverse (keeping a leftover whose app is removed)
-                // is not a choice the remover honours.
+                // discloses into them. Children select individually; selecting the
+                // app implies caches, while protected data follows only after the
+                // user chooses the destructive scope.
                 if expandedRows.contains(entry.id) {
                     ForEach(entry.children) { child in
+                        let parentSelected = selection.contains(entry.id)
+                        let removesProtectedData = appDataRemovalOverrides.contains(entry.id)
+                        let removedWithParent = parentSelected
+                            && (child.isRegenerable || removesProtectedData)
                         Hairline()
                         ChildRow(
                             entry: child,
-                            // A selected parent implies every child: the app and its
-                            // leftovers go together, so the child shows as checked
-                            // and locked rather than offering a choice that would
-                            // not be honoured.
-                            isSelected: selection.contains(child.id) || selection.contains(entry.id),
-                            isImpliedByParent: selection.contains(entry.id),
+                            // Caches follow a selected parent. Protected children do
+                            // so only after “Remove Everything”; the safe choice
+                            // leaves their locks active and unchecked.
+                            isSelected: selection.contains(child.id) || removedWithParent,
+                            isImpliedByParent: removedWithParent,
+                            isKeptByParentSelection: parentSelected
+                                && !child.isRegenerable && !removesProtectedData,
+                            hasUserDataOverride: userDataRemovalOverrides.contains(child.id),
                             onToggle: { isOn in
                                 if isOn { selection.insert(child.id) }
-                                else { selection.remove(child.id) }
-                            }
+                                else {
+                                    selection.remove(child.id)
+                                    userDataRemovalOverrides.remove(child.id)
+                                }
+                            },
+                            onRequestUserDataOverride: { pendingUserDataOverride = child }
                         )
                     }
                 }
@@ -174,6 +239,29 @@ struct FileTable: View {
     }
 
     // MARK: - Selection
+
+    private func protectedAppChildren(_ entry: FileEntry) -> [FileEntry] {
+        guard entry.kind == .appBundle else { return [] }
+        return CleanupService.removalTargets(
+            for: entry, removeProtectedAppData: true
+        ).filter { $0.id != entry.id && !$0.isRegenerable }
+    }
+
+    /// Commits one of the two scopes from the app-selection dialog. Selecting the
+    /// parent replaces individual child selections; their row-specific overrides
+    /// are no longer relevant to the newly chosen parent policy.
+    private func selectApp(_ entry: FileEntry, removeProtectedData: Bool) {
+        selection.insert(entry.id)
+        let childIDs = Set(entry.children.map(\.id))
+        selection.subtract(childIDs)
+        userDataRemovalOverrides.subtract(childIDs)
+        if removeProtectedData {
+            appDataRemovalOverrides.insert(entry.id)
+        } else {
+            appDataRemovalOverrides.remove(entry.id)
+        }
+        pendingAppSelection = nil
+    }
 
     /// Applies a checkbox click, extending it over a range when Shift is held.
     ///
@@ -193,18 +281,39 @@ struct FileTable: View {
             affected = Array(min(anchor, index)...max(anchor, index))
         }
 
+        // A direct app selection gets both choices. A range selection takes the
+        // safe default for every app it crosses; bulk gestures must never silently
+        // acquire destructive app-data overrides.
+        if isOn, affected.count == 1 {
+            let entry = visible[index]
+            if !protectedAppChildren(entry).isEmpty {
+                pendingAppSelection = entry
+                lastClickedIndex = index
+                return
+            }
+        }
+
         for position in affected {
             let entry = visible[position]
             // A shift-range sweeping over a locked row leaves it untouched — the
-            // locked checkbox must not be reachable through a side door.
-            guard !entry.isRemovalLocked else { continue }
+            // locked checkbox must not be reachable through a side door. An exact
+            // user-data override is the exception: after the warning, its checkbox
+            // must work normally (including letting the user deselect it again).
+            guard !entry.isRemovalLocked
+                    || userDataRemovalOverrides.contains(entry.id)
+            else { continue }
             if isOn {
                 selection.insert(entry.id)
+                appDataRemovalOverrides.remove(entry.id)
                 // The parent's selection now covers its children; individual child
                 // selections would double-count the same bytes.
-                for child in entry.children { selection.remove(child.id) }
+                let childIDs = Set(entry.children.map(\.id))
+                selection.subtract(childIDs)
+                userDataRemovalOverrides.subtract(childIDs)
             } else {
                 selection.remove(entry.id)
+                userDataRemovalOverrides.remove(entry.id)
+                appDataRemovalOverrides.remove(entry.id)
             }
         }
         lastClickedIndex = index
@@ -216,8 +325,11 @@ struct FileTable: View {
 private struct FileRow: View {
     let entry: FileEntry
     let isSelected: Bool
+    let hasUserDataOverride: Bool
+    let removesProtectedAppData: Bool
     var isExpanded = false
     let onToggle: (Bool) -> Void
+    let onRequestUserDataOverride: () -> Void
     var onDisclose: (() -> Void)?
 
     @State private var isRowHovered = false
@@ -237,19 +349,21 @@ private struct FileRow: View {
                             .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     }
                     .buttonStyle(.plain)
-                    .help("\(entry.children.count) associated files, removed with the app")
+                    .help(disclosureHelp)
                 } else {
                     Color.clear
                 }
             }
             .frame(width: Metrics.disclosureSlot)
 
-            // The label is hidden but not dropped — it is what VoiceOver reads.
-            Toggle(entry.displayName, isOn: Binding(get: { isSelected }, set: onToggle))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .disabled(entry.isRemovalLocked)
-                .help(parentHelp)
+            ProtectedSelectionControl(
+                entry: entry,
+                isSelected: isSelected,
+                hasUserDataOverride: hasUserDataOverride,
+                help: parentHelp,
+                onToggle: onToggle,
+                onRequestUserDataOverride: onRequestUserDataOverride
+            )
                 .frame(width: Metrics.checkbox)
 
             // An app bundle shows its real icon — the `app` SF symbol is an empty
@@ -303,7 +417,9 @@ private struct FileRow: View {
                 onDisclose()
             } else if entry.manualRemoval != nil {
                 isShowingManualInfo = true
-            } else if !entry.isRemovalLocked {
+            } else if entry.protectionReason == .userData, !hasUserDataOverride {
+                onRequestUserDataOverride()
+            } else if !entry.isRemovalLocked || hasUserDataOverride {
                 onToggle(!isSelected)
             }
         }
@@ -314,6 +430,11 @@ private struct FileRow: View {
             return "This app cannot delete this item. Click the terminal badge for "
                 + "the command that does."
         }
+        if isSelected, !protectedAppChildren.isEmpty {
+            return removesProtectedAppData
+                ? "The app, its caches, profiles and settings will move to the Trash."
+                : "The app and its caches will move to the Trash; profiles and settings stay."
+        }
         switch entry.protectionReason {
         case .running:
             return "This app is running. Quit it to remove it. Its support files "
@@ -323,10 +444,28 @@ private struct FileRow: View {
             return "Used inside your protection window (Preferences › Exclusions). "
                 + "You can still remove it."
         case .userData:
-            return "Contains user data. It is removed only with the whole app."
+            return hasUserDataOverride
+                ? "Protected user data selected for removal. It will always move to the Trash."
+                : "Contains user data. Use the lock to review and select it separately."
         case nil:
             return ""
         }
+    }
+
+    private var protectedAppChildren: [FileEntry] {
+        guard entry.kind == .appBundle else { return [] }
+        return CleanupService.removalTargets(
+            for: entry, removeProtectedAppData: true
+        ).filter { $0.id != entry.id && !$0.isRegenerable }
+    }
+
+    private var disclosureHelp: String {
+        guard isSelected, !protectedAppChildren.isEmpty else {
+            return "\(entry.children.count) associated files"
+        }
+        return removesProtectedAppData
+            ? "Associated caches and protected data will be removed with the app"
+            : "Associated caches will be removed; protected profiles and settings will stay"
     }
 
     private static func badgeText(for reason: FileEntry.ProtectionReason) -> String {
@@ -363,6 +502,10 @@ private struct FileRow: View {
                     // opened last week reads as a lie.
                     Badge(text: Self.badgeText(for: reason)).fixedSize()
                 }
+                if isSelected, !protectedAppChildren.isEmpty {
+                    Badge(text: removesProtectedAppData ? "removes data" : "keeps data")
+                        .fixedSize()
+                }
             }
 
             // `parentQualifier`, not `parentDisplay` — the `· 1,204 items` and
@@ -394,14 +537,20 @@ private struct FileRow: View {
 /// Finder and lets the user decide there, which is the honest thing for a row whose
 /// checkbox is otherwise a vote to throw something away.
 /// An associated file under a disclosed parent — an app's cache, container, or
-/// preference file. Informational only: it is removed with the parent, so it has no
-/// checkbox and no reveal button, just enough to answer "what exactly comes along?".
+/// preference file. It can be removed on its own unless it is protected or already
+/// covered by the parent selection; the compact row keeps the hierarchy readable
+/// without turning every cache path into a full-sized parent row.
 private struct ChildRow: View {
     let entry: FileEntry
     let isSelected: Bool
     /// True when the parent app is selected, which already covers this file.
     let isImpliedByParent: Bool
+    /// True when the parent is selected with the safe uninstall scope and this
+    /// protected child is deliberately staying in place.
+    let isKeptByParentSelection: Bool
+    let hasUserDataOverride: Bool
     let onToggle: (Bool) -> Void
+    let onRequestUserDataOverride: () -> Void
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
@@ -409,12 +558,16 @@ private struct ChildRow: View {
             // tree line.
             Color.clear.frame(width: Metrics.disclosureSlot, height: 0)
 
-            Toggle(entry.displayName, isOn: Binding(get: { isSelected }, set: onToggle))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .controlSize(.small)
-                .disabled(isImpliedByParent || entry.isRemovalLocked)
-                .help(childHelp)
+            ProtectedSelectionControl(
+                entry: entry,
+                isSelected: isSelected,
+                isImpliedByParent: isImpliedByParent,
+                hasUserDataOverride: hasUserDataOverride,
+                isCompact: true,
+                help: childHelp,
+                onToggle: onToggle,
+                onRequestUserDataOverride: onRequestUserDataOverride
+            )
                 .frame(width: Metrics.checkbox)
 
             Image(systemName: entry.kind.symbolName)
@@ -422,13 +575,28 @@ private struct ChildRow: View {
                 .foregroundStyle(Token.Text.quaternary)
                 .frame(width: Metrics.icon)
 
-            Text(FileEntry.abbreviate(entry.url.path))
-                .font(.mcMonoSmall)
-                .foregroundStyle(Token.Text.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(entry.url.path)
+            HStack(spacing: 8) {
+                // Most children are best identified by their path: Chrome can have
+                // twenty different rows named "Code Cache" across its profiles. A
+                // purpose-built display name is different — it carries meaning the
+                // path cannot, such as "Chrome profiles and settings" for the locked
+                // remainder — so keep that name visible and show the path beside it.
+                if entry.displayName != entry.url.lastPathComponent {
+                    Text(entry.displayName)
+                        .font(.mcBody)
+                        .foregroundStyle(Token.Text.primary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
+
+                Text(FileEntry.abbreviate(entry.url.path))
+                    .font(.mcMonoSmall)
+                    .foregroundStyle(Token.Text.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help("\(childHelp)\n\(entry.url.path)")
 
             Text(ByteFormatting.string(entry.allocatedBytes))
                 .font(.mcMonoSmall)
@@ -443,7 +611,12 @@ private struct ChildRow: View {
         .contentShape(Rectangle())
         .hoverHighlight()
         .onTapGesture {
-            if !isImpliedByParent, !entry.isRemovalLocked { onToggle(!isSelected) }
+            guard !isImpliedByParent else { return }
+            if entry.protectionReason == .userData, !hasUserDataOverride {
+                onRequestUserDataOverride()
+            } else if !entry.isRemovalLocked || hasUserDataOverride {
+                onToggle(!isSelected)
+            }
         }
     }
 
@@ -452,13 +625,62 @@ private struct ChildRow: View {
             return "Removed with the app. Deselect the app to choose individually."
         }
         if entry.protectionReason == .userData {
-            return "Protected: logins, history and settings live here. Remove the "
-                + "whole app to remove this."
+            return hasUserDataOverride
+                ? "Protected user data selected for removal. It will always move to the Trash."
+                : (isKeptByParentSelection
+                    ? "Kept when the app is removed. Use the lock to remove it separately."
+                    : "Protected: profiles, logins, history and settings may live here. "
+                        + "Use the lock to review and select it separately.")
         }
         if entry.isRemovalLocked {
             return "Protected while the app is running."
         }
         return "Remove just this file, keeping the app"
+    }
+}
+
+/// A checkbox when the row is selectable, a visible lock when it is not. User-data
+/// locks are buttons because the user can explicitly override that judgement;
+/// running apps and tool-managed rows show a static lock because cleanup genuinely
+/// cannot honour a forced selection for them.
+private struct ProtectedSelectionControl: View {
+    let entry: FileEntry
+    let isSelected: Bool
+    var isImpliedByParent = false
+    let hasUserDataOverride: Bool
+    var isCompact = false
+    let help: String
+    let onToggle: (Bool) -> Void
+    let onRequestUserDataOverride: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if isImpliedByParent || !entry.isRemovalLocked || hasUserDataOverride {
+            Toggle(
+                entry.displayName,
+                isOn: Binding(get: { isSelected }, set: { onToggle($0) })
+            )
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .controlSize(isCompact ? .small : .regular)
+            .disabled(isImpliedByParent)
+            .help(help)
+        } else if entry.protectionReason == .userData {
+            Button(action: onRequestUserDataOverride) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
+                    .foregroundStyle(Token.textColor(.orange))
+            }
+            .buttonStyle(.plain)
+            .help("Protected user data. Click to review and unlock it for removal.")
+            .accessibilityLabel("Unlock \(entry.displayName) for removal")
+        } else {
+            Image(systemName: "lock.fill")
+                .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
+                .foregroundStyle(Token.Text.disabled)
+                .help(help)
+                .accessibilityLabel("\(entry.displayName) is locked. \(help)")
+        }
     }
 }
 
@@ -574,8 +796,15 @@ private struct Hairline: View {
 
 #Preview("Expanded category body") {
     @Previewable @State var selection: Set<FileEntry.ID> = [PreviewEntries.designArchive.id]
+    @Previewable @State var userDataOverrides: Set<FileEntry.ID> = []
+    @Previewable @State var appDataOverrides: Set<FileEntry.ID> = []
 
-    FileTable(entries: PreviewEntries.all, selection: $selection)
+    FileTable(
+        entries: PreviewEntries.all,
+        selection: $selection,
+        userDataRemovalOverrides: $userDataOverrides,
+        appDataRemovalOverrides: $appDataOverrides
+    )
         .background(Token.Fill.box)
         .padding(24)
         .frame(width: 940)

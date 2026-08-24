@@ -120,10 +120,15 @@ struct SidebarView: View {
     /// commits on the next frame. `model.view`, which rebuilds the content pane, is
     /// written on the following turn of the run loop, once that frame is out.
     ///
-    /// A sleep rather than `Task.yield()`: a yield resumes inside the same run loop pass
-    /// that handled the mouse, before the frame is committed, so both writes coalesce
-    /// into one update and nothing is gained. Any sleep at all resumes on a later pass,
-    /// after the pill is on screen. One millisecond is the smallest that does it.
+    /// A sleep rather than `Task.yield()`, which can resume inside the same run loop pass
+    /// that handled the mouse and coalesce the two writes back into one update. One
+    /// millisecond lands on a later pass, after SwiftUI has handed the sidebar's frame to
+    /// the window server, so the content pane's build no longer holds the pill back.
+    ///
+    /// Measured in Renewals, which shares this sidebar and has a heavier destination than
+    /// anything here: from the mouse down, the pill is on screen at 50 ms and the new
+    /// section's own first frame at 816 ms. Writing the model straight from the press put
+    /// both at 594 ms.
     ///
     /// The latest press wins. Pressing a second row before the first has committed leaves
     /// the first commit looking at a pending row that is no longer its own, and it stands
