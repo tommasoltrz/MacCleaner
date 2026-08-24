@@ -13,9 +13,11 @@ struct ScannerView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                header
-
+                // No header before the first scan: "No scan yet · nothing selected
+                // yet" above the empty state said the same thing twice, and Large &
+                // Old Files already shows this state bare.
                 if let results = model.scanResults {
+                    header
                     GroupedBox {
                         VStack(spacing: 0) {
                             ForEach(Array(results.categories.enumerated()), id: \.element.id) { index, category in
@@ -116,6 +118,8 @@ struct ScannerView: View {
         } actions: {
             Button("Scan for Junk") { model.startScan() }
                 .buttonStyle(.borderedProminent)
+                // Large, so every empty state's call to action is the same capsule.
+                .controlSize(.large)
                 .disabled(model.isScanning)
         }
         .frame(maxWidth: .infinity, minHeight: 320)

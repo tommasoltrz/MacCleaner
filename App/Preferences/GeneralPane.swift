@@ -16,6 +16,7 @@ struct GeneralPane: View {
         PrefPane {
             startup
             scanning
+            iCloud
             permissions
         }
         .onReceive(
@@ -87,6 +88,30 @@ struct GeneralPane: View {
             get: { Double(settings.warnBelowGB) },
             set: { settings.warnBelowGB = Int($0.rounded()) }
         )
+    }
+
+    // MARK: - iCloud
+
+    /// The plan size is the only figure on the Dashboard's iCloud card with no source
+    /// at all — `brctl` reports free space but never the plan it is free within — so
+    /// it is estimated, and this is where a wrong estimate gets corrected.
+    private var iCloud: some View {
+        PrefSection("iCloud") {
+            PrefRow(
+                title: "Storage plan",
+                // One line: the row has a fixed height, and the longer version was
+                // clipped at both ends.
+                description: "macOS does not report your plan size, so it is estimated."
+            ) {
+                Picker("Storage plan", selection: $settings.iCloudPlan) {
+                    ForEach(ICloudPlan.allCases) { plan in
+                        Text(plan.displayName).tag(plan)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+        }
     }
 
     // MARK: - Permissions

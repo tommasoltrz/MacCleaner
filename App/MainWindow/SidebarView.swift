@@ -29,7 +29,7 @@ struct SidebarView: View {
                                     // Finder's: the selected row's label and icon go
                                     // accent, everything else stays white.
                                     .foregroundStyle(model.view == view
-                                        ? Token.color(.accent) : Token.Text.primary)
+                                        ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
                                 Spacer()
                                 if let count = count(for: view) {
                                     Text(count, format: .number)
@@ -40,8 +40,13 @@ struct SidebarView: View {
                         } icon: {
                             Image(systemName: view.symbol)
                                 .font(.system(size: 16, weight: .medium))
+                                // The App Store fills the selected row's symbol —
+                                // outline at rest, solid when chosen — and the solid
+                                // glyph is most of why its selection reads brighter.
+                                // Symbols with no fill variant keep their outline.
+                                .symbolVariant(model.view == view ? .fill : .none)
                                 .foregroundStyle(model.view == view
-                                    ? Token.color(.accent) : Token.Text.primary)
+                                    ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
                         }
                         .contentShape(Rectangle())
                     }

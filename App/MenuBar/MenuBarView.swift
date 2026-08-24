@@ -42,6 +42,10 @@ struct MenuBarView: View {
             .disabled(model.isScanning)
 
             Button("Open MacCleaner") {
+                // Promote before the window exists so it opens already in the Dock
+                // and takes focus on the first try; the delegate would otherwise do
+                // it a beat later, after the window has become main.
+                AppDelegate.setPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "main")
             }

@@ -269,6 +269,8 @@ struct LargeFilesView: View {
         } actions: {
             Button("Scan for Junk") { model.startScan() }
                 .buttonStyle(.borderedProminent)
+                // Large, so every empty state's call to action is the same capsule.
+                .controlSize(.large)
                 .disabled(model.isScanning)
         }
         .frame(maxWidth: .infinity, minHeight: 320)

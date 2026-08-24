@@ -19,9 +19,15 @@ struct DashboardView: View {
                     lowSpaceBanner(volume)
                 }
 
-                if model.isLoadingBreakdown {
-                    // Bones, not stale figures: showing yesterday's numbers under a
-                    // spinner invites reading them as current.
+                if let volume = model.volume, model.isLoadingBreakdown {
+                    // The totals are already known — `diskutil` answers before the
+                    // category walk even starts — so only the parts the walk
+                    // produces go to bones. The previous breakdown supplies the
+                    // category names, which are stable; its figures are withheld:
+                    // stale numbers under a pulse read as current.
+                    CapacityCard(volume: volume, breakdown: model.breakdown, isMeasuring: true)
+                } else if model.isLoadingBreakdown {
+                    // Not even the totals yet: the moment before `diskutil` returns.
                     CapacityCardSkeleton()
                 } else if let volume = model.volume, let breakdown = model.breakdown {
                     CapacityCard(volume: volume, breakdown: breakdown)
@@ -34,9 +40,24 @@ struct DashboardView: View {
 
                 StatTiles(
                     results: model.scanResults,
+                    lastScanAt: model.lastScanFinishedAt,
                     onSafeTap: { model.view = .safeToRemove },
                     onReviewTap: { model.view = .needsReview }
                 )
+
+                // Between the tiles and the snapshots row, matching where the
+                // account sits in the user's mental model: after "what is on this
+                // disk", before the system-level footnotes.
+                if let iCloud = model.iCloudStorage {
+                    ICloudCard(storage: iCloud)
+                        // Re-measures when the plan setting changes, so correcting a
+                        // wrong estimate in Preferences is reflected here immediately
+                        // rather than at the next launch.
+                        .task(id: settings?.iCloudPlan) {
+                            model.iCloudPlanBytes = settings?.iCloudPlan.bytes
+                            await model.loadICloud()
+                        }
+                }
 
                 SnapshotsDisclosureRow(
                     snapshots: model.snapshots,
