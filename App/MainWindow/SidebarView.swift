@@ -10,6 +10,14 @@ import MacCleanerCore
 struct SidebarView: View {
     @Bindable var model: AppModel
 
+    /// The row the user just pressed, before the app has moved there.
+    ///
+    /// The pill, the accent label and the filled icon all read this first and
+    /// `model.view` second, which is what lets the highlight arrive a frame ahead of the
+    /// content. It is set on mouse down and cleared the moment the view actually changes,
+    /// so it is never more than one frame out of step with the app.
+    @State private var pendingView: AppModel.View?
+
     var body: some View {
         // Selection is drawn by hand rather than handed to `List`. Finder's dark
         // sidebar selects with a neutral gray fill — exactly the design's
@@ -20,7 +28,7 @@ struct SidebarView: View {
             Section("MacCleaner") {
                 ForEach(AppModel.View.sidebarCases) { view in
                     Button {
-                        model.view = view
+                        select(view)
                     } label: {
                         Label {
                             HStack {
@@ -28,7 +36,7 @@ struct SidebarView: View {
                                     // App Store's treatment, per the user's call over
                                     // Finder's: the selected row's label and icon go
                                     // accent, everything else stays white.
-                                    .foregroundStyle(model.view == view
+                                    .foregroundStyle(isSelected(view)
                                         ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
                                 Spacer()
                                 if let count = count(for: view) {
@@ -44,21 +52,34 @@ struct SidebarView: View {
                                 // outline at rest, solid when chosen — and the solid
                                 // glyph is most of why its selection reads brighter.
                                 // Symbols with no fill variant keep their outline.
-                                .symbolVariant(model.view == view ? .fill : .none)
-                                .foregroundStyle(model.view == view
+                                .symbolVariant(isSelected(view) ? .fill : .none)
+                                .foregroundStyle(isSelected(view)
                                     ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    // Not `.plain`: that style fades the label while the mouse is
+                    // held, and a source list has no pressed state at all.
+                    .buttonStyle(SidebarRowButtonStyle())
+                    // Zero minimum duration, so this is a press recogniser rather than
+                    // a long press: it runs the instant the mouse goes down. A `Button`
+                    // acts on mouse *up*, which left the row looking stuck until the
+                    // release; Finder switches on the way down, and so does this. The
+                    // `Button`'s own action stays for keyboard and assistive
+                    // activation, where there is no mouse to go down. Scrolling is
+                    // untouched — a wheel or a two-finger swipe is not a press — and
+                    // dragging more than 4pt away only ends a selection already made.
+                    .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
+                        if isPressing { select(view) }
+                    } perform: {}
                     .listRowBackground(
                         // Inset, so the pill floats inside the sidebar instead of
                         // running edge to edge.
                         RoundedRectangle(cornerRadius: Token.Radius.row)
-                            .fill(model.view == view ? Token.Fill.sidebarSelection : .clear)
+                            .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
                             .padding(.horizontal, 10)
                     )
-                    .accessibilityAddTraits(model.view == view ? .isSelected : [])
+                    .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
                 }
             }
 
@@ -74,7 +95,54 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        // Anything that moves the app without going through a row — the Dashboard's
+        // tiles, and the Back button that returns from them — lands here. Clearing the
+        // pending row on every change keeps the pill from being held on a view the app
+        // has already left, and it is also what ends the normal press: the commit below
+        // changes the view, this clears the pending row, and both land in the same
+        // update, so the pill never moves twice.
+        .onChange(of: model.view) { pendingView = nil }
         .safeAreaInset(edge: .bottom, spacing: 0) { capacityFooter }
+    }
+
+    /// Moves to a view, or does nothing if the app is already showing it or already on
+    /// its way there. A write of the same value would still publish a change and push a
+    /// no-op onto the history.
+    ///
+    /// The move happens in two steps, one frame apart, and that is the whole point.
+    /// Writing `model.view` on mouse down rebuilds the pill and the content pane in a
+    /// single update, so the pill appears only once the new view's first frame is ready.
+    /// On a heavy section that is long enough to read as a lag, and the click feels like
+    /// it was dropped. Finder moves the highlight at once and lets the content catch up.
+    ///
+    /// So `pendingView` is written first, synchronously, and it drives nothing but the
+    /// sidebar: the pill, the accent label and the filled icon. That update is cheap and
+    /// commits on the next frame. `model.view`, which rebuilds the content pane, is
+    /// written on the following turn of the run loop, once that frame is out.
+    ///
+    /// A sleep rather than `Task.yield()`: a yield resumes inside the same run loop pass
+    /// that handled the mouse, before the frame is committed, so both writes coalesce
+    /// into one update and nothing is gained. Any sleep at all resumes on a later pass,
+    /// after the pill is on screen. One millisecond is the smallest that does it.
+    ///
+    /// The latest press wins. Pressing a second row before the first has committed leaves
+    /// the first commit looking at a pending row that is no longer its own, and it stands
+    /// down; the second one commits for both.
+    private func select(_ view: AppModel.View) {
+        guard (pendingView ?? model.view) != view else { return }
+        pendingView = view
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1))
+            guard pendingView == view else { return }
+            model.view = view
+            pendingView = nil
+        }
+    }
+
+    /// What the sidebar draws as chosen: the pressed row if there is one, the app's own
+    /// view otherwise.
+    private func isSelected(_ view: AppModel.View) -> Bool {
+        (pendingView ?? model.view) == view
     }
 
     /// Free-space readout pinned under the list.

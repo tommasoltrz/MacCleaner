@@ -70,7 +70,7 @@ public struct AllocatedSizeMeasurer: Sendable {
         self.followSymlinks = followSymlinks
     }
 
-    private static let keys: [URLResourceKey] = [
+    fileprivate static let keys: [URLResourceKey] = [
         .totalFileAllocatedSizeKey,
         .fileAllocatedSizeKey,
         .fileSizeKey,
@@ -83,6 +83,16 @@ public struct AllocatedSizeMeasurer: Sendable {
     ]
 
     // MARK: - Measuring
+    //
+    // All three entry points feed one parallel engine: a fixed pool of workers
+    // draining a shared queue of directories. The serial `FileManager.enumerator`
+    // walk this replaces spent ~80 s on a full breakdown of one real Mac — almost
+    // entirely metadata syscalls, which APFS answers happily in parallel. The
+    // rules the serial walk disclosed all still hold: unreadable entries cost one
+    // entry, packages are descended, symlinks are not followed, the walk never
+    // leaves the starting volume, and hard-linked inodes count once. The one
+    // behavioural change: *which* sibling a shared inode is attributed to is now
+    // first-come rather than enumeration order. Sums are unchanged.
 
     /// Measures a single tree.
     ///
@@ -92,23 +102,30 @@ public struct AllocatedSizeMeasurer: Sendable {
         _ url: URL,
         progress: (@Sendable (SizeMeasurement) -> Void)? = nil
     ) async throws -> SizeMeasurement {
+        // A plain file, or a symlink we are not following: measure and return.
+        let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
+        if rootValues?.isDirectory != true {
+            if rootValues?.isSymbolicLink == true && !followSymlinks { return .zero }
+            if let bytes = Self.allocatedSize(of: rootValues) {
+                return SizeMeasurement(allocatedBytes: bytes, fileCount: 1)
+            }
+            return .zero
+        }
+
         let followSymlinks = self.followSymlinks
-        let interval = cancellationCheckInterval
-        // `Task.detached` keeps the blocking walk off the cooperative pool, but a
-        // detached task does NOT inherit cancellation — so the flag bridges it. The
-        // toolbar's stop button depends on this.
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
-                var deduplicator = HardLinkDeduplicator()
-                return try Self.walk(
-                    url,
+                let key = url.standardizedFileURL
+                let detachedValues = try? url.resourceValues(forKeys: Set(Self.keys))
+                let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
-                    cancellationCheckInterval: interval,
+                    rootVolume: detachedValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
-                    deduplicator: &deduplicator,
                     progress: progress
                 )
+                walker.enqueue(listing: url, attribution: [key], grow: 0)
+                return try walker.run()[key] ?? .zero
             }.value
         } onCancel: {
             cancelled.cancel()
@@ -132,19 +149,22 @@ public struct AllocatedSizeMeasurer: Sendable {
     ) async throws -> [URL: SizeMeasurement] {
         precondition(depth >= 1, "depth must be at least 1")
         let followSymlinks = self.followSymlinks
-        let interval = cancellationCheckInterval
         let cancelled = CancellationFlag()
 
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
-                try Self.walkSubtrees(
-                    root,
-                    depth: depth,
+                let standardRoot = root.standardizedFileURL
+                let rootValues = try? standardRoot.resourceValues(forKeys: Set(Self.keys))
+                let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
-                    cancellationCheckInterval: interval,
+                    rootVolume: rootValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
                 )
+                walker.enqueue(listing: standardRoot, attribution: [standardRoot], grow: depth)
+                var totals = try walker.run()
+                if totals[standardRoot] == nil { totals[standardRoot] = .zero }
+                return totals
             }.value
         } onCancel: {
             cancelled.cancel()
@@ -153,14 +173,13 @@ public struct AllocatedSizeMeasurer: Sendable {
 
     /// Measures every immediate child of `url` in one traversal.
     ///
-    /// Hard links shared *between* children are attributed to whichever is
-    /// encountered first, so the children sum to the parent rather than exceeding it.
+    /// Hard links shared *between* children are attributed to whichever claims the
+    /// inode first, so the children sum to the parent rather than exceeding it.
     public func measureChildren(
         of url: URL,
         progress: (@Sendable (SizeMeasurement) -> Void)? = nil
     ) async throws -> [URL: SizeMeasurement] {
         let followSymlinks = self.followSymlinks
-        let interval = cancellationCheckInterval
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
@@ -170,196 +189,38 @@ public struct AllocatedSizeMeasurer: Sendable {
                     options: []
                 )) ?? []
 
-                // One deduplicator across all children, so an inode hard-linked into
-                // two of them is attributed once and the children still sum to the
+                let parentValues = try? url.resourceValues(forKeys: Set(Self.keys))
+                // One walker across all children, so an inode hard-linked into two
+                // of them is attributed once and the children still sum to the
                 // parent rather than exceeding it.
-                var deduplicator = HardLinkDeduplicator()
-                var results: [URL: SizeMeasurement] = [:]
+                let walker = ParallelTreeWalker(
+                    followSymlinks: followSymlinks,
+                    rootVolume: parentValues?.volumeIdentifier as? NSObject,
+                    cancelled: cancelled,
+                    progress: progress
+                )
                 for child in children {
-                    if cancelled.isCancelled { throw CancellationError() }
-                    results[child] = try Self.walk(
-                        child,
-                        followSymlinks: followSymlinks,
-                        cancellationCheckInterval: interval,
-                        cancelled: cancelled,
-                        deduplicator: &deduplicator,
-                        progress: progress
-                    )
+                    walker.prefill(child)
+                    guard let values = try? child.resourceValues(forKeys: Set(Self.keys)) else {
+                        walker.recordUnreadable(at: child)
+                        continue
+                    }
+                    if values.isSymbolicLink == true && !followSymlinks { continue }
+                    if values.isDirectory == true {
+                        walker.enqueue(listing: child, attribution: [child], grow: 0)
+                    } else {
+                        walker.measureLooseFile(values, at: child)
+                    }
                 }
-                return results
+                return try walker.run()
             }.value
         } onCancel: {
             cancelled.cancel()
         }
     }
 
-    // MARK: - Core traversal
-
-    private static func walk(
-        _ url: URL,
-        followSymlinks: Bool,
-        cancellationCheckInterval: Int,
-        cancelled: CancellationFlag,
-        deduplicator: inout HardLinkDeduplicator,
-        progress: (@Sendable (SizeMeasurement) -> Void)?
-    ) throws -> SizeMeasurement {
-        let fileManager = FileManager.default
-        var total = SizeMeasurement.zero
-
-        // A plain file, or a symlink we are not following: measure and return.
-        let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
-        if rootValues?.isDirectory != true {
-            if rootValues?.isSymbolicLink == true && !followSymlinks { return .zero }
-            if let bytes = Self.allocatedSize(of: rootValues) {
-                total.allocatedBytes = bytes
-                total.fileCount = 1
-            }
-            return total
-        }
-
-        let rootVolume = rootValues?.volumeIdentifier
-
-        // No `.skipsPackageDescendants`: an .app, .photoslibrary or .rtfd is a
-        // package, and skipping package contents makes /Applications measure as
-        // ~0 bytes. A disk-usage measurer must descend into packages — they are
-        // exactly where the space is.
-        let options: FileManager.DirectoryEnumerationOptions = []
-
-        // The errorHandler is the whole point: return `true` so a permission-denied
-        // entry is counted and skipped rather than aborting the walk.
-        let unreadable = UnreadableCounter()
-        guard let enumerator = fileManager.enumerator(
-            at: url,
-            includingPropertiesForKeys: Self.keys,
-            options: options,
-            errorHandler: { _, _ in
-                unreadable.increment()
-                return true
-            }
-        ) else {
-            return SizeMeasurement(allocatedBytes: 0, fileCount: 0, unreadableCount: 1)
-        }
-
-        var seen = 0
-        while let entry = enumerator.nextObject() as? URL {
-            seen += 1
-            if seen % cancellationCheckInterval == 0 {
-                if cancelled.isCancelled { throw CancellationError() }
-                progress?(SizeMeasurement(
-                    allocatedBytes: total.allocatedBytes,
-                    fileCount: total.fileCount,
-                    unreadableCount: unreadable.value
-                ))
-            }
-
-            guard let values = try? entry.resourceValues(forKeys: Set(Self.keys)) else {
-                unreadable.increment()
-                continue
-            }
-
-            // Never leave the starting volume — a mounted disk under the scan root
-            // is not part of this category.
-            if let rootVolume, let entryVolume = values.volumeIdentifier,
-               !entryVolume.isEqual(rootVolume) {
-                enumerator.skipDescendants()
-                continue
-            }
-
-            if values.isSymbolicLink == true && !followSymlinks { continue }
-            guard values.isRegularFile == true else { continue }
-
-            // Count a hard-linked inode once per measurement pass.
-            if (values.linkCount ?? 1) > 1, !deduplicator.claim(values.fileResourceIdentifier) {
-                continue
-            }
-
-            if let bytes = Self.allocatedSize(of: values) {
-                total.allocatedBytes += bytes
-                total.fileCount += 1
-            }
-        }
-
-        total.unreadableCount += unreadable.value
-        return total
-    }
-
-    /// Single-pass depth-limited traversal. See `measureSubtrees(of:depth:)`.
-    private static func walkSubtrees(
-        _ root: URL,
-        depth: Int,
-        followSymlinks: Bool,
-        cancellationCheckInterval: Int,
-        cancelled: CancellationFlag,
-        progress: (@Sendable (SizeMeasurement) -> Void)?
-    ) throws -> [URL: SizeMeasurement] {
-        let standardRoot = root.standardizedFileURL
-        let rootComponentCount = standardRoot.pathComponents.count
-        let rootValues = try? standardRoot.resourceValues(forKeys: Set(keys))
-        let rootVolume = rootValues?.volumeIdentifier
-
-        var totals: [URL: SizeMeasurement] = [standardRoot: .zero]
-        var deduplicator = HardLinkDeduplicator()
-        let unreadable = UnreadableCounter()
-
-        guard let enumerator = FileManager.default.enumerator(
-            at: standardRoot,
-            includingPropertiesForKeys: keys,
-            options: [],
-            errorHandler: { _, _ in
-                unreadable.increment()
-                return true
-            }
-        ) else {
-            return [standardRoot: SizeMeasurement(unreadableCount: 1)]
-        }
-
-        var seen = 0
-        while let entry = enumerator.nextObject() as? URL {
-            seen += 1
-            if seen % cancellationCheckInterval == 0 {
-                if cancelled.isCancelled { throw CancellationError() }
-                progress?(totals[standardRoot] ?? .zero)
-            }
-
-            guard let values = try? entry.resourceValues(forKeys: Set(keys)) else {
-                unreadable.increment()
-                continue
-            }
-            if let rootVolume, let entryVolume = values.volumeIdentifier,
-               !entryVolume.isEqual(rootVolume) {
-                enumerator.skipDescendants()
-                continue
-            }
-            if values.isSymbolicLink == true && !followSymlinks { continue }
-            guard values.isRegularFile == true else { continue }
-            if (values.linkCount ?? 1) > 1, !deduplicator.claim(values.fileResourceIdentifier) {
-                continue
-            }
-            guard let bytes = allocatedSize(of: values) else { continue }
-
-            // Attribute the file to the root and to each ancestor within `depth`.
-            totals[standardRoot, default: .zero].allocatedBytes += bytes
-            totals[standardRoot, default: .zero].fileCount += 1
-
-            let components = entry.standardizedFileURL.pathComponents
-            guard components.count > rootComponentCount else { continue }
-            let maximumLevel = min(depth, components.count - rootComponentCount - 1)
-            guard maximumLevel >= 1 else { continue }
-
-            var ancestor = standardRoot
-            for level in 1...maximumLevel {
-                ancestor.appendPathComponent(components[rootComponentCount + level - 1])
-                totals[ancestor, default: .zero].allocatedBytes += bytes
-                totals[ancestor, default: .zero].fileCount += 1
-            }
-        }
-
-        totals[standardRoot, default: .zero].unreadableCount += unreadable.value
-        return totals
-    }
-
     /// APFS-aware size, most accurate first.
-    private static func allocatedSize(of values: URLResourceValues?) -> Int64? {
+    fileprivate static func allocatedSize(of values: URLResourceValues?) -> Int64? {
         guard let values else { return nil }
         if let total = values.totalFileAllocatedSize { return Int64(total) }
         if let allocated = values.fileAllocatedSize { return Int64(allocated) }
@@ -368,21 +229,262 @@ public struct AllocatedSizeMeasurer: Sendable {
     }
 }
 
-// MARK: - Support
+// MARK: - Parallel engine
 
-/// Tracks inodes already counted, so a file with several hard links contributes
-/// its bytes once.
-private struct HardLinkDeduplicator {
-    private var claimed = Set<NSObject>()
+/// A fixed pool of workers draining a shared queue of directories.
+///
+/// Each worker pops a directory, lists it with attributes prefetched, adds its
+/// regular files to every URL in the item's attribution chain, and pushes its
+/// subdirectories back on the queue. One lock guards all shared state; the work
+/// inside the lock is arithmetic only — the syscalls happen outside it.
+private final class ParallelTreeWalker: @unchecked Sendable {
 
-    /// Returns `true` if this inode has not been counted yet.
-    mutating func claim(_ identifier: (any NSCopying & NSSecureCoding & NSObjectProtocol)?) -> Bool {
-        guard let object = identifier as? NSObject else { return true }
-        return claimed.insert(object).inserted
+    private struct WorkItem {
+        /// The directory to list — the real URL, whatever form the parent handed us.
+        let listing: URL
+        /// The totals keys this directory's files add to, root first. The last
+        /// element is the deepest attributed ancestor, and child keys are built by
+        /// appending to it — the same `appendPathComponent` chain the lookups use.
+        let attribution: [URL]
+        /// How many more levels may extend the attribution chain.
+        let grow: Int
+    }
+
+    private let followSymlinks: Bool
+    private let rootVolume: NSObject?
+    private let cancelled: CancellationFlag
+    private let progress: (@Sendable (SizeMeasurement) -> Void)?
+
+    private let condition = NSCondition()
+    private var stack: [WorkItem] = []
+    private var active = 0
+    private var totals: [URL: SizeMeasurement] = [:]
+    private var unreadable: [URL: Int] = [:]
+    private var claimedInodes = Set<NSObject>()
+    /// Every file once, regardless of how many ancestors it is attributed to —
+    /// what the progress callback reports.
+    private var grandTotal = SizeMeasurement.zero
+    private var entriesSinceReport = 0
+
+    /// How often to surface progress and poll cancellation, in entries.
+    private static let reportInterval = 512
+
+    init(
+        followSymlinks: Bool,
+        rootVolume: NSObject?,
+        cancelled: CancellationFlag,
+        progress: (@Sendable (SizeMeasurement) -> Void)?
+    ) {
+        self.followSymlinks = followSymlinks
+        self.rootVolume = rootVolume
+        self.cancelled = cancelled
+        self.progress = progress
+    }
+
+    func enqueue(listing: URL, attribution: [URL], grow: Int) {
+        condition.lock()
+        stack.append(WorkItem(listing: listing, attribution: attribution, grow: grow))
+        condition.signal()
+        condition.unlock()
+    }
+
+    /// Guarantees the key appears in the result even if nothing is under it.
+    func prefill(_ key: URL) {
+        condition.lock()
+        if totals[key] == nil { totals[key] = .zero }
+        condition.unlock()
+    }
+
+    func recordUnreadable(at key: URL) {
+        condition.lock()
+        unreadable[key, default: 0] += 1
+        condition.unlock()
+    }
+
+    /// A direct file child in `measureChildren` — no directory to walk.
+    func measureLooseFile(_ values: URLResourceValues, at key: URL) {
+        if let entryVolume = values.volumeIdentifier as? NSObject, let rootVolume,
+           !entryVolume.isEqual(rootVolume) { return }
+        guard values.isRegularFile == true else { return }
+        condition.lock()
+        defer { condition.unlock() }
+        if (values.linkCount ?? 1) > 1 {
+            guard let id = values.fileResourceIdentifier as? NSObject,
+                  claimedInodes.insert(id).inserted else { return }
+        }
+        guard let bytes = AllocatedSizeMeasurer.allocatedSize(of: values) else { return }
+        totals[key, default: .zero].allocatedBytes += bytes
+        totals[key, default: .zero].fileCount += 1
+        grandTotal.allocatedBytes += bytes
+        grandTotal.fileCount += 1
+    }
+
+    /// Runs the pool to exhaustion and returns the totals, unreadable counts folded
+    /// in. Throws `CancellationError` if the flag was raised mid-walk.
+    func run() throws -> [URL: SizeMeasurement] {
+        let width = max(2, min(8, ProcessInfo.processInfo.activeProcessorCount))
+        // Dedicated threads, not GCD global-queue blocks. The caller is a detached
+        // task blocking on the result, and Swift's cooperative pool shares
+        // libdispatch's thread pool: with several measurements in flight the
+        // blocked callers starved the queued worker blocks, which never started —
+        // a deadlock the test suite reproduced on the first run. Real pthreads
+        // owe libdispatch nothing.
+        let finished = DispatchSemaphore(value: 0)
+        for _ in 0..<width {
+            let worker = Thread {
+                self.workerLoop()
+                finished.signal()
+            }
+            // `.userInitiated`, not `.utility`: on Apple silicon utility threads
+            // are scheduled onto the efficiency cores, and eight of them there
+            // amounted to about one and a half cores of throughput. The user is
+            // waiting on this figure — it is the Dashboard's first card.
+            worker.qualityOfService = .userInitiated
+            worker.start()
+        }
+        for _ in 0..<width { finished.wait() }
+        if cancelled.isCancelled { throw CancellationError() }
+
+        condition.lock()
+        defer { condition.unlock() }
+        for (key, count) in unreadable {
+            totals[key, default: .zero].unreadableCount += count
+        }
+        return totals
+    }
+
+    private func workerLoop() {
+        while let item = nextItem() {
+            process(item)
+            condition.lock()
+            active -= 1
+            if (stack.isEmpty && active == 0) || cancelled.isCancelled {
+                condition.broadcast()
+            } else {
+                condition.signal()
+            }
+            condition.unlock()
+        }
+    }
+
+    private func nextItem() -> WorkItem? {
+        condition.lock()
+        defer { condition.unlock() }
+        while true {
+            if cancelled.isCancelled { condition.broadcast(); return nil }
+            if let item = stack.popLast() {
+                active += 1
+                return item
+            }
+            if active == 0 { condition.broadcast(); return nil }
+            condition.wait()
+        }
+    }
+
+    private func process(_ item: WorkItem) {
+        guard !cancelled.isCancelled else { return }
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: item.listing,
+            includingPropertiesForKeys: AllocatedSizeMeasurer.keys,
+            options: []
+        ) else {
+            // A permission-denied directory costs one entry — never a subtree,
+            // and never the whole total.
+            recordUnreadable(at: item.attribution[0])
+            return
+        }
+
+        var localFiles: [Int64] = []
+        var report: SizeMeasurement?
+
+        for entry in entries {
+            guard let values = try? entry.resourceValues(
+                forKeys: Set(AllocatedSizeMeasurer.keys)
+            ) else {
+                recordUnreadable(at: item.attribution[0])
+                continue
+            }
+
+            // Never leave the starting volume — a mounted disk under the scan
+            // root is not part of this category.
+            if let rootVolume, let entryVolume = values.volumeIdentifier as? NSObject,
+               !entryVolume.isEqual(rootVolume) {
+                continue
+            }
+            if values.isSymbolicLink == true {
+                // Directories behind symlinks are never descended — the serial
+                // enumerator this replaces did not either — and the link entry
+                // itself is skipped unless the follow setting keeps it.
+                if !followSymlinks { continue }
+                continue
+            }
+
+            if values.isDirectory == true {
+                let childKey = item.attribution[item.attribution.count - 1]
+                    .appendingPathComponent(entry.lastPathComponent)
+                let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
+                enqueue(listing: entry, attribution: attribution, grow: max(0, item.grow - 1))
+                continue
+            }
+
+            guard values.isRegularFile == true else { continue }
+
+            if (values.linkCount ?? 1) > 1 {
+                condition.lock()
+                let fresh = (values.fileResourceIdentifier as? NSObject).map {
+                    claimedInodes.insert($0).inserted
+                } ?? true
+                condition.unlock()
+                guard fresh else { continue }
+            }
+            guard let bytes = AllocatedSizeMeasurer.allocatedSize(of: values) else { continue }
+            localFiles.append(bytes)
+
+            // Batch the arithmetic under one lock acquisition per directory where
+            // possible, but surface progress and poll cancellation often enough
+            // that a huge directory cannot go quiet.
+            if localFiles.count % Self.reportInterval == 0 {
+                report = flush(&localFiles, attribution: item.attribution)
+                if cancelled.isCancelled { return }
+                if let report { progress?(report) }
+                report = nil
+            }
+        }
+        if !localFiles.isEmpty || report != nil {
+            let snapshot = flush(&localFiles, attribution: item.attribution)
+            maybeReport(snapshot)
+        }
+    }
+
+    /// Adds the batched sizes to every attributed ancestor; returns the grand total.
+    private func flush(_ sizes: inout [Int64], attribution: [URL]) -> SizeMeasurement {
+        condition.lock()
+        defer { condition.unlock() }
+        let bytes = sizes.reduce(0, +)
+        let count = sizes.count
+        for key in attribution {
+            totals[key, default: .zero].allocatedBytes += bytes
+            totals[key, default: .zero].fileCount += count
+        }
+        grandTotal.allocatedBytes += bytes
+        grandTotal.fileCount += count
+        entriesSinceReport += count
+        sizes.removeAll(keepingCapacity: true)
+        return grandTotal
+    }
+
+    private func maybeReport(_ snapshot: SizeMeasurement) {
+        condition.lock()
+        let due = entriesSinceReport >= Self.reportInterval
+        if due { entriesSinceReport = 0 }
+        condition.unlock()
+        if due { progress?(snapshot) }
     }
 }
 
-/// Bridges structured-concurrency cancellation into the detached, synchronous walk.
+// MARK: - Support
+
+/// Bridges structured-concurrency cancellation into the detached, blocking walk.
 /// `Task.detached` does not inherit cancellation, so without this the scan's stop
 /// button would do nothing.
 private final class CancellationFlag: @unchecked Sendable {
@@ -395,19 +497,5 @@ private final class CancellationFlag: @unchecked Sendable {
 
     var isCancelled: Bool {
         lock.lock(); defer { lock.unlock() }; return flag
-    }
-}
-
-/// Mutable counter usable from the enumerator's `@Sendable` error handler.
-private final class UnreadableCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-
-    func increment() {
-        lock.lock(); count += 1; lock.unlock()
-    }
-
-    var value: Int {
-        lock.lock(); defer { lock.unlock() }; return count
     }
 }
