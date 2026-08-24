@@ -23,6 +23,45 @@ enum ScanSchedule: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// How recently a file must have been opened to be left alone.
+/// The iCloud plan, which macOS exposes no API for.
+///
+/// `brctl quota` reports the free space exactly but never the size of the plan it is
+/// free within, so the app infers it — correctly for any account less than half
+/// empty, and wrongly for a large plan that is nearly full. This is the escape hatch
+/// for the second case.
+enum ICloudPlan: String, CaseIterable, Identifiable, Sendable {
+    case automatic, gb5, gb50, gb200, tb2, tb6, tb12
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .automatic: "Detect automatically"
+        case .gb5:       "5 GB"
+        case .gb50:      "50 GB"
+        case .gb200:     "200 GB"
+        case .tb2:       "2 TB"
+        case .tb6:       "6 TB"
+        case .tb12:      "12 TB"
+        }
+    }
+
+    /// Binary gigabytes, because that is what Apple's own figures turn out to be —
+    /// a "200 GB" plan reports 200 GiB of quota.
+    var bytes: Int64? {
+        let gib: Int64 = 1024 * 1024 * 1024
+        switch self {
+        case .automatic: return nil
+        case .gb5:       return 5 * gib
+        case .gb50:      return 50 * gib
+        case .gb200:     return 200 * gib
+        case .tb2:       return 2048 * gib
+        case .tb6:       return 6144 * gib
+        case .tb12:      return 12288 * gib
+        }
+    }
+}
+
 enum ProtectWindow: Int, CaseIterable, Identifiable, Sendable {
     case week = 7
     case month = 30
@@ -148,6 +187,7 @@ final class SettingsStore {
         static let scanSchedule = "settings.scanSchedule"
         static let idleOnly = "settings.idleOnly"
         static let warnBelowGB = "settings.warnBelowGB"
+        static let iCloudPlan = "settings.iCloudPlan"
         static let categoryEnabled = "settings.categoryEnabled"
         static let trashFirst = "settings.trashFirst"
         static let confirmBeforeCleanup = "settings.confirmBeforeCleanup"
@@ -183,6 +223,12 @@ final class SettingsStore {
 
     var warnBelowGB: Int {
         didSet { defaults.set(warnBelowGB, forKey: Key.warnBelowGB) }
+    }
+
+    // MARK: iCloud
+
+    var iCloudPlan: ICloudPlan {
+        didSet { defaults.set(iCloudPlan.rawValue, forKey: Key.iCloudPlan) }
     }
 
     // MARK: Categories
@@ -303,6 +349,8 @@ final class SettingsStore {
         self.scanSchedule = (defaults.string(forKey: Key.scanSchedule)
             .flatMap(ScanSchedule.init(rawValue:))) ?? Defaults.scanSchedule
         self.idleOnly = bool(Key.idleOnly, or: Defaults.idleOnly)
+        self.iCloudPlan = (defaults.string(forKey: Key.iCloudPlan)
+            .flatMap(ICloudPlan.init(rawValue:))) ?? .automatic
         self.warnBelowGB = (defaults.object(forKey: Key.warnBelowGB) as? Int)
             .map { $0.clamped(to: Self.warnBelowRange) } ?? Defaults.warnBelowGB
 
@@ -350,6 +398,7 @@ final class SettingsStore {
         scanSchedule = Defaults.scanSchedule
         idleOnly = Defaults.idleOnly
         warnBelowGB = Defaults.warnBelowGB
+        iCloudPlan = .automatic
         categoryEnabled = Dictionary(
             uniqueKeysWithValues: CategoryID.allCases.map { ($0, Defaults.categoryEnabled($0)) }
         )

@@ -14,14 +14,15 @@ import MacCleanerCore
 final class AppModel {
 
     enum View: String, CaseIterable, Identifiable {
-        case dashboard, scanner, large, trash
+        case dashboard, scanner, large, trash, photos
         // Reached from the Dashboard tiles, not the sidebar. Back returns.
         case safeToRemove, needsReview
         var id: String { rawValue }
 
         /// The sidebar's rows. The tile views stay out: they are drill-downs from
         /// the Dashboard, and listing them as siblings would make four views six.
-        static var sidebarCases: [View] { [.dashboard, .scanner, .large, .trash] }
+        /// Trash sits last: it is where things end up, not a place to work.
+        static var sidebarCases: [View] { [.dashboard, .scanner, .large, .photos, .trash] }
 
         var title: String {
             switch self {
@@ -29,6 +30,7 @@ final class AppModel {
             case .scanner:      "Scanner"
             case .large:        "Large & Old Files"
             case .trash:        "Trash"
+            case .photos:       "Photo Duplicates"
             case .safeToRemove: "Safe to Remove"
             case .needsReview:  "Needs Review"
             }
@@ -41,6 +43,7 @@ final class AppModel {
             case .scanner:      "magnifyingglass"
             case .large:        "folder"
             case .trash:        "trash"
+            case .photos:       "photo.on.rectangle.angled"
             case .safeToRemove: "checkmark.shield"
             case .needsReview:  "questionmark.folder"
             }
@@ -48,7 +51,7 @@ final class AppModel {
     }
 
     enum Sheet: String, Identifiable {
-        case cleanUp, emptyTrash
+        case cleanUp, emptyTrash, deletePhotos
         var id: String { rawValue }
     }
 
@@ -93,6 +96,12 @@ final class AppModel {
     var breakdown: StorageBreakdown?
     var snapshots: [SnapshotInfo] = []
     var scanResults: ScanResults?
+
+    /// When the last junk scan finished, surviving relaunch. The results themselves
+    /// are recomputed on demand — cheap to re-earn, dangerous to trust stale — but
+    /// "when did I last scan" is an answer the Dashboard should always have.
+    private(set) var lastScanFinishedAt: Date? =
+        UserDefaults.standard.object(forKey: "lastScanFinishedAt") as? Date
 
     var isLoadingBreakdown = false
     var isScanning = false
@@ -310,6 +319,22 @@ final class AppModel {
 
     // MARK: - Loading
 
+    // MARK: - iCloud
+
+    private let iCloudService = ICloudStorageService()
+    /// Nil until measured, and nil again if iCloud Drive is not signed in — the card
+    /// disappears rather than rendering an empty account, which would read as "you
+    /// have nothing in iCloud".
+    var iCloudStorage: ICloudStorage?
+
+    /// The plan size the user set in Preferences, if any. macOS reports no such
+    /// figure, so without this the service infers it from the free space.
+    var iCloudPlanBytes: Int64?
+
+    func loadICloud() async {
+        iCloudStorage = try? await iCloudService.storage(planBytes: iCloudPlanBytes)
+    }
+
     private let diskInfo = DiskInfoService()
     private let snapshotService = SnapshotService()
     private let breakdownService = StorageBreakdownService()
@@ -323,12 +348,13 @@ final class AppModel {
         return Date().timeIntervalSince(measuredAt) > BreakdownCache.freshnessWindow
     }
 
-    /// Loads the Dashboard without touching the disk unless it has to.
+    /// Loads the Dashboard: cached figures paint instantly, a fresh measurement
+    /// always follows.
     ///
-    /// Measuring walks `~/Documents`, `~/Desktop` and `~/Downloads`, all of which
-    /// macOS gates behind TCC. Doing that on every launch meant a permission prompt
-    /// on every launch. Cached figures are shown instead, and a measurement runs only
-    /// when there is nothing cached or the user asks for one.
+    /// The cache is a first frame, not a substitute for measuring — yesterday's
+    /// breakdown on today's Dashboard reads as a bug. Re-measuring on every launch
+    /// used to mean a TCC prompt on every launch, but the build is signed with a
+    /// stable identity now, so the grant survives and the walk is silent.
     func loadDashboard() async {
         if let cached = BreakdownCache.load() {
             volume = cached.volume
@@ -341,9 +367,7 @@ final class AppModel {
         volume = (try? await diskInfo.volumeInfo()) ?? volume
         snapshots = (try? await snapshotService.listAll()) ?? []
 
-        if breakdown == nil {
-            await measureStorage()
-        }
+        await measureStorage()
     }
 
     /// Walks the disk. Only ever called deliberately.
@@ -351,6 +375,11 @@ final class AppModel {
         guard !isLoadingBreakdown else { return }
         isLoadingBreakdown = true
         defer { isLoadingBreakdown = false }
+
+        // iCloud rides along with every measurement, so the account card stays in
+        // step with the main card. Cheap enough to piggyback: one `brctl` call and
+        // a walk of the ubiquity container, where evicted files are stubs on disk.
+        Task { await self.loadICloud() }
 
         guard let measured = try? await breakdownService.breakdown() else { return }
         breakdown = measured
@@ -367,6 +396,11 @@ final class AppModel {
         isScanning = true
         scanProgress = 0
         view = .scanner
+
+        // The breakdown refresh runs alongside the scan, not after it: the
+        // Dashboard's main card should already be recalculating by the time the
+        // user looks at it, and the scan is paying the traversal cost anyway.
+        Task { await self.measureStorage() }
 
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -387,19 +421,14 @@ final class AppModel {
                     }
                 )
                 self.scanResults = results
+                self.lastScanFinishedAt = results.finishedAt
+                UserDefaults.standard.set(results.finishedAt, forKey: "lastScanFinishedAt")
                 // Fresh results arrive collapsed: seven closed rows are a summary
                 // the user can take in at a glance, and opening one is a click.
                 self.openCategories = []
                 self.statusMessage = "Scan complete. Found "
                     + "\(ByteFormatting.string(results.totalBytes)) in "
                     + "\(results.actionableCategories.count) categories."
-                // The scan itself is over — say so before the breakdown refresh, or
-                // the toolbar sits at "Measuring 100%" looking wedged while the
-                // Dashboard's cache rebuilds behind it.
-                self.isScanning = false
-                // A scan has already paid the traversal cost and any permission
-                // prompts, so refresh the cached breakdown while we are here.
-                await self.measureStorage()
             } catch is CancellationError {
                 self.statusMessage = "Scan cancelled"
             } catch {
@@ -412,4 +441,213 @@ final class AppModel {
         scanTask?.cancel()
         Task { await coordinator.cancel() }
     }
+
+    // MARK: - Photo duplicates
+
+    private let photoService = PhotoDuplicateService(
+        library: PhotoKitLibrary(),
+        visionRevision: UInt32(PhotoKitLibrary.featurePrintRevision)
+    )
+    private var photoTask: Task<Void, Never>?
+
+    var photoResults: PhotoDuplicateResults?
+    var photoProgress: PhotoDuplicateService.Progress?
+    var isSweepingPhotos = false
+    /// Asset ids the user has marked to delete. Only ever populated from a group's
+    /// `removable`, never from `assets` — a keeper cannot reach this set.
+    var photoSelection: Set<String> = []
+    /// Set when a sweep could not run at all, with copy naming the remedy.
+    var photoUnavailable: String?
+
+    /// Groups in date order, newest first.
+    ///
+    /// Chronology is how people remember photographs, so it is how the review reads —
+    /// a trip's worth of near-identical shots arrives together instead of being split
+    /// across the list by tier. The tier is still on every group's badge.
+    ///
+    /// Undated assets sort last rather than first: they would otherwise lead the list
+    /// with nothing to explain why.
+    var photoGroups: [DuplicateGroup] {
+        guard let photoResults else { return [] }
+        return photoResults.groups.sorted {
+            switch ($0.keeper.creationDate, $1.keeper.creationDate) {
+            case let (left?, right?): left == right ? $0.id < $1.id : left > right
+            case (nil, _?):           false
+            case (_?, nil):           true
+            case (nil, nil):          $0.id < $1.id
+            }
+        }
+    }
+
+    var photoSelectionLabel: String {
+        photoSelection.isEmpty
+            ? "Delete"
+            : "Delete \(photoSelection.count) \(photoSelection.count == 1 ? "Photo" : "Photos")"
+    }
+
+    func startPhotoSweep() {
+        guard !isSweepingPhotos else { return }
+        isSweepingPhotos = true
+        photoUnavailable = nil
+        photoSelection.removeAll()
+        view = .photos
+
+        photoTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isSweepingPhotos = false
+                self.photoTask = nil
+            }
+            do {
+                let results = try await photoService.sweep(
+                    onProgress: { progress in
+                        Task { @MainActor in self.photoProgress = progress }
+                    }
+                )
+                self.photoResults = results
+                // Everything removable arrives selected, so the review is a matter of
+                // unticking what should stay rather than ticking 990 things that
+                // should go. Keepers are still unreachable — the set is built from
+                // `removable` alone — and the `Looks similar` badge marks the groups
+                // that deserve a second look before the Delete button is pressed.
+                self.photoSelection = Set(results.groups.flatMap(\.removable).map(\.id))
+                self.statusMessage = Self.sweepStatus(results)
+            } catch let unavailable as PhotoSweepUnavailable {
+                self.photoUnavailable = Self.describe(unavailable)
+                self.statusMessage = "Photo sweep could not run."
+            } catch is CancellationError {
+                self.statusMessage = "Photo sweep cancelled"
+            } catch {
+                self.statusMessage = "Photo sweep failed"
+            }
+        }
+    }
+
+    func cancelPhotoSweep() {
+        photoTask?.cancel()
+        Task { await photoService.cancel() }
+    }
+
+    private static func sweepStatus(_ results: PhotoDuplicateResults) -> String {
+        guard !results.groups.isEmpty else {
+            var message = "No duplicates found in \(results.examinedCount) photos."
+            if results.skippedCount > 0 {
+                message += " \(results.skippedCount) could not be read."
+            }
+            return message
+        }
+        var message = "Found \(results.groups.count) duplicate sets — "
+            + "\(results.removableCount) photos can go."
+        // A skipped asset was never compared, so the result is a floor, not a total.
+        if results.skippedCount > 0 {
+            message += " \(results.skippedCount) photos had no thumbnail and were not compared."
+        }
+        return message
+    }
+
+    private static func describe(_ unavailable: PhotoSweepUnavailable) -> String {
+        switch unavailable {
+        case .access(let access):
+            access.unavailableReason ?? "The photo library is unavailable."
+        case .librarySyncing(let count):
+            "Only \(count) photos have arrived from iCloud so far. Let Photos finish "
+                + "syncing — sweeping now would compare photos against copies that are "
+                + "not here yet."
+        }
+    }
+
+    /// Restores the default: everything the sweep judged removable.
+    func selectAllRemovablePhotos() {
+        photoSelection = Set(photoGroups.flatMap(\.removable).map(\.id))
+    }
+
+    /// Narrows the selection to the **certain** tiers only.
+    ///
+    /// Bursts come from Photos' own grouping and `exact` is a metadata match that the
+    /// feature prints then confirmed; both are safe to take in bulk. `similar` is a
+    /// judgement call, and on a real library it accounted for 1,050 of 1,058 groups —
+    /// so a select-all that included it would hand the user 1,619 photographs to
+    /// delete on the strength of a threshold, which is the exact shape of the bug
+    /// that proposed deleting 1,075 distinct photos earlier. Those groups are
+    /// selected per group, after looking at them.
+    ///
+    /// Keepers are unreachable regardless: the set is built from `removable` alone.
+    func selectCertainPhotosOnly() {
+        photoSelection = Set(
+            photoGroups
+                .filter { $0.kind != .similar }
+                .flatMap(\.removable)
+                .map(\.id)
+        )
+    }
+
+    /// How many photos `selectAllRemovablePhotos` would take, for the button's label.
+    var certainRemovableCount: Int {
+        photoGroups.filter { $0.kind != .similar }.reduce(0) { $0 + $1.removable.count }
+    }
+
+    func deselectAllPhotos() { photoSelection.removeAll() }
+
+    /// Makes `assetID` the copy that survives in its group.
+    ///
+    /// The promoted photo leaves the selection and the demoted keeper joins it, so
+    /// the group still deletes everything but one — the choice moves, the arithmetic
+    /// does not.
+    func keepInstead(groupID: String, assetID: String) {
+        guard var results = photoResults,
+              let index = results.groups.firstIndex(where: { $0.id == groupID }),
+              let promoted = results.groups[index].promoting(assetID)
+        else { return }
+
+        let previousKeeper = results.groups[index].keeper.id
+        results.groups[index] = promoted
+        photoResults = results
+
+        photoSelection.remove(assetID)
+        // Only if the rest of the group was armed; promoting inside a group the user
+        // had deliberately cleared should not arm it again behind their back.
+        if promoted.removable.contains(where: { photoSelection.contains($0.id) }) {
+            photoSelection.insert(previousKeeper)
+        }
+    }
+
+    func togglePhoto(_ assetID: String) {
+        if photoSelection.contains(assetID) {
+            photoSelection.remove(assetID)
+        } else {
+            photoSelection.insert(assetID)
+        }
+    }
+
+    func deleteSelectedPhotos() async {
+        let ids = Array(photoSelection)
+        guard !ids.isEmpty else { return }
+        activeSheet = nil
+
+        do {
+            try await photoService.delete(assetIDs: ids)
+            let gone = Set(ids)
+            // Drop the deleted assets from every group, and drop any group that no
+            // longer has anything to remove — a set showing only its keeper is a row
+            // that costs attention and returns nothing.
+            if var results = photoResults {
+                results.groups = results.groups.compactMap { group in
+                    let remaining = group.removable.filter { !gone.contains($0.id) }
+                    guard !remaining.isEmpty else { return nil }
+                    return DuplicateGroup(
+                        id: group.id, kind: group.kind, keeper: group.keeper, removable: remaining
+                    )
+                }
+                photoResults = results
+            }
+            photoSelection.removeAll()
+            statusMessage = "Deleted \(ids.count) \(ids.count == 1 ? "photo" : "photos"). "
+                + "Empty Recently Deleted in Photos to reclaim the iCloud storage."
+        } catch {
+            // Deletion is the one operation the user cannot verify at a glance across
+            // devices, so a failure is stated rather than left to inference.
+            statusMessage = "Those photos could not be deleted."
+        }
+    }
+
 }

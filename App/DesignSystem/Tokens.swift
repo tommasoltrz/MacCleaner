@@ -53,6 +53,7 @@ enum Token {
         case .purple:    Color(nsColor: .systemPurple)
         case .teal:      Color(nsColor: .systemTeal)
         case .pink:      Color(nsColor: .systemPink)
+        case .brown:     Color(nsColor: .systemBrown)
         case .gray:      Color(nsColor: .systemGray)
 
         // No AppKit equivalent for these three — kept as design literals, so they are
@@ -119,7 +120,7 @@ enum Token {
     /// control's label so the app has a single red to read.
     fileprivate static let redInk = NSColor(srgbRed: 0.702, green: 0.149, blue: 0.118, alpha: 1)  // #B3261E
 
-    // MARK: - Text
+    // MARK: - Text.
 
     /// The text ramp.
     ///
@@ -164,11 +165,13 @@ enum Token {
 
     /// The content area behind the cards. The detail pane's own background is white
     /// in light mode, which left white cards invisible on it. Light paints the
-    /// System Settings grey so the cards stand off the page; dark stays clear and
-    /// keeps the window material the design was authored on.
+    /// System Settings grey so the cards stand off the page. Dark used to stay
+    /// clear, but the bare window material lightens to #302D31 whenever the window
+    /// is key, washing the page out next to the App Store and Finder — both paint
+    /// an opaque canvas that holds still. This is the App Store's, as measured.
     static let pageBackground = Token.dynamic(
         light: NSColor(srgbRed: 0.949, green: 0.949, blue: 0.957, alpha: 1),  // #F2F2F4
-        dark: .clear
+        dark: NSColor(srgbRed: 0.141, green: 0.129, blue: 0.145, alpha: 1)    // #242125
     )
 
     // MARK: - Fills
@@ -206,8 +209,22 @@ enum Token {
         static let controlHover = Token.ink(light: 0.12, dark: 0.14)
         static let rowHover = Token.ink(light: 0.04, dark: 0.03)
         // Light matches the App Store's pill: about 4% black over the sidebar
-        // material, a hint rather than a block.
-        static let sidebarSelection = Token.ink(light: 0.045, dark: 0.13)
+        // material, a hint rather than a block. Dark is the design's exact pill
+        // (#2C2B2F in Figma) as a solid: as an ink over the translucent sidebar it
+        // composited to #3C3B3E and drifted with whatever sat behind the window.
+        static let sidebarSelection = Token.dynamic(
+            light: NSColor.black.withAlphaComponent(0.045),
+            dark: NSColor(srgbRed: 0.173, green: 0.169, blue: 0.184, alpha: 1)  // #2C2B2F
+        )
+        /// The selected row's label and icon. Not a system token: the App Store
+        /// pill this is modelled on paints its selection with a wide-gamut blue —
+        /// measured P3 #1891FF on screen, beyond what sRGB `systemBlue` (P3
+        /// #3F8EF7) can reach — so only a P3 literal matches it. Light keeps
+        /// `systemBlue`: the vivid variant is tuned for the dark material.
+        static let sidebarSelectedTint = Token.dynamic(
+            light: .systemBlue,
+            dark: NSColor(displayP3Red: 0.094, green: 0.569, blue: 1.0, alpha: 1)
+        )
     }
 
     /// The drop shadow under a floating chip — the capacity bar's tooltip and the

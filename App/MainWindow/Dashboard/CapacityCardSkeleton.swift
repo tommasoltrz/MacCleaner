@@ -7,8 +7,6 @@ import SwiftUI
 /// when the figures land, and the pulse says "working" without a spinner.
 struct CapacityCardSkeleton: View {
 
-    @State private var pulsing = false
-
     var body: some View {
         GroupedBox(radius: Token.Radius.card) {
             VStack(alignment: .leading, spacing: 0) {
@@ -21,33 +19,47 @@ struct CapacityCardSkeleton: View {
                 }
                 .padding(.top, 10)
 
-                // The track, whole: single grey until the segments are known.
-                Capsule()
-                    .fill(Token.Fill.control)
-                    .frame(height: Token.Size.capacityBar)
+                SkeletonTrack()
                     .padding(.top, 16)
 
-                legendBones
+                LegendBones()
                     .padding(.top, 16)
             }
             .padding(.vertical, 20)
             .padding(.horizontal, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .opacity(pulsing ? 0.55 : 1)
-        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulsing)
-        .onAppear { pulsing = true }
+        .skeletonPulse()
         .accessibilityLabel("Measuring storage")
     }
 
-    private var legendBones: some View {
+    private func bone(width: CGFloat, height: CGFloat) -> some View {
+        SkeletonBone(width: width, height: height)
+    }
+}
+
+/// The parts of the skeleton the capacity card borrows while a measurement runs
+/// with the volume totals already known: the card stays real up top and drops to
+/// bones only where the figures are actually missing.
+
+/// The track, whole: single grey until the segments are known.
+struct SkeletonTrack: View {
+    var body: some View {
+        Capsule()
+            .fill(Token.Fill.control)
+            .frame(height: Token.Size.capacityBar)
+    }
+}
+
+struct LegendBones: View {
+    var body: some View {
         HStack(alignment: .top, spacing: 34) {
-            legendColumn
-            legendColumn
+            column
+            column
         }
     }
 
-    private var legendColumn: some View {
+    private var column: some View {
         VStack(spacing: 0) {
             ForEach(0..<5, id: \.self) { row in
                 HStack(spacing: 8) {
@@ -55,20 +67,42 @@ struct CapacityCardSkeleton: View {
                         .fill(Token.Fill.control)
                         .frame(width: 8, height: 8)
                     // Varied widths, so the bones read as text rather than stripes.
-                    bone(width: 90 + CGFloat(row % 3) * 28, height: 10)
+                    SkeletonBone(width: 90 + CGFloat(row % 3) * 28, height: 10)
                     Spacer(minLength: 12)
-                    bone(width: 52, height: 10)
+                    SkeletonBone(width: 52, height: 10)
                 }
                 .frame(minHeight: 26)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
 
-    private func bone(width: CGFloat, height: CGFloat) -> some View {
+struct SkeletonBone: View {
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
         RoundedRectangle(cornerRadius: 3)
             .fill(Token.Fill.control)
             .frame(width: width, height: height)
+    }
+}
+
+/// The skeleton's "working" pulse, shared so partial bones breathe exactly like
+/// the full skeleton does.
+extension View {
+    func skeletonPulse() -> some View { modifier(SkeletonPulse()) }
+}
+
+private struct SkeletonPulse: ViewModifier {
+    @State private var pulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(pulsing ? 0.55 : 1)
+            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulsing)
+            .onAppear { pulsing = true }
     }
 }
 

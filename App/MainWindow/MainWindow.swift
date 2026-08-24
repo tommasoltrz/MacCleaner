@@ -42,6 +42,8 @@ struct MainWindow: View {
                 LargeFilesView(model: model)
             case .trash:
                 TrashView(model: model)
+            case .photos:
+                PhotoDuplicatesView(model: model)
             case .safeToRemove:
                 FilteredEntriesView(model: model, filter: .safeToRemove)
             case .needsReview:
@@ -67,6 +69,13 @@ struct MainWindow: View {
                     ),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performCleanUp() } },
+                    onCancel: { model.activeSheet = nil }
+                )
+            case .deletePhotos:
+                ConfirmationSheet(
+                    variant: .deletePhotos(count: model.photoSelection.count),
+                    keepReceipt: $model.keepReceipt,
+                    onConfirm: { Task { await model.deleteSelectedPhotos() } },
                     onCancel: { model.activeSheet = nil }
                 )
             case .emptyTrash:
@@ -113,6 +122,29 @@ struct MainWindow: View {
                 // Nothing selected means nothing to confirm; the design renders the
                 // button inert rather than hiding it, so its place stays predictable.
                 .disabled(!model.hasSelection)
+        case .photos:
+            Button("Select All") { model.selectAllRemovablePhotos() }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(model.photoGroups.isEmpty)
+
+            // The one-click retreat from the judgement calls: everything the sweep is
+            // certain about stays ticked, the "Looks similar" groups come off.
+            Button("Certain Only (\(model.certainRemovableCount))") {
+                model.selectCertainPhotosOnly()
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(model.certainRemovableCount == 0)
+
+            Button("Deselect All") { model.deselectAllPhotos() }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(model.photoSelection.isEmpty)
+
+            Button(model.photoSelectionLabel) { model.activeSheet = .deletePhotos }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(model.photoSelection.isEmpty)
+
         default:
             EmptyView()
         }
@@ -174,36 +206,30 @@ struct MainWindow: View {
         }
 
         ToolbarItem(placement: .primaryAction) {
-            // The inset is a sibling of the button, not padding on it. Applied to the
-            // button, `.padding(.trailing:)` lands *inside* the bordered style: the
-            // capsule is drawn around the padded content, so the label shifts left
-            // and the capsule grows rightward instead of the button moving inward.
-            HStack(spacing: 0) {
-                // Both spacers are absorbed into the toolbar item's glass capsule,
-                // the same way the trailing one already was. One on each side keeps
-                // the label centred instead of shoved toward the leading edge.
-                Color.clear.frame(width: 14, height: 1)
-
-                Button {
-                    model.startScan()
-                } label: {
-                    // Plain text, no glyph: the sparkles icon sat on the label's
-                    // baseline and dragged the whole line optically off-centre in the
-                    // capsule. The App Store's offer button it is modelled on is
-                    // text-only too.
-                    Text("Scan for Junk")
-                        .fontWeight(.semibold)
-                        .padding(.vertical, 1)
-                }
-                .buttonStyle(.borderedProminent)
-                // Large, like the App Store's offer button: a filled capsule at
-                // regular size read as an afterthought next to the 52pt bar.
-                .controlSize(.large)
-                .disabled(model.isScanning)
-                .help("Scan for reclaimable files")
-
-                Color.clear.frame(width: 14, height: 1)
+            // The button is the whole toolbar item. It used to sit between two
+            // clear 14pt spacers for inset, but the toolbar absorbed those into
+            // the item's glass capsule — a capsule wider than the button, whose
+            // hover highlight then lit only the inner part. The inset the spacers
+            // provided comes from the wider label padding below instead, so the
+            // capsule, the hover region and the button are one and the same.
+            Button {
+                model.startScan()
+            } label: {
+                // Plain text, no glyph: the sparkles icon sat on the label's
+                // baseline and dragged the whole line optically off-centre in the
+                // capsule. The App Store's offer button it is modelled on is
+                // text-only too.
+                Text("Scan for Junk")
+                    .fontWeight(.semibold)
+                    .padding(.vertical, 1)
+                    .padding(.horizontal, 8)
             }
+            .buttonStyle(.borderedProminent)
+            // Large, like the App Store's offer button: a filled capsule at
+            // regular size read as an afterthought next to the 52pt bar.
+            .controlSize(.large)
+            .disabled(model.isScanning)
+            .help("Scan for reclaimable files")
         }
     }
 }

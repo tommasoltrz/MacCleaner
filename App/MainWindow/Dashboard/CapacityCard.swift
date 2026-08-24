@@ -7,21 +7,30 @@ import MacCleanerCore
 /// is a normal legend row in the ordinary tone — it is the honest residual of an
 /// unprivileged scan, not a warning, and styling it as one would invite users to try
 /// to "fix" space that is simply unreadable.
+///
+/// `isMeasuring` is the measuring state. The volume totals come from `diskutil` and
+/// are always current, so the eyebrow and hero stay real; only what the walk
+/// actually produces goes to bones. Category names are stable across measurements,
+/// so when a previous breakdown is in hand the names and dots stay put and only the
+/// track and each figure pulse; a nil `breakdown` — the first run, nothing cached —
+/// drops the whole legend to bones.
 struct CapacityCard: View {
 
     private let eyebrow: String
     private let capacityBytes: Int64
     private let usedBytes: Int64
     private let freeBytes: Int64
-    private let breakdown: StorageBreakdown
+    private let breakdown: StorageBreakdown?
+    private let isMeasuring: Bool
 
-    init(volume: VolumeInfo, breakdown: StorageBreakdown) {
+    init(volume: VolumeInfo, breakdown: StorageBreakdown?, isMeasuring: Bool = false) {
         self.init(
             eyebrow: volume.eyebrow,
             capacityBytes: volume.capacityBytes,
             usedBytes: volume.usedBytes,
             freeBytes: volume.freeBytes,
-            breakdown: breakdown
+            breakdown: breakdown,
+            isMeasuring: isMeasuring
         )
     }
 
@@ -32,13 +41,15 @@ struct CapacityCard: View {
         capacityBytes: Int64,
         usedBytes: Int64,
         freeBytes: Int64,
-        breakdown: StorageBreakdown
+        breakdown: StorageBreakdown?,
+        isMeasuring: Bool = false
     ) {
         self.eyebrow = eyebrow
         self.capacityBytes = capacityBytes
         self.usedBytes = usedBytes
         self.freeBytes = freeBytes
         self.breakdown = breakdown
+        self.isMeasuring = isMeasuring
     }
 
     var body: some View {
@@ -52,11 +63,33 @@ struct CapacityCard: View {
                 // handoff puts between these two lines.
                 hero
 
-                CapacityBar(breakdown: breakdown)
-                    .padding(.top, 16)
+                if let breakdown, !isMeasuring {
+                    CapacityBar(breakdown: breakdown)
+                        .padding(.top, 16)
 
-                legend
+                    legend(breakdown)
+                        .padding(.top, 16)
+                } else if let breakdown {
+                    // Re-measuring with the previous breakdown in hand: the names
+                    // are not in question, only the figures. Names and dots hold
+                    // still; the track and each figure pulse.
+                    SkeletonTrack()
+                        .skeletonPulse()
+                        .padding(.top, 16)
+
+                    legend(breakdown, valuesAreBones: true)
+                        .padding(.top, 16)
+                        .accessibilityLabel("Measuring what is using the space")
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SkeletonTrack()
+                        LegendBones()
+                            .padding(.top, 16)
+                    }
                     .padding(.top, 16)
+                    .skeletonPulse()
+                    .accessibilityLabel("Measuring what is using the space")
+                }
             }
             .padding(.vertical, 20)
             .padding(.horizontal, 22)
@@ -105,20 +138,20 @@ struct CapacityCard: View {
 
     /// Two columns filled **down** then across, so the entries stay in descending
     /// order as you read each column top to bottom. A `LazyVGrid` fills the other way.
-    private var legend: some View {
+    private func legend(_ breakdown: StorageBreakdown, valuesAreBones: Bool = false) -> some View {
         let entries = breakdown.legendEntries
         let leftCount = (entries.count + 1) / 2
 
         return HStack(alignment: .top, spacing: 34) {
-            legendColumn(Array(entries.prefix(leftCount)))
-            legendColumn(Array(entries.dropFirst(leftCount)))
+            legendColumn(Array(entries.prefix(leftCount)), valuesAreBones: valuesAreBones)
+            legendColumn(Array(entries.dropFirst(leftCount)), valuesAreBones: valuesAreBones)
         }
     }
 
-    private func legendColumn(_ entries: [StorageSegment]) -> some View {
+    private func legendColumn(_ entries: [StorageSegment], valuesAreBones: Bool) -> some View {
         VStack(spacing: 0) {
             ForEach(entries) { entry in
-                LegendRow(entry: entry)
+                LegendRow(entry: entry, valueIsBone: valuesAreBones)
             }
         }
         // Both columns take half of whatever the card is given.
@@ -128,6 +161,8 @@ struct CapacityCard: View {
 
 private struct LegendRow: View {
     let entry: StorageSegment
+    /// A measurement is running: the name stands, the figure is not yet a fact.
+    var valueIsBone = false
 
     @State private var isInfoHovered = false
 
@@ -141,7 +176,7 @@ private struct LegendRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
 
-            // The two names that explain nothing by themselves get an info glyph.
+            // The names that explain nothing by themselves get an info glyph.
             // The rest are left alone — eleven info icons would be noise.
             //
             // A hover-driven popover, not `.help()`: the native tooltip's dwell delay
@@ -165,10 +200,15 @@ private struct LegendRow: View {
 
             Spacer(minLength: 12)
 
-            Text(ByteFormatting.string(entry.bytes))
-                .font(.mcRowValue)
-                .foregroundStyle(Token.Text.secondary)
-                .fixedSize()   // the name truncates first; the figure never does
+            if valueIsBone {
+                SkeletonBone(width: 52, height: 10)
+                    .skeletonPulse()
+            } else {
+                Text(ByteFormatting.string(entry.bytes))
+                    .font(.mcRowValue)
+                    .foregroundStyle(Token.Text.secondary)
+                    .fixedSize()   // the name truncates first; the figure never does
+            }
         }
         .frame(minHeight: 26)
         .accessibilityElement(children: .combine)
@@ -185,6 +225,11 @@ private struct LegendRow: View {
             return "Space this app is not allowed to read: the Spotlight index, "
                 + "filesystem metadata, and files only macOS can touch. Reported "
                 + "as unknown, not guessed at. It is not reclaimable."
+        case .otherFilesInHome:
+            return "Everything in your home folder that no named category claims: "
+                + "folders you created at its top level, hidden tool data such as "
+                + "~/.ssh or ~/.npm, and other loose files. Large & Old Files is "
+                + "the place to explore what is in here."
         default:
             return nil
         }

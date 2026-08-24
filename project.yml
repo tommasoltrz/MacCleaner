@@ -26,8 +26,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.MacCleaner
         PRODUCT_NAME: MacCleaner
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
 
@@ -48,6 +48,12 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
+
+        # PhotoKit refuses to load without a usage string and terminates the process
+        # on the first fetch, so this is required rather than cosmetic. Full access,
+        # not the add-only variant: finding duplicates means reading the library and
+        # deleting from it.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it."
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 

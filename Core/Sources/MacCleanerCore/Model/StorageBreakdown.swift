@@ -4,7 +4,7 @@ import Foundation
 /// to `NSColor`/`Color`, preferring the platform's semantic colours so the app
 /// follows the user's accent choice and Increase Contrast setting.
 public enum ColorToken: String, Sendable, Equatable, Codable {
-    case accent, green, orange, red, yellow, purple, teal, pink
+    case accent, green, orange, red, yellow, purple, teal, pink, brown
     case gray, warmGray, darkGray, freeSpace
 }
 
@@ -50,7 +50,9 @@ public enum StorageSegmentID: String, Sendable, CaseIterable, Codable {
         case .developer:          .yellow
         case .appDataCaches:      .teal
         case .packageBuildCaches: .purple
-        case .otherFilesInHome:   .pink
+        // Brown, not pink: Photos & Images is pink, and the two sat side by side
+        // in the legend wearing the same dot.
+        case .otherFilesInHome:   .brown
         case .applications:       .accent
         case .unmeasured:         .darkGray
         case .other:              .gray

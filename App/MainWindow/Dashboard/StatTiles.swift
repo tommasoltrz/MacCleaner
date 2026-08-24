@@ -17,19 +17,23 @@ struct StatTiles: View {
     private let onSafeTap: (() -> Void)?
     private let onReviewTap: (() -> Void)?
 
-    /// `nil` results means no scan has run: every figure falls back to a placeholder.
+    /// `nil` results means no scan has run this session: the two counting tiles fall
+    /// back to placeholders. `lastScanAt` fills the third tile on launches where no
+    /// scan has run yet — the timestamp survives relaunch even though results don't —
+    /// and fresh results win over it.
     ///
     /// `reclaimedBytes` comes from the clean-up history rather than from the scan, so
     /// it is passed in; without it the "Last scan" tile shows the timestamp alone.
     init(
         results: ScanResults?,
+        lastScanAt: Date? = nil,
         reclaimedBytes: Int64? = nil,
         onSafeTap: (() -> Void)? = nil,
         onReviewTap: (() -> Void)? = nil
     ) {
         self.safeToRemoveBytes = results?.safeToRemoveBytes
         self.needsReviewBytes = results?.needsReviewBytes
-        self.lastScanAt = results?.finishedAt
+        self.lastScanAt = results?.finishedAt ?? lastScanAt
         self.reclaimedBytes = reclaimedBytes
         self.onSafeTap = onSafeTap
         self.onReviewTap = onReviewTap
