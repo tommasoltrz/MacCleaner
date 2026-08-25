@@ -313,6 +313,63 @@ public struct ApplicationsScanner: CategoryScanner {
             root: "Library/Application Support/Claude",
             regenerable: ["Crashpad", "Partitions/*/Cache", "Partitions/*/Code Cache"],
             remainderName: "Claude settings and data"
+        ),
+
+        // VS Code uses the historical product name `Code` rather than either its
+        // display name or bundle identifier, so the generic Electron lookup cannot
+        // reach it. `User`, workspaceStorage, History and extensions deliberately
+        // remain in the protected remainder.
+        "com.microsoft.VSCode": AppDataCuration(
+            root: "Library/Application Support/Code",
+            regenerable: electronRegenerable + [
+                "CachedData", "CachedExtensions", "CachedExtensionVSIXs",
+                "CachedProfilesData", "CachedConfigurations"
+            ],
+            remainderName: "Visual Studio Code settings and data"
+        ),
+
+        // The ChatGPT desktop bundle currently identifies as `com.openai.codex`
+        // and stores its Chromium profile under `Codex`; neither identifier nor
+        // display name points to that folder.
+        "com.openai.codex": AppDataCuration(
+            root: "Library/Application Support/Codex",
+            regenerable: electronRegenerable + [
+                "Default/Cache", "Default/Code Cache", "Default/GPUCache",
+                "Default/Service Worker/CacheStorage"
+            ],
+            remainderName: "ChatGPT profiles and settings"
+        ),
+
+        // Figma keeps one Chromium profile per desktop engine version. Old engine
+        // caches are often the bulk of the folder, while the files beside them and
+        // the bundled agents are installation/user state.
+        "com.figma.Desktop": AppDataCuration(
+            root: "Library/Application Support/Figma",
+            regenerable: [
+                "DesktopProfile/*/Cache", "DesktopProfile/*/Code Cache",
+                "DesktopProfile/*/GPUCache", "DesktopProfile/*/Crashpad"
+            ],
+            remainderName: "Figma settings and data"
+        ),
+
+        // Ferdium has normal Electron caches at the root plus a Chromium partition
+        // per configured messaging service. Recipes, configuration, cookies and
+        // sessions remain protected.
+        "org.ferdium.ferdium-app": AppDataCuration(
+            root: "Library/Application Support/Ferdium",
+            regenerable: electronRegenerable + [
+                "Partitions/*/Cache", "Partitions/*/Code Cache",
+                "Partitions/*/GPUCache", "Partitions/*/Service Worker/CacheStorage"
+            ],
+            remainderName: "Ferdium accounts and settings"
+        ),
+
+        // Tor Browser deliberately separates disposable browser caches from the
+        // profile and Tor keys. The whole profile root must never be called cache.
+        "org.torproject.torbrowser": AppDataCuration(
+            root: "Library/Application Support/TorBrowser-Data",
+            regenerable: ["Browser/Caches"],
+            remainderName: "Tor Browser profile and settings"
         )
     ]
 
@@ -391,8 +448,8 @@ public struct ApplicationsScanner: CategoryScanner {
         var unreadableCount: Int
         /// The support folder holds something that must not be removed — a
         /// protected glob, or an explicit exclusion the user added. The app row is
-        /// dropped entirely when this is set. The safe uninstall scope would keep
-        /// the remainder, but “Remove Everything” can carry it with the bundle; an
+        /// dropped entirely when this is set. A partial uninstall would keep the
+        /// remainder, but a complete uninstall can carry it with the bundle; an
         /// explicit exclusion must remain absolute under either choice.
         var holdsProtectedContent = false
     }
@@ -417,7 +474,7 @@ public struct ApplicationsScanner: CategoryScanner {
         // An explicit exclusion anywhere inside the support folder protects the
         // whole application. Only the curated cache paths were checked before, so
         // an excluded path elsewhere in the folder stayed in the locked remainder,
-        // where “Remove Everything” could still reach it. `isExcluded` answers true
+        // where complete removal could still reach it. `isExcluded` answers true
         // for a directory that merely *contains* an exclusion, which is exactly the
         // question here.
         guard !context.isExcluded(root) else {

@@ -16,23 +16,26 @@ struct TrashView: View {
     @State private var hasLoaded = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if let summary = model.trashSummary {
-                    TrashContent(
-                        summary: summary,
-                        onEmpty: { model.activeSheet = .emptyTrash },
-                        onPutBack: { item in Task { await model.putBack(item) } }
-                    )
-                } else if hasLoaded {
-                    unreadableNote
-                } else {
-                    loadingNote
+        Group {
+            if let summary = model.trashSummary {
+                TrashContent(
+                    summary: summary,
+                    onPutBack: { item in Task { await model.putBack(item) } }
+                )
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if hasLoaded {
+                            unreadableNote
+                        } else {
+                            loadingNote
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 4)
+                    .padding(.bottom, 22)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
-            .padding(.bottom, 22)
         }
         .task {
             await model.loadTrash()
@@ -86,87 +89,90 @@ struct TrashView: View {
 /// real states without a Trash on disk.
 private struct TrashContent: View {
     let summary: TrashSummary
-    let onEmpty: () -> Void
     let onPutBack: (TrashItem) -> Void
 
     var body: some View {
-        summaryCard
+        VStack(spacing: 0) {
+            summaryHeader
 
-        if summary.items.isEmpty {
-            emptyNote
-        } else {
-            // Finder's Bin also shows iCloud's Recently Deleted, which are cloud
-            // records with no bytes on this disk. Saying so heads off "why does
-            // Finder show more items" — the honest scope here is this disk.
-            if hasICloudDrive {
-                Text("Finder's Bin may also show iCloud's Recently Deleted. Those "
-                     + "items live in iCloud, not on this disk.")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.tertiary)
-                    .padding(.horizontal, 2)
-            }
-            GroupedBox {
-                // Lazy: `TrashService` caps the rows it returns, but the cap is 50 and
-                // each row carries a button and a hover tracker.
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(summary.items.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { Hairline() }
-                        TrashRow(item: item, onPutBack: { onPutBack(item) })
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if summary.items.isEmpty {
+                        emptyNote
+                    } else {
+                        // Finder's Bin also shows iCloud's Recently Deleted, which are cloud
+                        // records with no bytes on this disk. Saying so heads off "why does
+                        // Finder show more items" — the honest scope here is this disk.
+                        if hasICloudDrive {
+                            Text("Finder's Bin may also show iCloud's Recently Deleted. Those "
+                                 + "items live in iCloud, not on this disk.")
+                                .font(.mcSubtitle)
+                                .foregroundStyle(Token.Text.tertiary)
+                                .padding(.horizontal, 2)
+                        }
+                        GroupedBox {
+                            // Lazy: `TrashService` caps the rows it returns, but the cap is 50 and
+                            // each row carries a button and a hover tracker.
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(summary.items.enumerated()), id: \.element.id) { index, item in
+                                    if index > 0 { Hairline() }
+                                    TrashRow(item: item, onPutBack: { onPutBack(item) })
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+                        }
+
+                        // Finder shows every item; this list deliberately shows the biggest.
+                        // Said out loud, or the shorter list reads as missing files.
+                        if summary.itemCount > summary.items.count {
+                            Text("Showing the \(summary.items.count) largest of "
+                                 + "\(summary.itemCount) items. Finder lists them all.")
+                                .font(.mcSubtitle)
+                                .foregroundStyle(Token.Text.tertiary)
+                                .padding(.horizontal, 2)
+                        }
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
-            }
-
-            // Finder shows every item; this list deliberately shows the biggest.
-            // Said out loud, or the shorter list reads as missing files.
-            if summary.itemCount > summary.items.count {
-                Text("Showing the \(summary.items.count) largest of "
-                     + "\(summary.itemCount) items. Finder lists them all.")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.tertiary)
-                    .padding(.horizontal, 2)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 22)
             }
         }
     }
 
-    // MARK: Summary card
+    // MARK: Summary header
 
-    private var summaryCard: some View {
-        GroupedBox {
-            HStack(alignment: .bottom, spacing: 16) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Trash")
-                        .mcEyebrowStyle()
+    private var summaryHeader: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Trash")
+                .mcEyebrowStyle()
 
-                    HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(ByteFormatting.string(summary.totalBytes))
-                            .font(.mcSecondaryHero)
-                            .mcTracked(-0.26)   // -0.01em
-                            .foregroundStyle(Token.Text.emphasis)
-                            .lineLimit(1)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(ByteFormatting.string(summary.totalBytes))
+                    .font(.mcSecondaryHero)
+                    .mcTracked(-0.26)   // -0.01em
+                    .foregroundStyle(Token.Text.emphasis)
+                    .lineLimit(1)
 
-                        Text("· \(summary.itemCount) \(summary.itemCount == 1 ? "item" : "items")")
-                            .font(.trashItemCount)
-                            .foregroundStyle(Token.Text.quaternary)
-                            .lineLimit(1)
-                    }
-
-                    Text("Items older than 30 days are removed automatically by macOS.")
-                        .font(.mcControlLabel)
-                        .foregroundStyle(Token.Text.quaternary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 6)
-                }
-
-                Spacer(minLength: 12)
-
-                Button("Empty Trash", action: onEmpty)
-                    .buttonStyle(DestructiveButtonStyle())
-                    .disabled(summary.itemCount == 0)
+                Text("· \(summary.itemCount) \(summary.itemCount == 1 ? "item" : "items")")
+                    .font(.trashItemCount)
+                    .foregroundStyle(Token.Text.quaternary)
+                    .lineLimit(1)
             }
-            .padding(.vertical, 16)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("How long items remain here is controlled by Finder settings.")
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.quaternary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Token.separator)
+                .frame(height: Token.hairline)
         }
     }
 
@@ -295,33 +301,20 @@ private extension Font {
 // real `~/.Trash`, which would replace any fixture the moment the preview appeared.
 
 #Preview("Trash") {
-    ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-            TrashContent(
-                summary: PreviewTrash.populated,
-                onEmpty: {},
-                onPutBack: { _ in }
-            )
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-    }
-    .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
-    .background(Color(nsColor: .windowBackgroundColor))
-    .preferredColorScheme(.dark)
+    TrashContent(
+        summary: PreviewTrash.populated,
+        onPutBack: { _ in }
+    )
+        .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .preferredColorScheme(.dark)
 }
 
 #Preview("Trash — empty") {
-    ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-            TrashContent(summary: TrashSummary(), onEmpty: {}, onPutBack: { _ in })
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-    }
-    .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
-    .background(Color(nsColor: .windowBackgroundColor))
-    .preferredColorScheme(.dark)
+    TrashContent(summary: TrashSummary(), onPutBack: { _ in })
+        .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .preferredColorScheme(.dark)
 }
 
 /// The design's own sample rows. Only the first was trashed by this app, so it is the

@@ -38,6 +38,8 @@ struct MainWindow: View {
                 DashboardView(model: model, settings: settings)
             case .scanner:
                 ScannerView(model: model)
+            case .uninstaller:
+                AppUninstallerView(model: model)
             case .large:
                 LargeFilesView(model: model)
             case .trash:
@@ -92,6 +94,19 @@ struct MainWindow: View {
                     onConfirm: { Task { await model.emptyTrash() } },
                     onCancel: { model.activeSheet = nil }
                 )
+            case .uninstallApp:
+                ConfirmationSheet(
+                    variant: .uninstallApp(
+                        applicationName: model.pendingAppUninstall?.plan.applicationName
+                            ?? "this application",
+                        itemCount: model.pendingAppUninstall?.itemCount ?? 0,
+                        totalBytes: model.pendingAppUninstall?.totalBytes ?? 0,
+                        protectedDataCount: model.pendingAppUninstall?.protectedDataCount ?? 0
+                    ),
+                    keepReceipt: $model.keepReceipt,
+                    onConfirm: { Task { await model.performAppUninstall() } },
+                    onCancel: { model.cancelAppUninstall() }
+                )
             }
         }
     }
@@ -106,14 +121,13 @@ struct MainWindow: View {
     private var statusBarTrailing: some View {
         switch model.view {
         case .dashboard:
-            // The Dashboard shows cached figures on launch rather than re-walking the
-            // disk (and re-triggering folder permission prompts) every time, so it
-            // needs an explicit way to refresh them.
-            Button(model.isLoadingBreakdown ? "Measuring…" : "Measure Again") {
+            // Keep this in the same lifecycle as the card: startup preparation is
+            // already a measurement even before the disk walk itself begins.
+            Button(model.isDashboardLoading ? "Measuring…" : "Measure Again") {
                 Task { await model.measureStorage() }
             }
             .buttonStyle(SecondaryButtonStyle())
-            .disabled(model.isLoadingBreakdown)
+            .disabled(model.isDashboardLoading)
 
         case .scanner, .large, .safeToRemove, .needsReview:
             // The tile drill-downs promise a sweep — "safe to remove" especially —
@@ -160,6 +174,18 @@ struct MainWindow: View {
                 .controlSize(.regular)
                 .tint(Token.color(.red))
                 .disabled(model.photoSelection.isEmpty)
+
+        case .uninstaller:
+            EmptyView()
+
+        case .trash:
+            Button("Empty Trash") { model.activeSheet = .emptyTrash }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                // Keep the destructive action in its stable footer position while
+                // the Trash is loading or empty, but do not open an empty review.
+                .disabled((model.trashSummary?.itemCount ?? 0) == 0)
 
         default:
             EmptyView()
@@ -218,6 +244,21 @@ struct MainWindow: View {
 
                     Color.clear.frame(width: 8, height: 1)
                 }
+            }
+        } else if model.view == .large, model.scanResults != nil {
+            // On macOS 26 a segmented picker receives the native floating glass
+            // capsule when it lives in a toolbar. The same control in page content
+            // is the rectangular segmented slab this view used to show.
+            ToolbarItem(placement: .principal) {
+                Picker("Filter", selection: $model.largeFilesFilter) {
+                    ForEach(AppModel.LargeFilesFilter.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help("Choose which large or old files to show")
+                .accessibilityLabel("Large and old files filter")
             }
         }
 

@@ -171,6 +171,27 @@ struct AppDataCurationTests {
         ) == nil)
     }
 
+    @Test("known app identifiers route to their observed support folders")
+    func knownAppSupportFoldersStayExplicit() throws {
+        let sandbox = try Sandbox()
+        let cases = [
+            ("com.microsoft.VSCode", "Visual Studio Code", "Code"),
+            ("com.openai.codex", "ChatGPT", "Codex"),
+            ("com.figma.Desktop", "Figma", "Figma"),
+            ("org.ferdium.ferdium-app", "Ferdium", "Ferdium"),
+            ("org.torproject.torbrowser", "Tor Browser", "TorBrowser-Data"),
+        ]
+
+        for (bundleID, appName, supportName) in cases {
+            let expectedRoot = Self.support(supportName)
+            try sandbox.directory(expectedRoot)
+            let curation = try #require(ApplicationsScanner.curation(
+                bundleID: bundleID, baseName: appName, home: sandbox.root
+            ))
+            #expect(curation.root == expectedRoot)
+        }
+    }
+
     // MARK: - Remainder arithmetic
 
     @Test("the locked remainder is the measured folder minus the curated bytes")

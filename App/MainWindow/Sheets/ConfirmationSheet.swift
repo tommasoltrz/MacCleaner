@@ -20,6 +20,12 @@ struct ConfirmationSheet: View {
             protectedDataCount: Int
         )
         case emptyTrash(itemCount: Int, totalBytes: Int64)
+        case uninstallApp(
+            applicationName: String,
+            itemCount: Int,
+            totalBytes: Int64,
+            protectedDataCount: Int
+        )
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
         /// says how many photographs go and stays silent about megabytes rather
         /// than inventing a figure.
@@ -83,6 +89,7 @@ struct ConfirmationSheet: View {
     /// permanent clean-up has nothing a receipt could bring back.
     private var showsReceipt: Bool {
         if case .cleanUp(let count, _, let permanent, _) = variant { return permanent < count }
+        if case .uninstallApp = variant { return true }
         return false
     }
 
@@ -92,7 +99,7 @@ struct ConfirmationSheet: View {
     private var isDestructive: Bool {
         switch variant {
         case .cleanUp(_, _, let permanent, let protected): permanent > 0 || protected > 0
-        case .emptyTrash, .deletePhotos: true
+        case .emptyTrash, .deletePhotos, .uninstallApp: true
         }
     }
 
@@ -112,6 +119,10 @@ struct ConfirmationSheet: View {
             return "Move \(count) \(noun) to the Trash?"
         case .emptyTrash(let count, _):
             return "Permanently erase the \(count) items in the Trash?"
+        case .uninstallApp(let name, _, _, let protected):
+            return protected > 0
+                ? "Uninstall \(name) and remove its protected data?"
+                : "Uninstall \(name)?"
         case .deletePhotos(let count):
             let noun = count == 1 ? "photo" : "photos"
             return "Delete \(count) \(noun) from every device?"
@@ -153,6 +164,19 @@ struct ConfirmationSheet: View {
         case .emptyTrash(_, let bytes):
             return "This erases \(ByteFormatting.string(bytes)) immediately. "
                 + "Items already in the Trash cannot be put back afterwards."
+        case .uninstallApp(_, let count, let bytes, let protected):
+            let related = max(0, count - 1)
+            let noun = related == 1 ? "related item" : "related items"
+            var warning = ""
+            if protected > 0 {
+                let protectedNoun = protected == 1 ? "item" : "items"
+                warning = " This includes \(protected) protected user-data \(protectedNoun); "
+                    + "profiles, logins, history, or settings may be lost."
+            }
+            return "The application and \(related) \(noun) "
+                + "(\(ByteFormatting.string(bytes))) will move to the Trash. "
+                + "If the application cannot move, none of its related files will be touched."
+                + warning
         case .deletePhotos:
             // Every clause here is something the user would otherwise discover
             // afterwards: that this is not a local action, and that their iCloud
@@ -171,6 +195,7 @@ struct ConfirmationSheet: View {
             if permanent == count { return "Delete" }
             return permanent > 0 ? "Remove" : "Move to Trash"
         case .emptyTrash:   return "Erase"
+        case .uninstallApp: return "Uninstall"
         case .deletePhotos: return "Delete Everywhere"
         }
     }
@@ -190,6 +215,7 @@ struct ConfirmationSheet: View {
 
     private var iconName: String {
         if case .deletePhotos = variant { return "photo.badge.minus" }
+        if case .uninstallApp = variant { return "trash.square" }
         if case .cleanUp(_, _, _, let protected) = variant, protected > 0 {
             return "exclamationmark.triangle"
         }
@@ -199,9 +225,18 @@ struct ConfirmationSheet: View {
     private var receiptRow: some View {
         Well {
             Toggle(isOn: $keepReceipt) {
-                Text("Keep a Trash receipt so this can be undone for 30 days")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.primary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Keep a Put Back receipt")
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.primary)
+                    Text(
+                        "Records original locations for MacCleaner’s Put Back. "
+                        + "It does not change what moves to the Trash."
+                    )
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .toggleStyle(.checkbox)
             .padding(.horizontal, 11)

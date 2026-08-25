@@ -89,7 +89,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     ///
     /// Only two reasons lock by default: a running app (Finder refuses the same
     /// trash operation, and it would fail), and user data (which needs an explicit
-    /// row-specific override, or the parent app's “Remove Everything” choice).
+    /// row-specific or app-uninstall authorization).
     /// Recent use is information, not a veto. The user, not a date heuristic,
     /// decides whether last week's download stays.
     public var isRemovalLocked: Bool {
@@ -98,8 +98,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     }
     /// Item count for folders, shown as `· 1,204 items`.
     public var childCount: Int?
-    /// Associated files for an app bundle. Regenerable children follow the bundle;
-    /// protected children do so only after “Remove Everything”.
+    /// Associated files for an app bundle. Regenerable children can follow a generic
+    /// parent removal; protected children require explicit uninstall authorization.
     public var children: [FileEntry]
 
     public init(

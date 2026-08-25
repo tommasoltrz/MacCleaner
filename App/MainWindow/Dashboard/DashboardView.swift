@@ -19,14 +19,14 @@ struct DashboardView: View {
                     lowSpaceBanner(volume)
                 }
 
-                if let volume = model.volume, model.isLoadingBreakdown {
+                if let volume = model.volume, model.isDashboardLoading {
                     // The totals are already known — `diskutil` answers before the
                     // category walk even starts — so only the parts the walk
                     // produces go to bones. The previous breakdown supplies the
                     // category names, which are stable; its figures are withheld:
                     // stale numbers under a pulse read as current.
                     CapacityCard(volume: volume, breakdown: model.breakdown, isMeasuring: true)
-                } else if model.isLoadingBreakdown {
+                } else if model.isDashboardLoading {
                     // Not even the totals yet: the moment before `diskutil` returns.
                     CapacityCardSkeleton()
                 } else if let volume = model.volume, let breakdown = model.breakdown {
