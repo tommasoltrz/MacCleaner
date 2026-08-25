@@ -43,9 +43,9 @@ struct FilteredEntriesView: View {
                                 entries: entries,
                                 selection: $model.scannerSelection,
                                 userDataRemovalOverrides: $model.userDataRemovalOverrides,
-                                appDataRemovalOverrides: $model.appDataRemovalOverrides
+                                onUninstallApplication: { model.planAppUninstall($0.url) }
                             )
-                                .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+                            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
                         }
                     }
                 }

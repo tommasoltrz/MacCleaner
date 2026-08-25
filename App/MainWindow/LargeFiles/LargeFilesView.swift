@@ -11,10 +11,12 @@ import MacCleanerCore
 struct LargeFilesView: View {
     @Bindable var model: AppModel
 
-    @State private var filter: Filter = .overOneGB
     /// Shift-click anchor, in *visible* row order. A filter change invalidates it, or
     /// a range would span rows that are no longer on screen.
     @State private var anchorIndex: Int?
+    /// Protected user data is never selected by an inert checkbox. The lock opens
+    /// this row-specific warning first, matching the Scanner's safety contract.
+    @State private var pendingUserDataOverride: FileEntry?
 
     var body: some View {
         ScrollView {
@@ -23,7 +25,7 @@ struct LargeFilesView: View {
                     emptyState
                 } else {
                     let entries = filteredEntries
-                    filterRow(entries)
+                    filterSummary(entries)
                     table(entries)
                 }
             }
@@ -33,36 +35,37 @@ struct LargeFilesView: View {
             .padding(.top, 4)
             .padding(.bottom, 22)
         }
-        .onChange(of: filter) { anchorIndex = nil }
+        .onChange(of: model.largeFilesFilter) { anchorIndex = nil }
+        .alert(item: $pendingUserDataOverride) { entry in
+            Alert(
+                title: Text("Remove \(entry.displayName)?"),
+                message: Text(
+                    "This folder can contain profiles, logins, history, and settings. "
+                    + "Removing it may sign you out or reset the app. Quit the app first. "
+                    + "MacCleaner will always move this protected data to the Trash."
+                ),
+                primaryButton: .destructive(Text("Unlock & Select")) {
+                    model.userDataRemovalOverrides.insert(entry.id)
+                    model.largeFilesSelection.insert(entry.id)
+                    pendingUserDataOverride = nil
+                },
+                secondaryButton: .cancel { pendingUserDataOverride = nil }
+            )
+        }
     }
 
-    // MARK: - Filter row
+    // MARK: - Filter summary
 
     @ViewBuilder
-    private func filterRow(_ entries: [FileEntry]) -> some View {
+    private func filterSummary(_ entries: [FileEntry]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                Picker("Filter", selection: $filter) {
-                    ForEach(Filter.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                // Segments size to their labels; without this the control stretches
-                // across the window and the summary is pushed off the row.
-                .fixedSize()
+            Text(summary(entries))
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.quaternary)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-                Text(summary(entries))
-                    .font(.mcControlLabel)
-                    .foregroundStyle(Token.Text.quaternary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer(minLength: 0)
-            }
-
-            if filter == .duplicates {
+            if model.largeFilesFilter == .duplicates {
                 Text("Same-size candidates. They are grouped by identical allocated size, not compared byte for byte. Check the contents before you remove a copy.")
                     .font(.mcSubtitle)
                     .foregroundStyle(Token.Text.tertiary)
@@ -97,22 +100,29 @@ struct LargeFilesView: View {
                             LargeFileRow(
                                 entry: entry,
                                 isSelected: model.largeFilesSelection.contains(entry.id),
-                                onToggle: { isOn in setSelected(isOn, at: index, in: entries) }
+                                hasUserDataOverride: model.userDataRemovalOverrides.contains(entry.id),
+                                roundsBottomCorners: index == entries.count - 1,
+                                onToggle: { isOn in setSelected(isOn, at: index, in: entries) },
+                                onRequestUserDataOverride: { pendingUserDataOverride = entry },
+                                onUninstallApplication: entry.kind == .appBundle
+                                    ? { model.planAppUninstall(entry.url) }
+                                    : nil
                             )
                         }
                     }
+                    // The uninstall callout rises above the first row. Keep the row
+                    // layer above the column header instead of letting the header
+                    // cover the glass card.
+                    .zIndex(1)
                 }
             }
-            // Otherwise the first and last rows' hover fill paints into the box's
-            // rounded corners and squares them off.
-            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
         }
     }
 
     private var columnHeader: some View {
         HStack(spacing: Metrics.gap) {
             // Empty slot over the checkboxes, so PATH starts above the paths.
-            Color.clear.frame(width: Metrics.checkbox, height: 0)
+            Color.clear.frame(width: Metrics.selection, height: 0)
 
             SortableColumnHeader(
                 title: "Path",
@@ -147,7 +157,7 @@ struct LargeFilesView: View {
     }
 
     private var noMatches: some View {
-        Text(filter.emptyMessage)
+        Text(model.largeFilesFilter.emptyMessage)
             .font(.mcBody)
             .foregroundStyle(Token.Text.tertiary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,9 +180,22 @@ struct LargeFilesView: View {
 
         for position in affected {
             let entry = entries[position]
-            guard !entry.isRemovalLocked else { continue }
-            if isOn { model.largeFilesSelection.insert(entry.id) }
-            else { model.largeFilesSelection.remove(entry.id) }
+            // Application bundles have a complete uninstall review; a Shift range
+            // must not sneak them into generic cleanup. Locked user data becomes a
+            // normal checkbox only after its exact row has been authorized.
+            guard entry.kind != .appBundle else {
+                model.largeFilesSelection.remove(entry.id)
+                continue
+            }
+            guard !entry.isRemovalLocked
+                    || model.userDataRemovalOverrides.contains(entry.id)
+            else { continue }
+            if isOn {
+                model.largeFilesSelection.insert(entry.id)
+            } else {
+                model.largeFilesSelection.remove(entry.id)
+                model.userDataRemovalOverrides.remove(entry.id)
+            }
         }
         anchorIndex = index
     }
@@ -211,7 +234,7 @@ struct LargeFilesView: View {
         let entries = uniqueEntries
         let matching: [FileEntry]
 
-        switch filter {
+        switch model.largeFilesFilter {
         case .overOneGB:
             matching = entries.filter { $0.allocatedBytes >= ByteFormatting.bytesPerGB }
         case .unopenedSixMonths:
@@ -276,34 +299,6 @@ struct LargeFilesView: View {
         .frame(maxWidth: .infinity, minHeight: 320)
     }
 
-    // MARK: - Filter
-
-    enum Filter: String, CaseIterable, Identifiable {
-        case overOneGB, unopenedSixMonths, duplicates
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .overOneGB:         "Over 1 GB"
-            case .unopenedSixMonths: "Unopened 6 mo"
-            case .duplicates:        "Duplicates"
-            }
-        }
-
-        /// Says which filter came up empty, rather than leaving a blank box that reads
-        /// as a failed scan.
-        var emptyMessage: String {
-            switch self {
-            case .overOneGB:
-                "Nothing the last scan measured reaches 1 GB."
-            case .unopenedSixMonths:
-                "Everything the last scan measured has been opened in the past six months."
-            case .duplicates:
-                "No two measured files share an allocated size above 10 MB."
-            }
-        }
-    }
 }
 
 // MARK: - One row
@@ -311,39 +306,64 @@ struct LargeFilesView: View {
 private struct LargeFileRow: View {
     let entry: FileEntry
     let isSelected: Bool
+    let hasUserDataOverride: Bool
+    let roundsBottomCorners: Bool
     let onToggle: (Bool) -> Void
+    let onRequestUserDataOverride: () -> Void
+    var onUninstallApplication: (() -> Void)?
 
-    private var largeRowHelp: String {
-        if let manual = entry.manualRemoval {
-            return manual.explanation + " Command: " + manual.command
-        }
-        if entry.isRemovalLocked {
-            return "This app is running, or the entry is user data. Quit the app "
-                + "to remove it."
-        }
-        return ""
-    }
+    @State private var isRowHovered = false
+    @State private var isShowingManualInfo = false
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
-            // The label is hidden but not dropped — it is what VoiceOver reads.
-            Toggle(entry.url.path, isOn: Binding(get: { isSelected }, set: { onToggle($0) }))
-                .disabled(entry.isRemovalLocked)
-                .help(largeRowHelp)
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .frame(width: Metrics.checkbox)
+            Group {
+                if entry.kind == .appBundle, let onUninstallApplication {
+                    // Apps do not enter generic cleanup. The trash glyph opens the
+                    // complete uninstall review and removes nothing on this click.
+                    ReviewUninstallButton(
+                        name: entry.displayName,
+                        isRowHovered: isRowHovered,
+                        action: onUninstallApplication
+                    )
+                } else {
+                    ProtectedSelectionControl(
+                        entry: entry,
+                        isSelected: isSelected,
+                        hasUserDataOverride: hasUserDataOverride,
+                        help: rowHelp,
+                        onToggle: onToggle,
+                        onRequestUserDataOverride: onRequestUserDataOverride
+                    )
+                }
+            }
+            .frame(width: Metrics.selection)
 
             // The whole path, in monospace: at this level the decision is made on
             // location, not on a filename. Middle truncation keeps both the volume the
             // path starts in and the file it ends at.
-            Text(FileEntry.abbreviate(entry.url.path))
-                .font(.mcMonoPath)
-                .foregroundStyle(Token.Text.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(entry.url.path)
+            HStack(spacing: 7) {
+                Text(FileEntry.abbreviate(entry.url.path))
+                    .font(.mcMonoPath)
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let manual = entry.manualRemoval {
+                    Button { isShowingManualInfo = true } label: {
+                        Badge(text: "terminal").fixedSize()
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $isShowingManualInfo, arrowEdge: .bottom) {
+                        ManualRemovalPopover(manual: manual)
+                    }
+                } else if let reason = entry.protectionReason {
+                    Badge(text: Self.badgeText(for: reason)).fixedSize()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help("\(rowHelp)\n\(entry.url.path)")
 
             Text(entry.kind.columnLabel)
                 .font(.mcControlLabel)
@@ -363,11 +383,72 @@ private struct LargeFileRow: View {
         .padding(.horizontal, Metrics.sidePadding)
         .frame(height: Token.Size.largeFileRow)
         .contentShape(Rectangle())
-        .hoverHighlight()
-        // Clicking anywhere in the row toggles it; the checkbox is a target, not
-        // the only one. Shift-ranges still work — the toggle path reads NSEvent.
+        // Clip only the hover paint at the box's bottom corners. Clipping the whole
+        // table also clipped the first row's uninstall callout above the header.
+        .background(
+            isRowHovered ? Token.Fill.rowHover : .clear,
+            in: UnevenRoundedRectangle(
+                cornerRadii: RectangleCornerRadii(
+                    bottomLeading: roundsBottomCorners ? Token.Radius.box : 0,
+                    bottomTrailing: roundsBottomCorners ? Token.Radius.box : 0
+                )
+            )
+        )
+        .onHover { isRowHovered = $0 }
+        .zIndex(isRowHovered ? 2 : 0)
+        // The row itself explains every non-checkbox state: app rows open the
+        // uninstall review, terminal-managed rows show their command, and protected
+        // user data opens the same warning as its orange lock.
         .onTapGesture {
-            if !entry.isRemovalLocked { onToggle(!isSelected) }
+            if entry.kind == .appBundle, let onUninstallApplication {
+                onUninstallApplication()
+            } else if entry.manualRemoval != nil {
+                isShowingManualInfo = true
+            } else if entry.protectionReason == .userData, !hasUserDataOverride {
+                onRequestUserDataOverride()
+            } else if !entry.isRemovalLocked || hasUserDataOverride {
+                onToggle(!isSelected)
+            }
+        }
+        .contextMenu {
+            if entry.kind == .appBundle, let onUninstallApplication {
+                Button("Review Uninstall", systemImage: "trash") {
+                    onUninstallApplication()
+                }
+                Divider()
+            }
+            Button("Reveal in Finder", systemImage: "arrow.up.forward.app") {
+                NSWorkspace.shared.activateFileViewerSelecting([entry.url])
+            }
+        }
+    }
+
+    private var rowHelp: String {
+        if entry.kind == .appBundle, onUninstallApplication != nil {
+            return "Open the complete uninstall review for this application. Nothing is removed until you confirm."
+        }
+        if entry.manualRemoval != nil {
+            return "MacCleaner cannot delete this item. Click the terminal badge for the command that can."
+        }
+        switch entry.protectionReason {
+        case .running:
+            return "This item belongs to a running app. Quit the app, then scan again to make it removable."
+        case .recentUse:
+            return "Used inside your protection window (Preferences › Exclusions). You can still remove it."
+        case .userData:
+            return hasUserDataOverride
+                ? "Protected user data selected for removal. It will always move to the Trash."
+                : "Contains profiles, logins, history, or settings. Use the lock to review and select it separately."
+        case nil:
+            return "Select this item for cleanup."
+        }
+    }
+
+    private static func badgeText(for reason: FileEntry.ProtectionReason) -> String {
+        switch reason {
+        case .running:   "running"
+        case .recentUse: "recently used"
+        case .userData:  "user data"
         }
     }
 }
@@ -391,7 +472,9 @@ private extension FileEntry.Kind {
 private enum Metrics {
     static let sidePadding: CGFloat = 15
     static let gap: CGFloat = 11
-    static let checkbox: CGFloat = 15
+    /// Matches the Scanner's 28pt checkbox/action target. App rows use this slot for
+    /// the uninstall-review button without shifting the Path column.
+    static let selection: CGFloat = 28
     /// Fixed, so the kinds and sizes hold their column while the path takes the growth.
     static let kind: CGFloat = 96
     static let size: CGFloat = 82

@@ -259,8 +259,6 @@ enum Token {
         static let largeFileRow: CGFloat = 36
         static let trashRow: CGFloat = 40
         static let capacityBar: CGFloat = 13
-        static let proportionBar: CGFloat = 5
-
         /// The design's window size. Resizable; the sidebar stays fixed.
         static let windowWidth: CGFloat = 1268
         static let windowHeight: CGFloat = 734

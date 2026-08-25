@@ -18,13 +18,16 @@ struct ScannerView: View {
                 // Old Files already shows this state bare.
                 if let results = model.scanResults {
                     header
+                    if results.totalBytes > 0 {
+                        ScanCompositionSummary(results: results)
+                    }
                     GroupedBox {
                         VStack(spacing: 0) {
                             ForEach(Array(results.categories.enumerated()), id: \.element.id) { index, category in
                                 if index > 0 {
                                     Divider().foregroundStyle(Token.Fill.boxBorder)
                                 }
-                                categorySection(category, largest: largestBytes(in: results))
+                                categorySection(category)
                             }
                         }
                         // Without this the first and last rows' hover fill paints
@@ -74,13 +77,12 @@ struct ScannerView: View {
     // MARK: - Sections
 
     @ViewBuilder
-    private func categorySection(_ category: ScanCategoryResult, largest: Int64) -> some View {
+    private func categorySection(_ category: ScanCategoryResult) -> some View {
         let isExpanded = model.openCategories.contains(category.categoryID)
 
         VStack(spacing: 0) {
             CategoryRow(
                 result: category,
-                largestBytes: largest,
                 isExpanded: isExpanded,
                 selectedBytes: model.selectedBytes(in: category.categoryID),
                 onToggle: { toggle(category) }
@@ -91,7 +93,7 @@ struct ScannerView: View {
                     entries: category.entries,
                     selection: $model.scannerSelection,
                     userDataRemovalOverrides: $model.userDataRemovalOverrides,
-                    appDataRemovalOverrides: $model.appDataRemovalOverrides
+                    onUninstallApplication: { model.planAppUninstall($0.url) }
                 )
             }
         }
@@ -106,11 +108,6 @@ struct ScannerView: View {
                 model.openCategories.insert(category.categoryID)
             }
         }
-    }
-
-    /// The proportion bars are relative to the biggest category, not to the disk.
-    private func largestBytes(in results: ScanResults) -> Int64 {
-        results.categories.map(\.totalBytes).max() ?? 1
     }
 
     // MARK: - Empty state
@@ -128,5 +125,122 @@ struct ScannerView: View {
                 .disabled(model.isScanning)
         }
         .frame(maxWidth: .infinity, minHeight: 320)
+    }
+}
+
+// MARK: - Scan composition
+
+/// One honest part-to-whole view for the Scanner. The former row bars divided every
+/// category by the largest one, which made one row 100% by definition and duplicated
+/// the size column. Here every width and percentage uses the scan's actual total.
+private struct ScanCompositionSummary: View {
+    let results: ScanResults
+
+    @State private var hoveredCategory: CategoryID?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var segments: [ScanCategoryResult] {
+        results.categories.filter { $0.totalBytes > 0 }
+    }
+
+    private var totalBytes: Int64 {
+        segments.reduce(0) { $0 + $1.totalBytes }
+    }
+
+    private var hoveredSegment: ScanCategoryResult? {
+        guard let hoveredCategory else { return nil }
+        return segments.first { $0.categoryID == hoveredCategory }
+    }
+
+    /// Lift a hovered colour away from the surrounding surface in either appearance.
+    private var hoverLift: Double { colorScheme == .dark ? 0.12 : -0.10 }
+
+    var body: some View {
+        GroupedBox {
+            VStack(alignment: .leading, spacing: 11) {
+                HStack(spacing: 14) {
+                    Text("Reclaimable space")
+                        .font(.mcRowTitle)
+                        .foregroundStyle(Token.Text.primary)
+
+                    Spacer(minLength: 12)
+
+                    detail
+                }
+
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        ForEach(segments) { segment in
+                            Rectangle()
+                                .fill(Token.color(segment.categoryID.color))
+                                .brightness(
+                                    hoveredCategory == segment.categoryID ? hoverLift : 0
+                                )
+                                .frame(width: segmentWidth(segment, in: geometry.size.width))
+                                .contentShape(Rectangle())
+                                .onHover { inside in
+                                    if inside {
+                                        hoveredCategory = segment.categoryID
+                                    } else if hoveredCategory == segment.categoryID {
+                                        hoveredCategory = nil
+                                    }
+                                }
+                                .accessibilityLabel(segment.categoryID.displayName)
+                                .accessibilityValue(
+                                    "\(ByteFormatting.string(segment.totalBytes)), "
+                                    + "\(percentageText(for: segment)) of the scan"
+                                )
+                        }
+                    }
+                    .clipShape(Capsule())
+                }
+                .frame(height: Token.Size.capacityBar)
+                .background(Token.Fill.control, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+                )
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        if let segment = hoveredSegment {
+            HStack(spacing: 7) {
+                CategoryDot(color: segment.categoryID.color, size: 8)
+                Text(segment.categoryID.displayName)
+                    .font(.mcRowTitle)
+                    .foregroundStyle(Token.Text.primary)
+                Text(
+                    "\(ByteFormatting.string(segment.totalBytes)) · "
+                    + percentageText(for: segment)
+                )
+                .font(.mcRowValue)
+                .foregroundStyle(Token.Text.secondary)
+            }
+            .lineLimit(1)
+            .transition(.opacity)
+        } else {
+            Text("\(ByteFormatting.string(totalBytes)) total")
+                .font(.mcRowValue)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func segmentWidth(_ segment: ScanCategoryResult, in available: CGFloat) -> CGFloat {
+        guard totalBytes > 0 else { return 0 }
+        return available * CGFloat(Double(segment.totalBytes) / Double(totalBytes))
+    }
+
+    private func percentageText(for segment: ScanCategoryResult) -> String {
+        guard totalBytes > 0, segment.totalBytes > 0 else { return "0%" }
+        let percentage = Double(segment.totalBytes) / Double(totalBytes) * 100
+        if percentage < 1 { return "<1%" }
+        return "\(Int(percentage.rounded()))%"
     }
 }

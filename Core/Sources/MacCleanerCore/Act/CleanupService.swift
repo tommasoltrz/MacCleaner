@@ -67,17 +67,17 @@ public struct CleanupService: Sendable {
     /// - Parameter privilegedFallback: whether a permission-denied removal may be
     ///   retried with an administrator prompt. Off by default so no headless caller
     ///   (tests, the CLI) can ever raise a password dialog; the app opts in.
-    /// - Parameter keepReceipt: the sheet's "Keep a Trash receipt" checkbox. Off
+    /// - Parameter keepReceipt: the sheet's "Keep a Put Back receipt" checkbox. Off
     ///   means nothing is written to the removal log — no paths, no destinations —
     ///   and so nothing from this run can be Put Back. That is the trade the user
     ///   chose; silently logging anyway would make the checkbox a lie.
     /// - Parameter userDataRemovalOverrides: protected user-data rows the user
     ///   explicitly unlocked after seeing the destructive warning. Running apps and
     ///   tool-managed rows remain refused even if their IDs appear here.
-    /// - Parameter appDataRemovalOverrides: selected application bundles for which
-    ///   the user chose “Remove Everything”. Without the exact parent ID, cleanup
-    ///   removes the bundle and regenerable children but preserves profiles,
-    ///   preferences, containers and other non-regenerable children.
+    /// - Parameter appDataRemovalOverrides: selected application bundles with an
+    ///   explicit authorization to include protected related data. Without the exact
+    ///   parent ID, cleanup removes the bundle and regenerable children but preserves
+    ///   profiles, preferences, containers and other non-regenerable children.
     public func remove(
         entries: [FileEntry],
         trashFirst: Bool,
@@ -177,6 +177,113 @@ public struct CleanupService: Sendable {
             await Self.removeWithPrivileges(
                 privileged, log: keepReceipt ? log : nil, outcome: &outcome
             )
+        }
+
+        return outcome
+    }
+
+    /// Executes a dedicated application uninstall plan.
+    ///
+    /// This path intentionally differs from aggregate cleanup in one crucial way:
+    /// the application bundle moves first. If that move fails or the administrator
+    /// prompt is cancelled, no cache, preference, profile, or helper is touched.
+    /// Once the bundle is safely in the Trash, each reviewed related item follows
+    /// independently and any survivor is reported in ``CleanupOutcome/failed``.
+    /// Every item always goes to the Trash, regardless of the global cleanup
+    /// preference.
+    public func uninstall(
+        _ plan: AppUninstallPlan,
+        privilegedFallback: Bool = false,
+        keepReceipt: Bool = true
+    ) async throws -> CleanupOutcome {
+        var outcome = CleanupOutcome()
+        guard plan.managedPackage == nil else {
+            // Trashing only a cask's app artifact leaves Homebrew's package receipt
+            // inconsistent. A future delegated workflow must remove both together;
+            // this direct filesystem path deliberately refuses to split them.
+            outcome.failed = [plan.applicationURL.path]
+            return outcome
+        }
+        var failedSubtrees = Set<String>()
+        let removalOrder = plan.removalOrder()
+        guard !removalOrder.isEmpty else { return outcome }
+
+        func recordFailure(_ item: AppUninstallPlan.Item) {
+            failedSubtrees.insert(item.url.path)
+            if !outcome.failed.contains(item.url.path) {
+                outcome.failed.append(item.url.path)
+            }
+        }
+
+        // Re-run the ownership oracle immediately before removal. A second copy may
+        // have been installed while the review sheet was open; its shared data then
+        // stops being ours to remove, even though it was valid at scan time.
+        let exclusiveBundleIdentifiers = AppUninstallPlanner.exclusiveBundleIdentifiers(
+            candidates: plan.candidateBundleIdentifiers,
+            selectedApplication: plan.applicationURL,
+            applicationRoots: plan.applicationRoots
+        )
+
+        for (index, item) in removalOrder.enumerated() {
+            try Task.checkCancellation()
+            // A planned containing folder must not smuggle through a descendant
+            // that just failed its own identity, ownership, or permission check.
+            // Leave the whole subtree where it is and report both review rows.
+            if failedSubtrees.contains(where: {
+                $0.hasPrefix(item.url.path + "/")
+            }) {
+                recordFailure(item)
+                continue
+            }
+            guard AppUninstallPlanner.removalIsStillSafe(
+                item, in: plan, exclusiveBundleIdentifiers: exclusiveBundleIdentifiers
+            ) else {
+                recordFailure(item)
+                // The bundle is the transaction gate. Nothing related moves when
+                // the app itself no longer matches the reviewed plan.
+                if index == 0 { return outcome }
+                continue
+            }
+
+            let measured = try await measurer.measure(item.url).allocatedBytes
+            do {
+                let landed = try Self.discard(item.url, disposition: .trashed)
+                outcome.freedBytes += measured
+                outcome.removedCount += 1
+                outcome.trashedCount += 1
+                if keepReceipt {
+                    try? log.append([RemovalRecord(
+                        timestamp: Date(),
+                        originalPath: item.url.path,
+                        bytes: measured,
+                        disposition: .trashed,
+                        trashedPath: landed?.path,
+                        trashedIdentity: landed.flatMap(FileIdentity.of)
+                    )])
+                }
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // Finder or an updater removed it after planning. For the app bundle
+                // this still opens the gate: the requested state has been reached.
+                _ = error
+                continue
+            } catch {
+                guard privilegedFallback, Self.isPermissionDenied(error) else {
+                    recordFailure(item)
+                    if index == 0 { return outcome }
+                    continue
+                }
+
+                var privilegedEntry = item.fileEntry
+                privilegedEntry.allocatedBytes = measured
+                let removedBefore = outcome.removedCount
+                await Self.removeWithPrivileges(
+                    [privilegedEntry], log: keepReceipt ? log : nil, outcome: &outcome
+                )
+                if outcome.removedCount == removedBefore {
+                    recordFailure(item)
+                    if index == 0 { return outcome }
+                }
+            }
         }
 
         return outcome
@@ -296,7 +403,7 @@ public struct CleanupService: Sendable {
     ///
     /// Non-application aggregates retain their original all-children semantics. An
     /// application is different: its non-regenerable children are user state, so
-    /// they survive unless the user chose “Remove Everything” for that exact app.
+    /// they survive unless that exact app has explicit complete-removal authorization.
     /// A running or tool-managed child is never smuggled through by the parent.
     public static func removalTargets(
         for entry: FileEntry,

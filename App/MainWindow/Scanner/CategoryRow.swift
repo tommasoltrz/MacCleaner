@@ -3,9 +3,10 @@ import MacCleanerCore
 
 /// One category's collapsed row in the Scanner outline.
 ///
-/// Left to right: disclosure triangle, category dot, title block, proportion bar,
-/// value block. The whole row is one hit target — the design wants clicking anywhere
-/// to expand, the way an outline view row behaves, not just the triangle.
+/// Left to right: disclosure triangle, category dot, title block, value block. The
+/// whole row is one hit target — the design wants clicking anywhere to expand, the
+/// way an outline view row behaves, not just the triangle. Category proportions live
+/// in the Scanner's single composition bar rather than being renormalised per row.
 ///
 /// Half the Scanner screen is rows that cannot be acted on, and the design is explicit
 /// about how they read: the *whole row* drops to 50% opacity rather than the text being
@@ -13,12 +14,9 @@ import MacCleanerCore
 /// dimmed row with a triangle still on it would promise something it cannot do.
 struct CategoryRow: View {
     let result: ScanCategoryResult
-    let largestBytes: Int64
     let isExpanded: Bool
     let selectedBytes: Int64
     let onToggle: () -> Void
-
-    @State private var isBarHovered = false
 
     private enum Metrics {
         static let gap: CGFloat = 11
@@ -28,7 +26,6 @@ struct CategoryRow: View {
         /// column whether or not a category can be opened.
         static let triangleSlot: CGFloat = 11
         static let badgeGap: CGFloat = 7
-        static let barWidth: CGFloat = 120
         /// Fixed, so the totals form a right-aligned column; the title block takes all
         /// the growth when the window widens.
         static let valueWidth: CGFloat = 96
@@ -61,34 +58,6 @@ struct CategoryRow: View {
             disclosureTriangle
             CategoryDot(color: category.color)
             titleBlock
-                // The bar's hover chip sits in the title block's spare trailing
-                // stretch — anchored to the layout, not the cursor, and bounded so
-                // it cannot run over the value column to the bar's right. (An
-                // alignment-guide offset off the bar itself rendered at the default
-                // overlay position and did exactly that.)
-                .overlay(alignment: .trailing) {
-                    if isBarHovered {
-                        HoverTip(
-                            color: category.color,
-                            primary: ByteFormatting.string(result.totalBytes),
-                            secondary: proportionSecondary
-                        )
-                        .padding(.trailing, 4)
-                        .transition(.opacity)
-                    }
-                }
-
-            if isActionable {
-                ProportionBar(
-                    fraction: fractionOfLargest,
-                    color: category.color,
-                    width: Metrics.barWidth
-                )
-                // Answers "what is this bar?" without a legend: it ranks the
-                // category against the biggest one — same immediate chip as the
-                // Dashboard's capacity bar.
-                .onHover { isBarHovered = $0 }
-            }
 
             valueBlock
         }
@@ -138,13 +107,6 @@ struct CategoryRow: View {
         }
         // The flexible column: everything else in the row is a fixed width.
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// The chip's second clause, e.g. "23% of the largest category".
-    private var proportionSecondary: String? {
-        guard largestBytes > 0 else { return nil }
-        let percent = Int((Double(result.totalBytes) / Double(largestBytes) * 100).rounded())
-        return percent >= 100 ? "the largest category" : "\(percent)% of the largest category"
     }
 
     @ViewBuilder
@@ -237,15 +199,6 @@ struct CategoryRow: View {
         }
     }
 
-    // MARK: - Derived values
-
-    /// Bars are relative to the biggest category, not to the disk — the row is
-    /// answering "which of these is worth opening first".
-    private var fractionOfLargest: Double {
-        guard largestBytes > 0 else { return 0 }
-        return Double(result.totalBytes) / Double(largestBytes)
-    }
-
     /// One spoken sentence per row. VoiceOver reading "Docker, 0 bytes" would repeat
     /// the same lie the em dash exists to avoid.
     private var accessibilityDescription: String {
@@ -328,7 +281,6 @@ struct CategoryRow: View {
                 if index > 0 { Divider().foregroundStyle(Token.Fill.boxBorder) }
                 CategoryRow(
                     result: row.0,
-                    largestBytes: largest,
                     isExpanded: index == 0,
                     selectedBytes: row.1,
                     onToggle: {}

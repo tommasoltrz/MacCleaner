@@ -68,25 +68,6 @@ struct Badge: View {
     }
 }
 
-/// Horizontal bar showing one category's share of the largest category.
-struct ProportionBar: View {
-    let fraction: Double
-    let color: ColorToken
-    var width: CGFloat = 120
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Token.Fill.control)
-                Capsule()
-                    .fill(Token.color(color))
-                    .frame(width: max(2, geometry.size.width * min(max(fraction, 0), 1)))
-            }
-        }
-        .frame(width: width, height: Token.Size.proportionBar)
-    }
-}
-
 // MARK: - Button styles
 
 /// A sidebar row: the label, and nothing else.

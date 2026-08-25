@@ -7,7 +7,8 @@ public enum ProcessError: Error, Equatable {
 }
 
 /// Runs external tools. The only executables MacCleaner shells out to are
-/// `diskutil` and `docker` — everything else uses Foundation APIs.
+/// `diskutil`, `docker`, and a read-only Homebrew ownership query — everything
+/// else uses Foundation APIs.
 ///
 /// Executable paths are absolute and explicit. A GUI app does not inherit the
 /// shell's `PATH`, so resolving by name works in a terminal and then fails once the

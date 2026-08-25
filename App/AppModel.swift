@@ -84,20 +84,24 @@ final class AppModel {
     }
 
     enum View: String, CaseIterable, Identifiable {
-        case dashboard, scanner, large, trash, photos
+        case dashboard, scanner, uninstaller, large, trash, photos
         // Reached from the Dashboard tiles, not the sidebar. Back returns.
         case safeToRemove, needsReview
         var id: String { rawValue }
 
         /// The sidebar's rows. The tile views stay out: they are drill-downs from
         /// the Dashboard, and listing them as siblings would make four views six.
-        /// Trash sits last: it is where things end up, not a place to work.
-        static var sidebarCases: [View] { [.dashboard, .scanner, .large, .photos, .trash] }
+        /// Destructive workflows sit at the end: review an application's complete
+        /// uninstall first, then the Trash where removed items ultimately land.
+        static var sidebarCases: [View] {
+            [.dashboard, .scanner, .large, .photos, .uninstaller, .trash]
+        }
 
         var title: String {
             switch self {
             case .dashboard:    "Dashboard"
             case .scanner:      "Scanner"
+            case .uninstaller:  "App Uninstaller"
             case .large:        "Large & Old Files"
             case .trash:        "Trash"
             case .photos:       "Photo Duplicates"
@@ -111,6 +115,7 @@ final class AppModel {
             switch self {
             case .dashboard:    "speedometer"
             case .scanner:      "magnifyingglass"
+            case .uninstaller:  "trash.square"
             case .large:        "folder"
             case .trash:        "trash"
             case .photos:       "photo.on.rectangle.angled"
@@ -121,8 +126,36 @@ final class AppModel {
     }
 
     enum Sheet: String, Identifiable {
-        case cleanUp, emptyTrash, deletePhotos
+        case cleanUp, emptyTrash, deletePhotos, uninstallApp
         var id: String { rawValue }
+    }
+
+    /// The three native tabs in Large & Old Files. This belongs to the window model
+    /// because the segmented picker lives in the window toolbar while the filtered
+    /// table it controls lives in the detail view.
+    enum LargeFilesFilter: String, CaseIterable, Identifiable {
+        case overOneGB, unopenedSixMonths, duplicates
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .overOneGB:         "Over 1 GB"
+            case .unopenedSixMonths: "Unopened 6 mo"
+            case .duplicates:        "Duplicates"
+            }
+        }
+
+        var emptyMessage: String {
+            switch self {
+            case .overOneGB:
+                "Nothing the last scan measured reaches 1 GB."
+            case .unopenedSixMonths:
+                "Everything the last scan measured has been opened in the past six months."
+            case .duplicates:
+                "No two measured files share an allocated size above 10 MB."
+            }
+        }
     }
 
     // MARK: - Navigation
@@ -174,11 +207,19 @@ final class AppModel {
         UserDefaults.standard.object(forKey: "lastScanFinishedAt") as? Date
 
     var isLoadingBreakdown = false
+    /// The first Dashboard task has finished its complete refresh. Cached figures
+    /// may be restored before then, but they are only inputs to that refresh — not a
+    /// finished state to flash on screen for a moment before measurement begins.
+    private(set) var hasCompletedInitialDashboardLoad = false
+    var isDashboardLoading: Bool {
+        !hasCompletedInitialDashboardLoad || isLoadingBreakdown
+    }
     var isScanning = false
     var scanProgress = 0
 
     var snapshotsExpanded = false
     var openCategories: Set<CategoryID> = [.documentsAndFiles]
+    var largeFilesFilter: LargeFilesFilter = .overOneGB
 
     // MARK: - Selection
     //
@@ -190,9 +231,6 @@ final class AppModel {
     /// Kept separate from the selection itself so neither a stale ID nor a bulk
     /// selection can silently acquire the override.
     var userDataRemovalOverrides: Set<FileEntry.ID> = []
-    /// App bundles for which the user explicitly chose “Remove Everything”. A
-    /// selected app absent from this set keeps its profiles and settings.
-    var appDataRemovalOverrides: Set<FileEntry.ID> = []
     var activeSheet: Sheet?
 
     var statusMessage: String = "Ready to scan"
@@ -209,7 +247,12 @@ final class AppModel {
 
     var selectedEntries: [FileEntry] {
         let selected = scannerSelection.union(largeFilesSelection)
-        return allEntries.filter { selected.contains($0.id) }
+        // Application bundles use the dedicated uninstaller. Their disclosed
+        // children remain ordinary cleanup rows, but a stale app ID can never
+        // reach the generic cleanup service.
+        return allEntries.filter {
+            selected.contains($0.id) && $0.kind != .appBundle
+        }
     }
 
     var selectedBytes: Int64 {
@@ -219,7 +262,7 @@ final class AppModel {
     private func plannedTargets(for entry: FileEntry) -> [FileEntry] {
         CleanupService.removalTargets(
             for: entry,
-            removeProtectedAppData: appDataRemovalOverrides.contains(entry.id)
+            removeProtectedAppData: false
         )
     }
 
@@ -227,7 +270,7 @@ final class AppModel {
         plannedTargets(for: entry).reduce(0) { $0 + $1.allocatedBytes }
     }
 
-    var hasSelection: Bool { !scannerSelection.isEmpty || !largeFilesSelection.isEmpty }
+    var hasSelection: Bool { !selectedEntries.isEmpty }
 
     /// `Clean Up 4.2 GB` when something is selected, plain `Clean Up` otherwise.
     var cleanUpLabel: String {
@@ -298,7 +341,6 @@ final class AppModel {
             scannerSelection.subtract(vanished)
             largeFilesSelection.subtract(vanished)
             userDataRemovalOverrides.subtract(vanished)
-            appDataRemovalOverrides.subtract(vanished)
         }
     }
 
@@ -327,8 +369,14 @@ final class AppModel {
     /// into a total that would then fail at cleanup.
     private var selectableInCurrentView: [FileEntry] {
         switch view {
-        case .safeToRemove: tileEntries(safeToRemove: true).filter { !$0.isRemovalLocked }
-        case .needsReview:  tileEntries(safeToRemove: false).filter { !$0.isRemovalLocked }
+        case .safeToRemove:
+            tileEntries(safeToRemove: true).filter {
+                !$0.isRemovalLocked && $0.kind != .appBundle
+            }
+        case .needsReview:
+            tileEntries(safeToRemove: false).filter {
+                !$0.isRemovalLocked && $0.kind != .appBundle
+            }
         default:            []
         }
     }
@@ -362,12 +410,13 @@ final class AppModel {
         else { return }
         safeSelectionSeededAt = finishedAt
 
-        let selectable = tileEntries(safeToRemove: true).filter { !$0.isRemovalLocked }
+        let selectable = tileEntries(safeToRemove: true).filter {
+            !$0.isRemovalLocked && $0.kind != .appBundle
+        }
         guard !selectable.isEmpty else { return }
         scannerSelection.formUnion(selectable.map(\.id))
-        // Parent selection replaces individual child selection. The cleanup policy
-        // then decides which children follow: caches by default, protected data only
-        // with the app-level destructive override.
+        // Parent selection replaces individual child selection so cleanup never
+        // counts the same bytes twice.
         let childIDs = Set(selectable.flatMap(\.children).map(\.id))
         scannerSelection.subtract(childIDs)
         userDataRemovalOverrides.subtract(childIDs)
@@ -390,7 +439,168 @@ final class AppModel {
         scannerSelection.removeAll()
         largeFilesSelection.removeAll()
         userDataRemovalOverrides.removeAll()
-        appDataRemovalOverrides.removeAll()
+    }
+
+    // MARK: - App uninstaller
+
+    private let appUninstallPlanner = AppUninstallPlanner()
+    @ObservationIgnored private var appUninstallTask: Task<Void, Never>?
+    @ObservationIgnored private var appUninstallPlanningID: UUID?
+
+    var appUninstallPlan: AppUninstallPlan?
+    var isPlanningAppUninstall = false
+    var isUninstallingApp = false
+    var appUninstallError: String?
+    var appUninstallOutcome: CleanupOutcome?
+    var lastUninstalledApplicationName: String?
+
+    struct PendingAppUninstall {
+        let plan: AppUninstallPlan
+
+        var itemCount: Int { plan.items.count }
+        var totalBytes: Int64 { plan.totalBytes }
+        var protectedDataCount: Int { plan.protectedItems.count }
+    }
+
+    private(set) var pendingAppUninstall: PendingAppUninstall?
+
+    /// Opens the dedicated review for an installed application. Called by the
+    /// Uninstaller's picker/drop target and by “Uninstall App…” on scanner rows.
+    func planAppUninstall(_ applicationURL: URL) {
+        appUninstallTask?.cancel()
+        appUninstallPlan = nil
+        appUninstallOutcome = nil
+        lastUninstalledApplicationName = nil
+        appUninstallError = nil
+        isPlanningAppUninstall = true
+        view = .uninstaller
+        let planningID = UUID()
+        appUninstallPlanningID = planningID
+
+        let settings = settings
+        let context = ScanContext(
+            // Uninstall candidates must always be the paths themselves. Following a
+            // symlink would measure bytes that unlinking the candidate cannot free.
+            measurer: AllocatedSizeMeasurer(followSymlinks: false),
+            excludedPaths: settings?.excludedFolderPaths ?? [],
+            excludedPatterns: settings?.excludedPatterns ?? [],
+            protectRecentDays: 0
+        )
+        let planner = appUninstallPlanner
+        appUninstallTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.appUninstallPlanningID == planningID {
+                    self.isPlanningAppUninstall = false
+                    self.appUninstallTask = nil
+                    self.appUninstallPlanningID = nil
+                }
+            }
+            do {
+                let plan = try await planner.plan(
+                    applicationURL: applicationURL, context: context
+                )
+                try Task.checkCancellation()
+                self.appUninstallPlan = plan
+                self.statusMessage = "Found \(plan.items.count - 1) related items for "
+                    + "\(plan.applicationName)."
+            } catch is CancellationError {
+                return
+            } catch {
+                self.appUninstallError = error.localizedDescription
+                self.statusMessage = "Could not prepare that application for uninstall."
+            }
+        }
+    }
+
+    func resetAppUninstall() {
+        guard !isUninstallingApp else { return }
+        appUninstallTask?.cancel()
+        appUninstallTask = nil
+        appUninstallPlanningID = nil
+        appUninstallPlan = nil
+        appUninstallError = nil
+        appUninstallOutcome = nil
+        lastUninstalledApplicationName = nil
+        pendingAppUninstall = nil
+        isPlanningAppUninstall = false
+    }
+
+    func requestAppUninstall() {
+        guard let plan = appUninstallPlan, plan.managedPackage == nil else { return }
+        pendingAppUninstall = PendingAppUninstall(plan: plan)
+        activeSheet = .uninstallApp
+    }
+
+    func cancelAppUninstall() {
+        pendingAppUninstall = nil
+        activeSheet = nil
+    }
+
+    func performAppUninstall() async {
+        guard let request = pendingAppUninstall else { return }
+        pendingAppUninstall = nil
+        activeSheet = nil
+        isUninstallingApp = true
+        appUninstallError = nil
+        defer { isUninstallingApp = false }
+
+        // Ask the selected app and every helper embedded inside its bundle to quit.
+        // Cleanup starts only after they are gone; it never force-kills a process
+        // that may still be writing settings.
+        let targetPath = request.plan.applicationURL.standardizedFileURL.path
+        func matchingRunningApplications() -> [NSRunningApplication] {
+            NSWorkspace.shared.runningApplications.filter { application in
+                guard let url = application.bundleURL?.standardizedFileURL else { return false }
+                return url.path == targetPath || url.path.hasPrefix(targetPath + "/")
+            }
+        }
+        for application in matchingRunningApplications() { application.terminate() }
+        for _ in 0..<30 where !matchingRunningApplications().isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if !matchingRunningApplications().isEmpty {
+            appUninstallError = "\(request.plan.applicationName) is still running. "
+                + "Quit it and try again; no files were removed."
+            statusMessage = "Uninstall stopped because the application did not quit."
+            return
+        }
+
+        let outcome: CleanupOutcome
+        do {
+            outcome = try await cleanupService.uninstall(
+                request.plan,
+                privilegedFallback: true,
+                keepReceipt: keepReceipt
+            )
+        } catch {
+            appUninstallError = "The uninstall was interrupted. Review the application and try again."
+            statusMessage = "Application uninstall was interrupted."
+            return
+        }
+
+        appUninstallOutcome = outcome
+        lastUninstalledApplicationName = request.plan.applicationName
+        appUninstallPlan = nil
+
+        let applicationFailed = outcome.failed.contains(request.plan.applicationURL.path)
+        if applicationFailed {
+            appUninstallError = "\(request.plan.applicationName) could not be moved to the Trash. "
+                + "No related files were removed."
+            statusMessage = "Could not uninstall \(request.plan.applicationName)."
+        } else {
+            let survivorCount = outcome.failed.count
+            statusMessage = "Uninstalled \(request.plan.applicationName) and moved "
+                + "\(ByteFormatting.string(outcome.freedBytes)) to the Trash."
+            if survivorCount > 0 {
+                let noun = survivorCount == 1 ? "item" : "items"
+                statusMessage += " \(survivorCount) related \(noun) could not be removed."
+            }
+        }
+
+        pruneVanishedEntries()
+        await measureStorage()
+        await loadTrash()
     }
 
     /// Kept on for the receipt checkbox in the clean-up sheet.
@@ -408,14 +618,13 @@ final class AppModel {
         let entries: [FileEntry]
         let trashFirst: Bool
         let userDataRemovalOverrides: Set<FileEntry.ID>
-        let appDataRemovalOverrides: Set<FileEntry.ID>
 
         var itemCount: Int { entries.count }
         var totalBytes: Int64 {
             entries.reduce(0) { total, entry in
                 total + CleanupService.removalTargets(
                     for: entry,
-                    removeProtectedAppData: appDataRemovalOverrides.contains(entry.id)
+                    removeProtectedAppData: false
                 ).reduce(0) { $0 + $1.allocatedBytes }
             }
         }
@@ -436,15 +645,6 @@ final class AppModel {
                    userDataRemovalOverrides.contains(entry.id) {
                     protectedIDs.insert(entry.id)
                 }
-                if entry.kind == .appBundle,
-                   appDataRemovalOverrides.contains(entry.id) {
-                    let targets = CleanupService.removalTargets(
-                        for: entry, removeProtectedAppData: true
-                    )
-                    protectedIDs.formUnion(targets.filter {
-                        $0.id != entry.id && !$0.isRegenerable
-                    }.map(\.id))
-                }
             }
             return protectedIDs.count
         }
@@ -463,8 +663,7 @@ final class AppModel {
             trashFirst: settings?.trashFirst ?? true,
             // Capture authorizations only for rows in this exact operation. The
             // service therefore cannot receive a broader capability than it needs.
-            userDataRemovalOverrides: userDataRemovalOverrides.intersection(selectedIDs),
-            appDataRemovalOverrides: appDataRemovalOverrides.intersection(selectedIDs)
+            userDataRemovalOverrides: userDataRemovalOverrides.intersection(selectedIDs)
         )
         guard !plan.entries.isEmpty else { return }
         pendingCleanUp = plan
@@ -507,8 +706,7 @@ final class AppModel {
             // admin prompt. Only the app opts into it; headless callers never can.
             privilegedFallback: true,
             keepReceipt: keepReceipt,
-            userDataRemovalOverrides: plan.userDataRemovalOverrides,
-            appDataRemovalOverrides: plan.appDataRemovalOverrides
+            userDataRemovalOverrides: plan.userDataRemovalOverrides
         )) ?? CleanupOutcome(freedBytes: 0, removedCount: 0, failed: entries.map(\.id))
 
         deselectAll()
@@ -543,7 +741,9 @@ final class AppModel {
         var message: String
         if outcome.deletedCount == 0 {
             message = "Moved \(ByteFormatting.string(outcome.freedBytes)) to the Trash."
-            if outcome.trashedCount > 0 && keptReceipt { message += " You can undo for 30 days." }
+            if outcome.trashedCount > 0 && keptReceipt {
+                message += " Put Back is available while those items remain in the Trash."
+            }
         } else if outcome.trashedCount == 0 {
             message = "Deleted \(ByteFormatting.string(outcome.freedBytes)) permanently."
         } else {
@@ -639,14 +839,20 @@ final class AppModel {
         return Date().timeIntervalSince(measuredAt) > BreakdownCache.freshnessWindow
     }
 
-    /// Loads the Dashboard: cached figures paint instantly, a fresh measurement
-    /// always follows.
+    /// Loads the Dashboard: cached figures seed its layout while the skeleton stays
+    /// visible, and a fresh measurement always follows. Only the completed refresh
+    /// is presented as real data, avoiding a stale-bar → skeleton flash at launch.
     ///
     /// The cache is a first frame, not a substitute for measuring — yesterday's
     /// breakdown on today's Dashboard reads as a bug. Re-measuring on every launch
     /// used to mean a TCC prompt on every launch, but the build is signed with a
     /// stable identity now, so the grant survives and the walk is silent.
     func loadDashboard() async {
+        // A recreated main window runs this task again. Treat that refresh like the
+        // first one too, rather than briefly presenting cached values as final.
+        hasCompletedInitialDashboardLoad = false
+        defer { hasCompletedInitialDashboardLoad = true }
+
         if let cached = BreakdownCache.load() {
             volume = cached.volume
             breakdown = cached.breakdown
@@ -691,11 +897,10 @@ final class AppModel {
         // An override belongs to one reviewed result set. Carrying it into a fresh
         // scan would turn a newly discovered row into an authorized deletion merely
         // because it reused the same path.
-        let destructiveOverrides = userDataRemovalOverrides.union(appDataRemovalOverrides)
+        let destructiveOverrides = userDataRemovalOverrides
         scannerSelection.subtract(destructiveOverrides)
         largeFilesSelection.subtract(destructiveOverrides)
         userDataRemovalOverrides.removeAll()
-        appDataRemovalOverrides.removeAll()
         isScanning = true
         scanProgress = 0
         if !automatic { view = .scanner }
