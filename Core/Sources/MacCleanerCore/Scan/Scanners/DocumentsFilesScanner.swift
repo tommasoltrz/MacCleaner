@@ -20,7 +20,12 @@ public struct DocumentsFilesScanner: CategoryScanner {
 
     public let id: CategoryID = .documentsAndFiles
 
-    public init() {}
+    /// Injectable so a test can lay out a home of its own.
+    private let home: URL
+
+    public init(home: URL = URL(fileURLWithPath: NSHomeDirectory())) {
+        self.home = home
+    }
 
     // MARK: - Roots
 
@@ -61,6 +66,29 @@ public struct DocumentsFilesScanner: CategoryScanner {
     /// (`Lightroom Previews.lrdata`).
     private static let regenerableDirectoryExtensions: Set<String> = ["lrdata", "lrprev"]
 
+    /// Apple's own media libraries, which are never offered.
+    ///
+    /// `~/Pictures/Photos Library.photoslibrary` *is* the user's photographs, and
+    /// the Music and TV folders are what those apps manage. Removing one from here
+    /// is not cleanup, it is data loss with a friendly checkbox — and each app has
+    /// its own way to reclaim space (Optimize Mac Storage, remove downloads). The
+    /// recency badge used to keep these out by accident, since a library is touched
+    /// constantly; now that recency is information rather than a filter, the rule
+    /// has to be explicit.
+    private static let mediaLibraryExtensions: Set<String> = [
+        "photoslibrary", "aplibrary", "migratedphotolibrary", "musiclibrary", "tvlibrary",
+    ]
+    private static let mediaLibraryPaths: Set<String> = [
+        "Music/Music", "Music/iTunes", "Movies/TV",
+    ]
+
+    static func isMediaLibrary(_ url: URL, home: URL) -> Bool {
+        if mediaLibraryExtensions.contains(url.pathExtension.lowercased()) { return true }
+        let relative = url.standardizedFileURL.path
+            .dropFirst(home.standardizedFileURL.path.count + 1)
+        return mediaLibraryPaths.contains(String(relative))
+    }
+
     // MARK: - Thresholds
 
     /// `MIN_ITEM_BYTES`. The original's comment claims this is the floor for all
@@ -95,8 +123,6 @@ public struct DocumentsFilesScanner: CategoryScanner {
     // MARK: - Scan
 
     public func scan(context: ScanContext) async throws -> ScanCategoryResult {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-
         var entries: [FileEntry] = []
         var unreadableCount = 0
         var presentRoots = 0
@@ -124,24 +150,55 @@ public struct DocumentsFilesScanner: CategoryScanner {
             for candidate in listing.candidates {
                 try Task.checkCancellation()
 
+                // Recency is a badge, not a filter — see `ScanContext.protectRecentDays`.
+                // This loop used to `continue` on a recent item, which hid the
+                // largest folder on the disk because it had been built that morning.
                 let lastOpened = lastOpenedDate(for: candidate.url)
-                guard !context.isExcluded(candidate.url, lastOpened: lastOpened) else { continue }
+                guard !context.isExcluded(candidate.url) else { continue }
+                guard !Self.isMediaLibrary(candidate.url, home: home) else { continue }
 
                 let measured = try await measure(candidate, context: context)
                 unreadableCount += measured.unreadableCount
                 // See `SizeMeasurement.containsProtectedPattern`.
                 guard !measured.containsProtectedPattern else { continue }
 
+                // Keep dependency stores under their project. The parent shows its
+                // complete size. The child lets the user remove dependencies while
+                // the source stays in place.
+                let dependencyChildren = measured.carved.compactMap { carved -> FileEntry? in
+                    guard !carved.root.kind.isXcodeOutput,
+                          !carved.measurement.containsProtectedPattern
+                    else { return nil }
+                    return FileEntry(
+                        url: carved.root.url,
+                        parentDisplay: FileEntry.abbreviate(
+                            carved.root.url.deletingLastPathComponent().path
+                        ) + " · " + carved.root.kind.label,
+                        kind: .cache,
+                        allocatedBytes: carved.measurement.allocatedBytes,
+                        lastOpened: lastOpenedDate(for: carved.root.url),
+                        isRegenerable: true,
+                        childCount: (try? FileManager.default.contentsOfDirectory(
+                            atPath: carved.root.url.path
+                        ))?.count
+                    )
+                }
+
                 let minimum = candidate.isDirectory
                     ? Self.minimumFolderBytes
                     : Self.minimumFileBytes
-                guard measured.bytes >= minimum else { continue }
+                let completeBytes = measured.bytes + dependencyChildren.reduce(0) {
+                    $0 + $1.allocatedBytes
+                }
+                guard completeBytes >= minimum else { continue }
 
                 entries.append(Self.entry(
                     for: candidate,
                     bytes: measured.bytes,
                     lastOpened: lastOpened,
-                    childCount: measured.childCount
+                    isRecent: context.isRecencyProtected(lastOpened),
+                    childCount: measured.childCount,
+                    children: dependencyChildren
                 ))
             }
         }
@@ -157,9 +214,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
         }
 
         let sorted = Self.sortedBySize(entries)
-        // Every entry is a disjoint top-level item, so the sum is exactly what
-        // removing all of them would free.
-        let totalBytes = sorted.reduce(Int64(0)) { $0 + $1.allocatedBytes }
+        // Each parent owns its disclosed dependency children. Display bytes include
+        // each child once and match the complete removal plan.
+        let totalBytes = sorted.reduce(Int64(0)) { $0 + $1.displayBytes }
 
         return ScanCategoryResult(
             categoryID: id,
@@ -180,18 +237,23 @@ public struct DocumentsFilesScanner: CategoryScanner {
         /// See `SizeMeasurement.containsProtectedPattern`. A candidate carrying
         /// this is never emitted: the row would offer to remove a vault with it.
         var containsProtectedPattern = false
+        /// Build output and dependency stores found inside a project folder and
+        /// subtracted from `bytes`. Dependency stores become disclosed children.
+        /// Xcode output is listed by `XcodeScanner`.
+        var carved: [Carved] = []
+    }
+
+    private struct Carved {
+        let root: BuildOutputDetector.Root
+        let measurement: SizeMeasurement
     }
 
     /// Sizes one top-level item.
     ///
-    /// The original's `scanChildren` also returned one level of nested entries, which
-    /// this port deliberately drops — do not reinstate it. `FileEntry.children` means
-    /// "further files removed *alongside* this one", the leftovers `ApplicationsScanner`
-    /// attaches to an app bundle, and `totalBytesIncludingChildren` adds them to the
-    /// parent on exactly that basis. Contained children would be counted twice by the
-    /// same accessor, and a removal total that overstates what deleting frees is the
-    /// class of bug this rewrite exists to end. The design agrees: file rows are
-    /// leaves, with an empty slot where a disclosure triangle would sit.
+    /// The original's `scanChildren` returned ordinary nested files. This port does
+    /// not restore that expansion. It attaches only recognized dependency stores.
+    /// Their bytes leave the parent remainder before they become children. Thus,
+    /// removal totals count each byte once.
     private func measure(_ candidate: Candidate, context: ScanContext) async throws -> Measured {
         guard candidate.isDirectory else {
             // A plain file has no subtree, so the "one traversal, not N" rule that
@@ -245,6 +307,26 @@ public struct DocumentsFilesScanner: CategoryScanner {
             result.containsProtectedPattern =
                 result.containsProtectedPattern || measurement.containsProtectedPattern
         }
+
+        // Build output and dependency stores inside a project are not the
+        // project. Each becomes a row of its own — Xcode output under the Xcode
+        // category, `node_modules` and its kind right here — so the bytes leave
+        // this row: a `Renewals` row that still counted its 11 GB `build` folder
+        // would offer the same space twice, and offer it as documents. The project
+        // keeps its own size — sources, assets, whatever the user actually made.
+        // An excluded root is neither carved nor listed: the user said hands off,
+        // and its bytes stay where they are, inside the project.
+        for output in BuildOutputDetector.roots(under: candidate.url)
+        where !context.isExcluded(output.url) {
+            try Task.checkCancellation()
+            let carved = try await context.measurer.measure(output.url)
+            if !output.kind.isXcodeOutput,
+               carved.allocatedBytes < Self.minimumFolderBytes {
+                continue
+            }
+            result.bytes = max(0, result.bytes - carved.allocatedBytes)
+            result.carved.append(Carved(root: output, measurement: carved))
+        }
         return result
     }
 
@@ -259,7 +341,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
         for candidate: Candidate,
         bytes: Int64,
         lastOpened: Date?,
-        childCount: Int?
+        isRecent: Bool,
+        childCount: Int?,
+        children: [FileEntry]
     ) -> FileEntry {
         let isRegenerable = candidate.isDirectory && Self.isRegenerable(candidate.url)
         return FileEntry(
@@ -268,7 +352,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
             allocatedBytes: bytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
-            childCount: childCount
+            protectionReason: isRecent ? .recentUse : nil,
+            childCount: childCount,
+            children: children
         )
     }
 
@@ -278,7 +364,8 @@ public struct DocumentsFilesScanner: CategoryScanner {
         // but a disk image to the user.
         if diskImageExtensions.contains(ext) { return .diskImage }
         if candidate.isDirectory {
-            if ext == "app" { return .appBundle }
+            // A bundle here is a download, not an installation — see `Kind.downloadedApp`.
+            if ext == "app" { return .downloadedApp }
             // `.cache` is the design's purple folder icon, used for anything
             // regenerable rather than only for literal cache directories.
             return isRegenerable ? .cache : .folder

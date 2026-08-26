@@ -160,7 +160,8 @@ final class SettingsStore {
         /// it would mostly render as an unavailable row.
         static func categoryEnabled(_ category: CategoryID) -> Bool {
             switch category {
-            case .documentsAndFiles, .applications, .systemCaches, .packageManagers, .xcode:
+            case .documentsAndFiles, .applications, .applicationLeftovers,
+                    .systemCaches, .packageManagers, .xcode:
                 true
             case .hiddenSystemData, .docker:
                 false
@@ -501,6 +502,20 @@ enum FullDiskAccess {
     static func openSystemSettings() {
         guard let url = URL(
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Other Application Data Access
+
+/// Opens the privacy list for access to protected files and folders.
+/// macOS requests this permission when MacCleaner opens another app's container.
+enum AppDataAccess {
+    @MainActor
+    static func openSystemSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
         ) else { return }
         NSWorkspace.shared.open(url)
     }

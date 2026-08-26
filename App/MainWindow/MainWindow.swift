@@ -19,6 +19,7 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
         } detail: {
             detail
+                .disabled(model.isCleaningUp)
                 .navigationTitle(model.view.title)
                 .toolbar { toolbarContent }
         }
@@ -27,6 +28,20 @@ struct MainWindow: View {
         // in Finder, doing things this snapshot cannot know about.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { model.pruneVanishedEntries() }
+        }
+        .alert(
+            "Allow Access to Other App Data",
+            isPresented: $model.isShowingAppDataAccessAlert
+        ) {
+            Button("Open System Settings") {
+                AppDataAccess.openSystemSettings()
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text(
+                "MacCleaner could not move files from another app's container. "
+                    + "Allow access to other application data. Then try again."
+            )
         }
     }
 
@@ -40,8 +55,6 @@ struct MainWindow: View {
                 ScannerView(model: model)
             case .uninstaller:
                 AppUninstallerView(model: model)
-            case .large:
-                LargeFilesView(model: model)
             case .trash:
                 TrashView(model: model)
             case .photos:
@@ -101,7 +114,8 @@ struct MainWindow: View {
                             ?? "this application",
                         itemCount: model.pendingAppUninstall?.itemCount ?? 0,
                         totalBytes: model.pendingAppUninstall?.totalBytes ?? 0,
-                        protectedDataCount: model.pendingAppUninstall?.protectedDataCount ?? 0
+                        protectedDataCount: model.pendingAppUninstall?.protectedDataCount ?? 0,
+                        applicationOnly: model.pendingAppUninstall?.isApplicationOnly ?? false
                     ),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performAppUninstall() } },
@@ -129,29 +143,36 @@ struct MainWindow: View {
             .buttonStyle(SecondaryButtonStyle())
             .disabled(model.isDashboardLoading)
 
-        case .scanner, .large, .safeToRemove, .needsReview:
+        case .scanner, .safeToRemove, .needsReview:
             // The tile drill-downs promise a sweep — "safe to remove" especially —
             // and a sweep should not mean ticking every row by hand. It sits beside
             // Deselect All rather than up in the header, where the two halves of
-            // one decision were a window apart. The Scanner and Large & Old Files
-            // are browsing views with their own per-category controls, so they keep
-            // Deselect All alone.
+            // one decision were a window apart. The Scanner is a browsing view with
+            // per-category controls, so it keeps Deselect All alone.
             if model.view == .safeToRemove || model.view == .needsReview {
                 Button("Select All") { model.selectAllInCurrentView() }
                     .buttonStyle(SecondaryButtonStyle())
-                    .disabled(!model.canSelectAllInCurrentView)
+                    .disabled(!model.canSelectAllInCurrentView || model.isCleaningUp)
             }
 
             Button("Deselect All") { model.deselectAll() }
                 .buttonStyle(SecondaryButtonStyle())
-                .disabled(!model.hasSelection)
+                .disabled(!model.hasSelection || model.isCleaningUp)
 
-            Button(model.cleanUpLabel) { model.requestCleanUp() }
+            Button { model.requestCleanUp() } label: {
+                HStack(spacing: 7) {
+                    if model.isCleaningUp {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(model.isCleaningUp ? "Moving to Trash…" : model.cleanUpLabel)
+                }
+            }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 // Nothing selected means nothing to confirm; the design renders the
                 // button inert rather than hiding it, so its place stays predictable.
-                .disabled(!model.hasSelection)
+                .disabled(!model.hasSelection || model.isCleaningUp)
         case .photos:
             Button("Select All") { model.selectAllRemovablePhotos() }
                 .buttonStyle(SecondaryButtonStyle())
@@ -187,8 +208,6 @@ struct MainWindow: View {
                 // the Trash is loading or empty, but do not open an empty review.
                 .disabled((model.trashSummary?.itemCount ?? 0) == 0)
 
-        default:
-            EmptyView()
         }
     }
 
@@ -245,30 +264,11 @@ struct MainWindow: View {
                     Color.clear.frame(width: 8, height: 1)
                 }
             }
-        } else if model.view == .large, model.scanResults != nil {
-            // On macOS 26 a segmented picker receives the native floating glass
-            // capsule when it lives in a toolbar. The same control in page content
-            // is the rectangular segmented slab this view used to show.
-            ToolbarItem(placement: .principal) {
-                Picker("Filter", selection: $model.largeFilesFilter) {
-                    ForEach(AppModel.LargeFilesFilter.allCases) { option in
-                        Text(option.title).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .help("Choose which large or old files to show")
-                .accessibilityLabel("Large and old files filter")
-            }
         }
 
         ToolbarItem(placement: .primaryAction) {
-            // The button is the whole toolbar item. It used to sit between two
-            // clear 14pt spacers for inset, but the toolbar absorbed those into
-            // the item's glass capsule — a capsule wider than the button, whose
-            // hover highlight then lit only the inner part. The inset the spacers
-            // provided comes from the wider label padding below instead, so the
-            // capsule, the hover region and the button are one and the same.
+            // The button supplies the Liquid Glass surface. Hide the toolbar
+            // item's shared background so a second capsule does not appear.
             Button {
                 model.startScan()
             } label: {
@@ -281,12 +281,13 @@ struct MainWindow: View {
                     .padding(.vertical, 1)
                     .padding(.horizontal, 8)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             // Large, like the App Store's offer button: a filled capsule at
             // regular size read as an afterthought next to the 52pt bar.
             .controlSize(.large)
             .disabled(model.isScanning)
             .help("Scan for reclaimable files")
         }
+        .sharedBackgroundVisibility(.hidden)
     }
 }

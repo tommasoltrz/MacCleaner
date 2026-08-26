@@ -376,8 +376,8 @@ public struct HiddenDataScanner: CategoryScanner {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let lastOpened = lastOpenedDate(for: url)
         // Checked before measuring as well as before emitting: an excluded root is
-        // not worth walking.
-        guard !context.isExcluded(url, lastOpened: lastOpened) else { return }
+        // not worth walking. Recency is not exclusion — it becomes a badge below.
+        guard !context.isExcluded(url) else { return }
 
         let measurement = try await context.measurer.measure(url)
         append(url, kind: kind, measurement: measurement, lastOpened: lastOpened,
@@ -406,7 +406,7 @@ public struct HiddenDataScanner: CategoryScanner {
         found.unreadableCount += measurement.unreadableCount
 
         guard measurement.allocatedBytes >= minimumBytes else { return }
-        guard !context.isExcluded(url, lastOpened: lastOpened) else { return }
+        guard !context.isExcluded(url) else { return }
         // See `SizeMeasurement.containsProtectedPattern`.
         guard !measurement.containsProtectedPattern else { return }
 
@@ -416,6 +416,8 @@ public struct HiddenDataScanner: CategoryScanner {
             allocatedBytes: measurement.allocatedBytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
+            // Information, not a veto — see `ScanContext.protectRecentDays`.
+            protectionReason: context.isRecencyProtected(lastOpened) ? .recentUse : nil,
             childCount: (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
         ))
     }

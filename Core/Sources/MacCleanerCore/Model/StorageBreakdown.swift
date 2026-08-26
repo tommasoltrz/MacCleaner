@@ -99,15 +99,49 @@ public struct StorageBreakdown: Sendable, Equatable, Codable {
     public var usedBytes: Int64 { capacityBytes - freeBytes }
     public var freeBytes: Int64 { segments.first { $0.id == .free }?.bytes ?? 0 }
 
-    /// The Dashboard legend. Merged slivers deliberately have no legend row — the
-    /// design lists exactly the named segments.
+    /// The Dashboard legend. Every measured segment stays visible so the listed
+    /// figures add up to the disk capacity.
     public var legendEntries: [StorageSegment] {
-        segments.filter { $0.id != .other && $0.bytes > 0 }
+        segments.filter { $0.bytes > 0 }
     }
 
     public func percent(of segment: StorageSegment) -> Double {
         guard capacityBytes > 0 else { return 0 }
         return Double(segment.bytes) / Double(capacityBytes) * 100
+    }
+
+    /// Aligns the volatile volume figures with a new disk snapshot. Named category
+    /// measurements stay unchanged. Any change since the walk lands in Unmeasured.
+    public func reconcilingVolume(
+        capacityBytes newCapacityBytes: Int64,
+        freeBytes requestedFreeBytes: Int64
+    ) -> StorageBreakdown {
+        let capacity = max(0, newCapacityBytes)
+        let namedSegments = segments.filter { $0.id != .free && $0.id != .unmeasured }
+        let namedBytes = namedSegments.reduce(0) { $0 + $1.bytes }
+
+        // A smaller replacement volume cannot contain the measured categories.
+        // Keep the measured snapshot until a new walk replaces it.
+        guard namedBytes <= capacity else { return self }
+
+        let maximumFreeBytes = capacity - namedBytes
+        let freeBytes = min(max(0, requestedFreeBytes), maximumFreeBytes)
+        let unmeasuredBytes = capacity - namedBytes - freeBytes
+
+        var rawSegments = Dictionary(
+            uniqueKeysWithValues: namedSegments.map { ($0.id, $0.bytes) }
+        )
+        rawSegments[.unmeasured] = unmeasuredBytes
+        rawSegments[.free] = freeBytes
+
+        // The measured categories have already been merged. A zero threshold keeps
+        // them stable while the volatile figures change.
+        return StorageBreakdown.make(
+            capacityBytes: capacity,
+            rawSegments: rawSegments,
+            unreadableCount: unreadableCount,
+            mergeThresholdPercent: 0
+        )
     }
 
     /// Builds a breakdown from raw per-segment byte counts.

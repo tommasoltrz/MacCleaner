@@ -3,11 +3,9 @@ import MacCleanerCore
 
 /// The list behind a Dashboard stat tile: only the entries the tile counted.
 ///
-/// The tiles promise two different things, so each opens onto exactly the items it
-/// summed. "Safe to remove" is the regenerable categories, operable in one sweep;
-/// "Needs review" is everything that requires a human. Both are real working lists,
-/// not summaries: the same table, the same checkboxes, and the same shared selection
-/// pool as the Scanner, so Clean Up in the status bar works here too.
+/// Each tile opens the items that it counts. Safe to Remove contains regenerable
+/// files and verified application leftovers. Needs Review contains all other
+/// files. The view uses the Scanner table and its shared selection.
 struct FilteredEntriesView: View {
 
     enum Filter {
@@ -16,8 +14,8 @@ struct FilteredEntriesView: View {
         var explanation: String {
             switch self {
             case .safeToRemove:
-                "Caches, logs and package files that regenerate on demand. "
-                    + "Removal loses nothing."
+                "Caches and package files regenerate on demand. Application leftovers "
+                    + "have no installed owner."
             case .needsReview:
                 "Large files and unused apps. Look before you remove."
             }

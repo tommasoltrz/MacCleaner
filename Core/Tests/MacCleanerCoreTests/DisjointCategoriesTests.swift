@@ -7,12 +7,12 @@ import Testing
 /// This is not hypothetical. The Electron predecessor counted
 /// `~/Library/Caches/Homebrew` in both "App Data & Caches" and "Package Caches",
 /// which inflated its totals and made the unattributed remainder look smaller than
-/// it was. When the seven scanners were ported in parallel, the same overlap
-/// reappeared on `Yarn`, `pnpm` and `ms-playwright` — two independent authors each
-/// reasonably claiming the same directory.
+/// it was. The parallel scanner ports introduced the same overlap on `Yarn`,
+/// `pnpm` and `ms-playwright`. Two independent authors each reasonably claimed
+/// the same directory.
 ///
-/// A double-counted byte is worse than a cosmetic error: it is offered to the user
-/// twice, so cleaning one category silently falsifies the other's figure and the
+/// A double-counted byte is worse than a cosmetic error. The app offers it twice,
+/// so cleaning one category silently falsifies the other category's figure. The
 /// Dashboard's "Safe to remove" total overstates what the disk will actually give
 /// back.
 @Suite("Categories claim disjoint paths")
@@ -72,8 +72,8 @@ struct DisjointCategoriesTests {
 
     /// `HiddenDataScanner` emits `~/.cache` as one entry covering the whole
     /// directory, so no other scanner may claim anything inside it. Two roots
-    /// (`~/.cache/yarn`, `~/.cache/ms-playwright`) were removed from
-    /// `PackageManagerScanner` at integration for exactly this reason.
+    /// For this reason, the integration removed `~/.cache/yarn` and
+    /// `~/.cache/ms-playwright` from `PackageManagerScanner`.
     @Test("no package manager root is nested inside ~/.cache, which Hidden Data owns")
     func nothingNestedInsideDotCache() {
         let nested = PackageManagerScanner.roots
@@ -90,10 +90,62 @@ struct DisjointCategoriesTests {
         )
     }
 
-    @Test("only Xcode's own categories are marked safe to remove")
-    func safeCategoriesAreTheRegenerableOnes() {
-        // Drives the Dashboard's "Safe to remove" tile, which promises the contents
-        // regenerate on demand and need no human judgement.
+    @Test("application leftovers replace overlapping generic cleanup rows")
+    func applicationLeftoversOwnTheirPaths() throws {
+        let root = URL(fileURLWithPath: "/tmp/maccleaner-overlap", isDirectory: true)
+        let leftover = root.appendingPathComponent("com.vendor.old", isDirectory: true)
+        let unrelated = URL(fileURLWithPath: "/tmp/unrelated-cache", isDirectory: true)
+        let leftoverChild = FileEntry(
+            url: leftover,
+            kind: .cache,
+            allocatedBytes: 2_048,
+            isRegenerable: true
+        )
+        let leftoverGroup = FileEntry(
+            url: leftover,
+            displayName: "com.vendor.old",
+            kind: .folder,
+            allocatedBytes: 0,
+            removalAction: .orphanedApplication(bundleIdentifier: "com.vendor.old"),
+            children: [leftoverChild]
+        )
+        let results = [
+            ScanCategoryResult(
+                categoryID: .hiddenSystemData,
+                totalBytes: 8_192,
+                entries: [FileEntry(url: root, kind: .cache, allocatedBytes: 8_192)]
+            ),
+            ScanCategoryResult(
+                categoryID: .systemCaches,
+                totalBytes: 6_144,
+                entries: [
+                    leftoverChild,
+                    FileEntry(url: unrelated, kind: .cache, allocatedBytes: 4_096),
+                ]
+            ),
+            ScanCategoryResult(
+                categoryID: .applicationLeftovers,
+                totalBytes: 2_048,
+                entries: [leftoverGroup]
+            ),
+        ]
+
+        let filtered = ScanCoordinator.removingApplicationLeftoverOverlaps(from: results)
+        let hidden = try #require(filtered.first { $0.categoryID == .hiddenSystemData })
+        let caches = try #require(filtered.first { $0.categoryID == .systemCaches })
+
+        #expect(hidden.entries.isEmpty)
+        #expect(hidden.totalBytes == 0)
+        #expect(hidden.availability == .empty)
+        #expect(caches.entries.map(\.url) == [unrelated])
+        #expect(caches.totalBytes == 4_096)
+    }
+
+    @Test("only low-risk categories are safe to remove")
+    func safeCategoriesUseVerifiedLowRiskRules() {
+        // Cache files regenerate. Application leftovers have no installed owner.
+        // These rules drive the Dashboard's "Safe to Remove" tile.
+        #expect(CategoryID.applicationLeftovers.isSafe)
         #expect(CategoryID.systemCaches.isSafe)
         #expect(CategoryID.packageManagers.isSafe)
         #expect(CategoryID.xcode.isSafe)

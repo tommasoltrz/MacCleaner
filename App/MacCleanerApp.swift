@@ -1,5 +1,6 @@
 import SwiftUI
 import MacCleanerCore
+import UserNotifications
 
 @main
 struct MacCleanerApp: App {
@@ -83,7 +84,7 @@ struct MacCleanerApp: App {
 /// The launch Apple event names the reason for the launch, so a Finder or Dock
 /// launch, which carries no login flag, keeps its window and its Dock icon.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
     /// True while a login launch is still settling: SwiftUI can present the
     /// restored window just after `applicationDidFinishLaunching`, and without this
@@ -98,6 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Low-space readings often finish while the Dashboard is the active window.
+        // Foreground notifications are silent unless the app supplies a delegate.
+        UNUserNotificationCenter.current().delegate = self
         observeWindows()
         // With the menu bar item switched off there is nothing to become: an
         // accessory app with no status item and no window is a process the user
@@ -111,6 +115,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.closeMainWindows()
             self.isSettlingLoginLaunch = false
         }
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        guard notification.request.identifier
+            == LowDiskNotificationService.notificationIdentifier else { return [] }
+        return [.banner, .list, .sound]
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

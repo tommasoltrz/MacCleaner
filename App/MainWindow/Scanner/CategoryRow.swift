@@ -28,7 +28,7 @@ struct CategoryRow: View {
         static let badgeGap: CGFloat = 7
         /// Fixed, so the totals form a right-aligned column; the title block takes all
         /// the growth when the window widens.
-        static let valueWidth: CGFloat = 96
+        static let valueWidth: CGFloat = 132
     }
 
     private var category: CategoryID { result.categoryID }
@@ -141,10 +141,14 @@ struct CategoryRow: View {
                 .help(reason)
         } else {
             subtitleText(
-                category.subtitle,
+                subtitleString,
                 font: category.subtitleIsPath ? .mcMonoPath : .mcSubtitle
             )
         }
+    }
+
+    private var subtitleString: String {
+        category.subtitle
     }
 
     private func subtitleText(_ string: String, font: Font) -> some View {
@@ -174,11 +178,15 @@ struct CategoryRow: View {
                 .font(.mcRowValue.weight(.medium))
                 .foregroundStyle(Token.Text.disabled)
         } else {
-            Text(ByteFormatting.string(result.totalBytes))
+            Text(totalDisplay)
                 .font(.mcRowValue.weight(.medium))
                 .foregroundStyle(Token.Text.primary)
                 .lineLimit(1)
         }
+    }
+
+    private var totalDisplay: String {
+        ByteFormatting.string(result.applicationInstalledBytes ?? result.totalBytes)
     }
 
     @ViewBuilder
@@ -210,7 +218,11 @@ struct CategoryRow: View {
             return parts.joined(separator: ", ")
         }
 
-        parts.append(ByteFormatting.string(result.totalBytes))
+        if let installedBytes = result.applicationInstalledBytes {
+            parts.append(ByteFormatting.string(installedBytes))
+        } else {
+            parts.append(ByteFormatting.string(result.totalBytes))
+        }
 
         if isActionable {
             parts.append(

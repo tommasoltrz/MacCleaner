@@ -76,6 +76,7 @@ struct CleanupServiceTests {
 
         #expect(outcome.removedCount == 2)
         #expect(outcome.failed == [locked.path])
+        #expect(outcome.permissionDenied == [locked.path])
         #expect(outcome.freedBytes >= Int64(2 * oneMB))
         #expect(!FileManager.default.fileExists(atPath: first.path))
         // The entry after the failure was still removed.
@@ -107,31 +108,31 @@ struct CleanupServiceTests {
     /// Deliberately not run against a real `.app`: Applications always moves to the
     /// Trash, and a test that exercised that path would have to put fixtures in the
     /// user's Trash to prove it. The rule itself is asserted below instead.
-    @Test("attached children are removed before the entry they belong to")
+    @Test("an attached nested child is removed before its parent")
     func childrenGoFirst() async throws {
         let sandbox = try Sandbox()
         let parent = try sandbox.directory("Demo")
         try sandbox.writeFile("Demo/payload.bin", bytes: 2 * oneMB)
-        let leftover = try sandbox.directory("Library/Caches/com.demo")
-        try sandbox.writeFile("Library/Caches/com.demo/blob.bin", bytes: oneMB)
+        let dependency = try sandbox.directory("Demo/node_modules")
+        try sandbox.writeFile("Demo/node_modules/blob.bin", bytes: oneMB)
 
         let log = RemovalLog(directory: sandbox.root.appendingPathComponent("logs"))
         let group = FileEntry(
             url: parent,
             kind: .folder,
-            allocatedBytes: 0,
-            children: [entry(leftover, kind: .cache)]
+            allocatedBytes: Int64(2 * oneMB),
+            children: [entry(dependency, kind: .cache)]
         )
         let outcome = try await CleanupService(log: log).remove(entries: [group], trashFirst: false)
 
         #expect(outcome.removedCount == 2)
         #expect(outcome.freedBytes >= Int64(3 * oneMB))
         #expect(!FileManager.default.fileExists(atPath: parent.path))
-        #expect(!FileManager.default.fileExists(atPath: leftover.path))
+        #expect(!FileManager.default.fileExists(atPath: dependency.path))
 
         // Newest first, so the parent — removed last — leads.
         let logged = log.recentEntries()
-        #expect(logged.map(\.originalPath) == [parent.path, leftover.path])
+        #expect(logged.map(\.originalPath) == [parent.path, dependency.path])
     }
 
     @Test("an application moves to the Trash even with the setting off")

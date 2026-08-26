@@ -1,0 +1,7 @@
+extends: existence
+message: "Use the active voice. Rewrite '%s'."
+level: warning
+ignorecase: true
+nonword: true
+raw:
+  - '\b(?:am|are|is|was|were|be|been|being)\s+(?:\w+\s+){0,2}\w+(?:ed|en)\b'

@@ -209,30 +209,6 @@ public struct ApplicationsScanner: CategoryScanner {
 
     // MARK: - Measuring
 
-    /// The mandatory sequence for one path: read the Spotlight date, consult the
-    /// exclusion rules, and only then measure — so an excluded or recency-protected
-    /// tree is never walked. `nil` means "do not emit this path".
-    ///
-    /// `makeEntry(url:kind:context:isRegenerable:)` does the same three steps but
-    /// discards `SizeMeasurement.unreadableCount`, and this category has to report it,
-    /// so the sequence is repeated here and the measurement returned intact.
-    private func measureIfIncluded(
-        _ url: URL,
-        context: ScanContext
-    ) async throws -> (lastOpened: Date?, size: SizeMeasurement)? {
-        let lastOpened = lastOpenedDate(for: url)
-        guard !context.isExcluded(url, lastOpened: lastOpened) else { return nil }
-
-        // Any `CancellationError` from the walk propagates untouched.
-        let size = try await context.measurer.measure(url)
-        // Matching the original, which only recorded an associated file when its size
-        // came back above zero. Nothing is freed by trashing an empty path.
-        guard size.allocatedBytes > 0 else { return nil }
-        // See `SizeMeasurement.containsProtectedPattern`.
-        guard !size.containsProtectedPattern else { return nil }
-
-        return (lastOpened, size)
-    }
 
     private static func itemCount(of url: URL) -> Int? {
         guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else {

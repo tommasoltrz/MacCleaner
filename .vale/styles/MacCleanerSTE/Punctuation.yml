@@ -1,0 +1,7 @@
+extends: existence
+message: "Use a full stop or split this sentence. Do not use a semicolon."
+level: warning
+scope: sentence
+nonword: true
+tokens:
+  - ';'

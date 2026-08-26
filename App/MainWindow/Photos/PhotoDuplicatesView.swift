@@ -49,8 +49,8 @@ struct PhotoDuplicatesView: View {
     // MARK: - States
 
     private var intro: some View {
-        // The same system empty state the Scanner and Large & Old Files use, so the
-        // app has one idle screen rather than three hand-drawn variations.
+        // The same system empty state the Scanner uses, so the app has one idle
+        // screen rather than separate hand-drawn variations.
         ContentUnavailableView {
             Label("Find duplicate photos", systemImage: "photo.on.rectangle.angled")
         } description: {

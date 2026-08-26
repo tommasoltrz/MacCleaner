@@ -31,18 +31,18 @@ struct AppUninstallPlannerTests {
         @discardableResult
         func application(
             _ name: String,
-            identifier: String,
+            identifier: String?,
             under root: URL? = nil
         ) throws -> URL {
             let url = (root ?? applications).appendingPathComponent("\(name).app", isDirectory: true)
             let contents = url.appendingPathComponent("Contents", isDirectory: true)
             try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
-            let plist: [String: Any] = [
-                "CFBundleIdentifier": identifier,
+            var plist: [String: Any] = [
                 "CFBundleName": name,
                 "CFBundlePackageType": "APPL",
                 "CFBundleVersion": "1",
             ]
+            if let identifier { plist["CFBundleIdentifier"] = identifier }
             let data = try PropertyListSerialization.data(
                 fromPropertyList: plist, format: .xml, options: 0
             )
@@ -68,6 +68,31 @@ struct AppUninstallPlannerTests {
                 darwinCache: nil,
                 darwinTemp: nil
             )
+        }
+    }
+
+    @Test("an untrusted bundle identifier creates an application-only plan")
+    func untrustedIdentifierKeepsRelatedFiles() async throws {
+        let sandbox = try Sandbox()
+        _ = try sandbox.write("Library/Caches/com.vendor.legacy/blob")
+
+        for (name, identifier) in [
+            ("Missing Identifier", nil),
+            ("Invalid Identifier", "legacy"),
+        ] as [(String, String?)] {
+            let app = try sandbox.application(name, identifier: identifier)
+            let plan = try await sandbox.planner().plan(applicationURL: app)
+
+            #expect(plan.bundleIdentifier == nil)
+            #expect(plan.isApplicationOnly)
+            #expect(plan.items.map(\.url) == [app])
+            #expect(plan.candidateBundleIdentifiers.isEmpty)
+            #expect(plan.protectedItems.isEmpty)
+            #expect(AppUninstallPlanner.removalIsStillSafe(
+                plan.applicationItem,
+                in: plan,
+                exclusiveBundleIdentifiers: []
+            ))
         }
     }
 

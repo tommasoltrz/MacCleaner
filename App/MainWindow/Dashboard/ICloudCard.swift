@@ -17,10 +17,14 @@ struct ICloudCard: View {
 
     @State private var isHovered = false
 
+    // Binary throughout, and labelled "GB" the way iCloud labels it: the plan
+    // tiers are stored as GiB because that is what `brctl` and iCloud's own pages
+    // agree on, and the decimal formatter turned the user's "200 GB" plan into
+    // "214.75 GB". See `ByteFormatting.binaryString`.
     private var summary: String {
-        let used = ByteFormatting.string(storage.usedBytes)
-        let total = ByteFormatting.string(storage.totalBytes)
-        let free = ByteFormatting.string(storage.freeBytes)
+        let used = ByteFormatting.binaryString(storage.usedBytes)
+        let total = ByteFormatting.binaryString(storage.totalBytes)
+        let free = ByteFormatting.binaryString(storage.freeBytes)
         return "\(used) of \(total) used · \(free) available"
     }
 
@@ -123,7 +127,7 @@ private struct ICloudBar: View {
                             else if hovered == segment.id { hovered = nil }
                         }
                         .accessibilityLabel(segment.displayName)
-                        .accessibilityValue(ByteFormatting.string(segment.bytes))
+                        .accessibilityValue(ByteFormatting.binaryString(segment.bytes))
                 }
             }
             .clipShape(Capsule())
@@ -147,7 +151,7 @@ private struct ICloudBar: View {
                     Text(segment.displayName)
                         .font(.mcRowTitle)
                         .foregroundStyle(Token.Text.primary)
-                    Text(ByteFormatting.string(segment.bytes))
+                    Text(ByteFormatting.binaryString(segment.bytes))
                         .font(.mcRowValue)
                         .foregroundStyle(Token.Text.secondary)
                 }

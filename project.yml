@@ -17,11 +17,40 @@ targets:
   MacCleaner:
     type: application
     platform: macOS
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: ""
+        # PhotoKit terminates the process if the app fetches the photo library
+        # without this description.
+        NSPhotoLibraryUsageDescription: "MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it."
+        # macOS protects another app's bundle and sandbox data separately. An
+        # administrator retry cannot bypass either privacy decision.
+        NSAppDataUsageDescription: "MacCleaner needs access to data from removed apps so it can move files that you select to the Trash."
+        NSAppBundlesUsageDescription: "MacCleaner needs permission to move applications that you select to the Trash."
     sources:
       - path: App
     dependencies:
       - package: MacCleanerCore
         product: MacCleanerCore
+    preBuildScripts:
+      - name: Require signed build
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        script: |
+          if [ "${CODE_SIGNING_ALLOWED:-NO}" != "YES" ]; then
+            echo "error: MacCleaner requires code signing because macOS ties privacy grants to its signed identity."
+            exit 1
+          fi
+          case "${CODE_SIGN_IDENTITY:-}" in
+            ""|"-")
+              echo "error: MacCleaner requires an Apple Development signing identity."
+              exit 1
+              ;;
+          esac
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.MacCleaner
@@ -45,15 +74,6 @@ targets:
         DEVELOPMENT_TEAM: L2P2KC4C69
         CODE_SIGN_STYLE: Manual
 
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        INFOPLIST_KEY_NSHumanReadableCopyright: ""
-
-        # PhotoKit refuses to load without a usage string and terminates the process
-        # on the first fetch, so this is required rather than cosmetic. Full access,
-        # not the add-only variant: finding duplicates means reading the library and
-        # deleting from it.
-        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it."
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 

@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Use 20 words or fewer in a list instruction."
+level: warning
+scope: list
+max: 20
+token: '\b\w+\b'

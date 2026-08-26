@@ -1,9 +1,10 @@
 import Foundation
 
-/// The seven Scanner categories, in the order the design lists them.
+/// The Scanner categories, in their display order.
 public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
     case documentsAndFiles
     case applications
+    case applicationLeftovers
     case hiddenSystemData
     case systemCaches
     case packageManagers
@@ -16,6 +17,7 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         switch self {
         case .documentsAndFiles: "Documents & Files"
         case .applications:      "Applications"
+        case .applicationLeftovers: "Application Leftovers"
         case .hiddenSystemData:  "Hidden & System Data"
         case .systemCaches:      "System Caches & Logs"
         case .packageManagers:   "Package Manager Caches"
@@ -29,7 +31,9 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .documentsAndFiles:
             "Largest folders in Documents, Downloads, Desktop, Movies, Pictures, Music"
         case .applications:
-            "Least recently used first. Includes leftover support files."
+            "Apps in /Applications and ~/Applications. Least recently used first."
+        case .applicationLeftovers:
+            "Files with no installed application owner"
         case .hiddenSystemData:
             "Trash, iOS backups, Mail downloads, dot-caches, snapshots"
         case .systemCaches:
@@ -50,6 +54,7 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         switch self {
         case .documentsAndFiles: .orange
         case .applications:      .pink
+        case .applicationLeftovers: .teal
         case .hiddenSystemData:  .purple
         case .systemCaches:      .accent
         case .packageManagers:   .green
@@ -58,18 +63,21 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// Contents regenerate on demand, so removal needs no human judgement. Drives
-    /// the Dashboard's "Safe to remove" total and the green `safe` badge.
+    /// Removal has a verified low-risk rule. Cache contents regenerate on demand.
+    /// Application leftovers have no installed owner. This value drives the
+    /// Dashboard's "Safe to Remove" total and the green `safe` badge.
     public var isSafe: Bool {
         switch self {
-        case .systemCaches, .packageManagers, .xcode: true
+        case .applicationLeftovers, .systemCaches, .packageManagers, .xcode: true
         case .documentsAndFiles, .applications, .hiddenSystemData, .docker: false
         }
     }
 
     /// Removal moves to the Trash rather than unlinking. Applications always do,
     /// regardless of the global "Always move to Trash" setting.
-    public var alwaysMovesToTrash: Bool { self == .applications }
+    public var alwaysMovesToTrash: Bool {
+        self == .applications || self == .applicationLeftovers
+    }
 }
 
 /// Why a category has nothing to offer. The reason is user-facing copy: the design
@@ -91,25 +99,38 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     public var availability: CategoryAvailability
     /// Entries this scanner could not read, surfaced rather than swallowed.
     public var unreadableCount: Int
+    /// The reviewed identities behind the Application Leftovers rows.
+    public var applicationLeftoverPlan: OrphanedAppLeftoverPlan?
 
     public var id: String { categoryID.rawValue }
 
-    /// This category's contribution to "Safe to remove": regenerable entries in a
-    /// category badged safe. Judged per entry — a safe category can hold the one
-    /// thing that does not come back (an `.xcarchive` with shipped dSYMs), and the
-    /// tile's promise has to hold for every row it counts.
+    /// The space used by installed app bundles. The cleanup total can be lower when
+    /// an app is running, or higher when related files are removable with the app.
+    public var applicationInstalledBytes: Int64? {
+        guard categoryID == .applications else { return nil }
+        return entries.reduce(0) { $0 + $1.allocatedBytes }
+    }
+
+    /// This category's contribution to "Safe to Remove". It counts regenerable
+    /// rows and verified application-leftover groups. A safe cache category can
+    /// hold data that does not regenerate, such as an `.xcarchive`. Therefore,
+    /// each ordinary row must pass the regenerable check.
     public var safeToRemoveBytes: Int64 {
         guard categoryID.isSafe else { return 0 }
+        if categoryID == .applicationLeftovers {
+            return entries.reduce(0) { $0 + $1.displayBytes }
+        }
         return entries.filter(\.isRegenerable).reduce(0) { $0 + $1.displayBytes }
     }
 
-    /// Everything else: the whole category when it is not badged safe, plus any
-    /// non-regenerable entry inside one that is.
+    /// Everything else: each category without a safe badge, plus each
+    /// non-regenerable entry in a safe category.
     /// Summed from the rows the list will show, never from `totalBytes`: the tile
     /// and the list it opens must state the same figure. A category with no entries
     /// keeps its own total — that is a scanner reporting an aggregate it did not
     /// break into rows.
     public var needsReviewBytes: Int64 {
+        if categoryID == .applicationLeftovers { return 0 }
         guard !entries.isEmpty else { return categoryID.isSafe ? 0 : totalBytes }
         guard categoryID.isSafe else { return entries.reduce(0) { $0 + $1.displayBytes } }
         return entries.filter { !$0.isRegenerable }.reduce(0) { $0 + $1.displayBytes }
@@ -120,13 +141,15 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
         totalBytes: Int64 = 0,
         entries: [FileEntry] = [],
         availability: CategoryAvailability = .available,
-        unreadableCount: Int = 0
+        unreadableCount: Int = 0,
+        applicationLeftoverPlan: OrphanedAppLeftoverPlan? = nil
     ) {
         self.categoryID = categoryID
         self.totalBytes = totalBytes
         self.entries = entries
         self.availability = availability
         self.unreadableCount = unreadableCount
+        self.applicationLeftoverPlan = applicationLeftoverPlan
     }
 
     /// Drops entries too small to be worth a row, and recomputes the total.
@@ -135,13 +158,16 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// something that will never matter. Removing them also keeps the byte formatter
     /// away from its degenerate case.
     ///
-    /// Only entry-backed categories are filtered: Docker reports totals from its own
-    /// accounting rather than from files on disk, so its rows are left alone.
+    /// This filter applies only to entry-backed categories. Docker reports totals
+    /// from its own accounting, so the filter leaves Docker rows intact.
     public func filteringNoise(below floor: Int64) -> Self {
         // Docker's rows are manual-removal aggregates: `reclaimableBytes` is zero
         // by definition, so recomputing the total from it would erase the `system
         // df` figure the category exists to show.
-        guard categoryID != .docker, !entries.isEmpty else { return self }
+        guard categoryID != .docker,
+              categoryID != .applicationLeftovers,
+              !entries.isEmpty
+        else { return self }
         var copy = self
         copy.entries = entries.filter { $0.totalBytesIncludingChildren >= floor }
         copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }

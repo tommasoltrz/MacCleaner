@@ -1,0 +1,11 @@
+extends: existence
+message: "Do not use the contraction '%s'."
+level: warning
+ignorecase: true
+nonword: true
+tokens:
+  - "\\b(?:are|can|could|did|does|do|had|has|have|is|must|should|was|were|will|would)n['’]t\\b"
+  - "\\b(?:I|you|we|they)['’](?:d|ll|re|ve)\\b"
+  - "\\b(?:he|she|it|that|there|what|who)['’]s\\b"
+  - "\\bI['’]m\\b"
+  - "\\blet['’]s\\b"

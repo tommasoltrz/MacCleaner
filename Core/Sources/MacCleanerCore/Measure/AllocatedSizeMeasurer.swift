@@ -104,8 +104,8 @@ public struct AllocatedSizeMeasurer: Sendable {
 
     // MARK: - Measuring
     //
-    // All three entry points feed one parallel engine: a fixed pool of workers
-    // draining a shared queue of directories. The serial `FileManager.enumerator`
+    // All three entry points feed one parallel engine backed by a process-wide pool
+    // of workers. The serial `FileManager.enumerator`
     // walk this replaces spent ~80 s on a full breakdown of one real Mac — almost
     // entirely metadata syscalls, which APFS answers happily in parallel. The
     // rules the serial walk disclosed all still hold: unreadable entries cost one
@@ -119,36 +119,43 @@ public struct AllocatedSizeMeasurer: Sendable {
     /// - Parameter progress: called periodically with the running total, for the
     ///   scan progress bar. Never called on a specific queue.
     public func measure(
-        _ url: URL,
+        _ inputURL: URL,
         progress: (@Sendable (SizeMeasurement) -> Void)? = nil
     ) async throws -> SizeMeasurement {
-        // With the follow setting on, a symlink root means its target.
-        let url = followSymlinks ? url.resolvingSymlinksInPath() : url
-        // A plain file, or a symlink we are not following: measure and return.
-        let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
-        if rootValues?.isDirectory != true {
-            if rootValues?.isSymbolicLink == true && !followSymlinks { return .zero }
-            if let bytes = Self.allocatedSize(of: rootValues) {
-                return SizeMeasurement(allocatedBytes: bytes, fileCount: 1)
-            }
-            return .zero
-        }
-
         let followSymlinks = self.followSymlinks
         let protectedPatterns = self.protectedPatterns
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
+                // Path resolution and metadata reads can block on a network mount.
+                // Keep both off Swift's cooperative executor.
+                let url = followSymlinks
+                    ? inputURL.resolvingSymlinksInPath()
+                    : inputURL
+                let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
+
+                // A plain file, or a symlink we are not following: measure and return.
+                if rootValues?.isDirectory != true {
+                    if rootValues?.isSymbolicLink == true && !followSymlinks { return .zero }
+                    if let bytes = Self.allocatedSize(of: rootValues) {
+                        return SizeMeasurement(allocatedBytes: bytes, fileCount: 1)
+                    }
+                    return .zero
+                }
+
                 let key = url.standardizedFileURL
-                let detachedValues = try? url.resourceValues(forKeys: Set(Self.keys))
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
-                    rootVolume: detachedValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
                 )
-                walker.enqueue(listing: url, attribution: [key], grow: 0)
+                walker.enqueue(
+                    listing: url,
+                    attribution: [key],
+                    grow: 0,
+                    volume: rootValues?.volumeIdentifier as? NSObject
+                )
                 return try walker.run()[key] ?? .zero
             }.value
         } onCancel: {
@@ -183,11 +190,15 @@ public struct AllocatedSizeMeasurer: Sendable {
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
-                    rootVolume: rootValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
                 )
-                walker.enqueue(listing: standardRoot, attribution: [standardRoot], grow: depth)
+                walker.enqueue(
+                    listing: standardRoot,
+                    attribution: [standardRoot],
+                    grow: depth,
+                    volume: rootValues?.volumeIdentifier as? NSObject
+                )
                 var totals = try walker.run()
                 if totals[standardRoot] == nil { totals[standardRoot] = .zero }
                 return totals
@@ -216,14 +227,12 @@ public struct AllocatedSizeMeasurer: Sendable {
                     options: []
                 )) ?? []
 
-                let parentValues = try? url.resourceValues(forKeys: Set(Self.keys))
                 // One walker across all children, so an inode hard-linked into two
                 // of them is attributed once and the children still sum to the
                 // parent rather than exceeding it.
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
-                    rootVolume: parentValues?.volumeIdentifier as? NSObject,
                     cancelled: cancelled,
                     progress: progress
                 )
@@ -252,16 +261,36 @@ public struct AllocatedSizeMeasurer: Sendable {
                             continue
                         }
                         if target.isDirectory == true {
-                            walker.enqueue(listing: resolved, attribution: [child], grow: 0)
+                            walker.enqueue(
+                                listing: resolved,
+                                attribution: [child],
+                                grow: 0,
+                                volume: target.volumeIdentifier as? NSObject
+                            )
                         } else {
-                            walker.measureLooseFile(target, at: child)
+                            walker.measureLooseFile(
+                                target,
+                                at: child,
+                                volume: target.volumeIdentifier as? NSObject
+                            )
                         }
                         continue
                     }
                     if values.isDirectory == true {
-                        walker.enqueue(listing: child, attribution: [child], grow: 0)
+                        // Each child defines its own boundary. A mounted child is a
+                        // complete measured root, as it was before the parallel walk.
+                        walker.enqueue(
+                            listing: child,
+                            attribution: [child],
+                            grow: 0,
+                            volume: values.volumeIdentifier as? NSObject
+                        )
                     } else {
-                        walker.measureLooseFile(values, at: child)
+                        walker.measureLooseFile(
+                            values,
+                            at: child,
+                            volume: values.volumeIdentifier as? NSObject
+                        )
                     }
                 }
                 return try walker.run()
@@ -279,11 +308,16 @@ public struct AllocatedSizeMeasurer: Sendable {
         if let logical = values.fileSize { return Int64(logical) }
         return nil
     }
+
+    /// Test support: repeated measurements must use these same long-lived threads.
+    static var sharedWorkerIdentities: [ObjectIdentifier] {
+        MeasurementWorkerPool.shared.workerIdentities
+    }
 }
 
 // MARK: - Parallel engine
 
-/// A fixed pool of workers draining a shared queue of directories.
+/// One measurement whose directory work runs on the shared worker pool.
 ///
 /// Each worker pops a directory, lists it with attributes prefetched, adds its
 /// regular files to every URL in the item's attribution chain, and pushes its
@@ -291,7 +325,7 @@ public struct AllocatedSizeMeasurer: Sendable {
 /// inside the lock is arithmetic only — the syscalls happen outside it.
 private final class ParallelTreeWalker: @unchecked Sendable {
 
-    private struct WorkItem {
+    private struct WorkItem: @unchecked Sendable {
         /// The directory to list — the real URL, whatever form the parent handed us.
         let listing: URL
         /// The totals keys this directory's files add to, root first. The last
@@ -300,17 +334,22 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         let attribution: [URL]
         /// How many more levels may extend the attribution chain.
         let grow: Int
+        /// The volume this measured root belongs to. `measureChildren` gives each
+        /// immediate child its own boundary, including mounted children.
+        let volume: NSObject?
     }
 
     private let followSymlinks: Bool
     private let protectedPatterns: [String]
-    private let rootVolume: NSObject?
     private let cancelled: CancellationFlag
     private let progress: (@Sendable (SizeMeasurement) -> Void)?
 
     private let condition = NSCondition()
     private var stack: [WorkItem] = []
-    private var active = 0
+    /// Submitted or active work items. One pool job processes one directory, which
+    /// lets concurrent measurements share the pool fairly.
+    private var inFlight = 0
+    private var isRunning = false
     private var totals: [URL: SizeMeasurement] = [:]
     private var unreadable: [URL: Int] = [:]
     private var claimedInodes = Set<NSObject>()
@@ -324,6 +363,8 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     /// what the progress callback reports.
     private var grandTotal = SizeMeasurement.zero
     private var entriesSinceReport = 0
+    private var pendingProgress: [SizeMeasurement] = []
+    private var isReportingProgress = false
 
     /// How often to surface progress and poll cancellation, in entries.
     private static let reportInterval = 512
@@ -331,18 +372,21 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     init(
         followSymlinks: Bool,
         protectedPatterns: [String] = [],
-        rootVolume: NSObject?,
         cancelled: CancellationFlag,
         progress: (@Sendable (SizeMeasurement) -> Void)?
     ) {
         self.followSymlinks = followSymlinks
         self.protectedPatterns = protectedPatterns
-        self.rootVolume = rootVolume
         self.cancelled = cancelled
         self.progress = progress
     }
 
-    func enqueue(listing: URL, attribution: [URL], grow: Int) {
+    func enqueue(
+        listing: URL,
+        attribution: [URL],
+        grow: Int,
+        volume: NSObject?
+    ) {
         condition.lock()
         if followSymlinks {
             // Every directory funnels through here, so this one check is the whole
@@ -353,8 +397,13 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 return
             }
         }
-        stack.append(WorkItem(listing: listing, attribution: attribution, grow: grow))
-        condition.signal()
+        stack.append(WorkItem(
+            listing: listing,
+            attribution: attribution,
+            grow: grow,
+            volume: volume
+        ))
+        scheduleWorkLocked()
         condition.unlock()
     }
 
@@ -385,9 +434,13 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     }
 
     /// A direct file child in `measureChildren` — no directory to walk.
-    func measureLooseFile(_ values: URLResourceValues, at key: URL) {
-        if let entryVolume = values.volumeIdentifier as? NSObject, let rootVolume,
-           !entryVolume.isEqual(rootVolume) { return }
+    func measureLooseFile(
+        _ values: URLResourceValues,
+        at key: URL,
+        volume: NSObject?
+    ) {
+        if let entryVolume = values.volumeIdentifier as? NSObject, let volume,
+           !entryVolume.isEqual(volume) { return }
         guard values.isRegularFile == true else { return }
         condition.lock()
         defer { condition.unlock() }
@@ -402,69 +455,58 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         grandTotal.fileCount += 1
     }
 
-    /// Runs the pool to exhaustion and returns the totals, unreadable counts folded
+    /// Runs this measurement to exhaustion and returns the totals, unreadable counts folded
     /// in. Throws `CancellationError` if the flag was raised mid-walk.
     func run() throws -> [URL: SizeMeasurement] {
-        let width = max(2, min(8, ProcessInfo.processInfo.activeProcessorCount))
-        // Dedicated threads, not GCD global-queue blocks. The caller is a detached
-        // task blocking on the result, and Swift's cooperative pool shares
-        // libdispatch's thread pool: with several measurements in flight the
-        // blocked callers starved the queued worker blocks, which never started —
-        // a deadlock the test suite reproduced on the first run. Real pthreads
-        // owe libdispatch nothing.
-        let finished = DispatchSemaphore(value: 0)
-        for _ in 0..<width {
-            let worker = Thread {
-                self.workerLoop()
-                finished.signal()
-            }
-            // `.userInitiated`, not `.utility`: on Apple silicon utility threads
-            // are scheduled onto the efficiency cores, and eight of them there
-            // amounted to about one and a half cores of throughput. The user is
-            // waiting on this figure — it is the Dashboard's first card.
-            worker.qualityOfService = .userInitiated
-            worker.start()
-        }
-        for _ in 0..<width { finished.wait() }
-        if cancelled.isCancelled { throw CancellationError() }
-
         condition.lock()
-        defer { condition.unlock() }
+        isRunning = true
+        scheduleWorkLocked()
+        while !stack.isEmpty || inFlight > 0 {
+            if cancelled.isCancelled { stack.removeAll() }
+            if stack.isEmpty && inFlight == 0 { break }
+            condition.wait()
+        }
+        isRunning = false
+
+        let wasCancelled = cancelled.isCancelled
         for (key, count) in unreadable {
             totals[key, default: .zero].unreadableCount += count
         }
         for key in protectedKeys {
             totals[key, default: .zero].containsProtectedPattern = true
         }
-        return totals
+        let result = totals
+        condition.unlock()
+
+        if wasCancelled { throw CancellationError() }
+        return result
     }
 
-    private func workerLoop() {
-        while let item = nextItem() {
-            process(item)
-            condition.lock()
-            active -= 1
-            if (stack.isEmpty && active == 0) || cancelled.isCancelled {
-                condition.broadcast()
-            } else {
-                condition.signal()
+    /// Assigns pending directories to the process-wide workers. Must hold `condition`.
+    private func scheduleWorkLocked() {
+        guard isRunning else { return }
+        if cancelled.isCancelled {
+            stack.removeAll()
+            return
+        }
+
+        let width = MeasurementWorkerPool.shared.width
+        while inFlight < width, let item = stack.popLast() {
+            inFlight += 1
+            MeasurementWorkerPool.shared.submit { [self] in
+                process(item)
+                finishWorkItem()
             }
-            condition.unlock()
         }
     }
 
-    private func nextItem() -> WorkItem? {
+    private func finishWorkItem() {
         condition.lock()
-        defer { condition.unlock() }
-        while true {
-            if cancelled.isCancelled { condition.broadcast(); return nil }
-            if let item = stack.popLast() {
-                active += 1
-                return item
-            }
-            if active == 0 { condition.broadcast(); return nil }
-            condition.wait()
-        }
+        inFlight -= 1
+        if cancelled.isCancelled { stack.removeAll() }
+        scheduleWorkLocked()
+        if stack.isEmpty && inFlight == 0 { condition.broadcast() }
+        condition.unlock()
     }
 
     private func process(_ item: WorkItem) {
@@ -481,7 +523,6 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         }
 
         var localFiles: [Int64] = []
-        var report: SizeMeasurement?
 
         for entry in entries {
             // Name check first: it needs no attributes, so a protected bundle is
@@ -498,8 +539,9 @@ private final class ParallelTreeWalker: @unchecked Sendable {
 
             // Never leave the starting volume — a mounted disk under the scan
             // root is not part of this category.
-            if let rootVolume, let entryVolume = values.volumeIdentifier as? NSObject,
-               !entryVolume.isEqual(rootVolume) {
+            if let volume = item.volume,
+               let entryVolume = values.volumeIdentifier as? NSObject,
+               !entryVolume.isEqual(volume) {
                 continue
             }
             if values.isSymbolicLink == true {
@@ -517,15 +559,21 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                     recordUnreadable(at: item.attribution[0])
                     continue
                 }
-                if let rootVolume, let targetVolume = target.volumeIdentifier as? NSObject,
-                   !targetVolume.isEqual(rootVolume) {
+                if let volume = item.volume,
+                   let targetVolume = target.volumeIdentifier as? NSObject,
+                   !targetVolume.isEqual(volume) {
                     continue
                 }
                 if target.isDirectory == true {
                     let childKey = item.attribution[item.attribution.count - 1]
                         .appendingPathComponent(entry.lastPathComponent)
                     let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
-                    enqueue(listing: resolved, attribution: attribution, grow: max(0, item.grow - 1))
+                    enqueue(
+                        listing: resolved,
+                        attribution: attribution,
+                        grow: max(0, item.grow - 1),
+                        volume: item.volume
+                    )
                 } else if target.isRegularFile == true {
                     if (target.linkCount ?? 1) > 1 {
                         condition.lock()
@@ -537,6 +585,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                     }
                     if let bytes = AllocatedSizeMeasurer.allocatedSize(of: target) {
                         localFiles.append(bytes)
+                        if flushIfNeeded(&localFiles, attribution: item.attribution) { return }
                     }
                 }
                 continue
@@ -546,7 +595,12 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 let childKey = item.attribution[item.attribution.count - 1]
                     .appendingPathComponent(entry.lastPathComponent)
                 let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
-                enqueue(listing: entry, attribution: attribution, grow: max(0, item.grow - 1))
+                enqueue(
+                    listing: entry,
+                    attribution: attribution,
+                    grow: max(0, item.grow - 1),
+                    volume: item.volume
+                )
                 continue
             }
 
@@ -562,25 +616,25 @@ private final class ParallelTreeWalker: @unchecked Sendable {
             }
             guard let bytes = AllocatedSizeMeasurer.allocatedSize(of: values) else { continue }
             localFiles.append(bytes)
-
-            // Batch the arithmetic under one lock acquisition per directory where
-            // possible, but surface progress and poll cancellation often enough
-            // that a huge directory cannot go quiet.
-            if localFiles.count % Self.reportInterval == 0 {
-                report = flush(&localFiles, attribution: item.attribution)
-                if cancelled.isCancelled { return }
-                if let report { progress?(report) }
-                report = nil
-            }
+            if flushIfNeeded(&localFiles, attribution: item.attribution) { return }
         }
-        if !localFiles.isEmpty || report != nil {
-            let snapshot = flush(&localFiles, attribution: item.attribution)
-            maybeReport(snapshot)
+        if !localFiles.isEmpty {
+            let shouldDrain = flush(&localFiles, attribution: item.attribution)
+            if shouldDrain { drainProgress() }
         }
     }
 
-    /// Adds the batched sizes to every attributed ancestor; returns the grand total.
-    private func flush(_ sizes: inout [Int64], attribution: [URL]) -> SizeMeasurement {
+    /// Batches arithmetic while still polling cancellation in very wide folders.
+    private func flushIfNeeded(_ sizes: inout [Int64], attribution: [URL]) -> Bool {
+        guard sizes.count >= Self.reportInterval else { return false }
+        let shouldDrain = flush(&sizes, attribution: attribution)
+        if shouldDrain { drainProgress() }
+        return cancelled.isCancelled
+    }
+
+    /// Adds one batch and queues a progress snapshot when the global interval is due.
+    /// Returns true only for the worker that must drain the serial callback queue.
+    private func flush(_ sizes: inout [Int64], attribution: [URL]) -> Bool {
         condition.lock()
         defer { condition.unlock() }
         let bytes = sizes.reduce(0, +)
@@ -593,19 +647,87 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         grandTotal.fileCount += count
         entriesSinceReport += count
         sizes.removeAll(keepingCapacity: true)
-        return grandTotal
+
+        guard progress != nil, entriesSinceReport >= Self.reportInterval else {
+            return false
+        }
+        entriesSinceReport = 0
+        pendingProgress.append(grandTotal)
+        guard !isReportingProgress else { return false }
+        isReportingProgress = true
+        return true
     }
 
-    private func maybeReport(_ snapshot: SizeMeasurement) {
-        condition.lock()
-        let due = entriesSinceReport >= Self.reportInterval
-        if due { entriesSinceReport = 0 }
-        condition.unlock()
-        if due { progress?(snapshot) }
+    /// One worker delivers every queued callback. Snapshots remain ordered, and a
+    /// caller never receives concurrent progress calls from separate workers.
+    private func drainProgress() {
+        guard let progress else { return }
+        while true {
+            condition.lock()
+            guard !pendingProgress.isEmpty else {
+                isReportingProgress = false
+                condition.unlock()
+                return
+            }
+            let snapshot = pendingProgress.removeFirst()
+            condition.unlock()
+            progress(snapshot)
+        }
     }
 }
 
 // MARK: - Support
+
+/// Long-lived filesystem workers shared by every measurement.
+///
+/// A pool job processes one directory. This keeps the thread count bounded while
+/// allowing concurrent scans to interleave instead of waiting behind one large walk.
+private final class MeasurementWorkerPool: @unchecked Sendable {
+    typealias Job = @Sendable () -> Void
+
+    static let shared = MeasurementWorkerPool()
+
+    let width: Int
+    private let condition = NSCondition()
+    private var jobs: [Job] = []
+    private var workers: [Thread] = []
+
+    var workerIdentities: [ObjectIdentifier] {
+        workers.map(ObjectIdentifier.init)
+    }
+
+    private init() {
+        width = max(2, min(8, ProcessInfo.processInfo.activeProcessorCount))
+
+        for _ in 0..<width {
+            let worker = Thread { [weak self] in
+                self?.workerLoop()
+            }
+            // The user is waiting for the Dashboard and Scanner figures.
+            worker.qualityOfService = .userInitiated
+            workers.append(worker)
+        }
+        for worker in workers { worker.start() }
+    }
+
+    func submit(_ job: @escaping Job) {
+        condition.lock()
+        jobs.append(job)
+        condition.signal()
+        condition.unlock()
+    }
+
+    private func workerLoop() {
+        while true {
+            condition.lock()
+            while jobs.isEmpty { condition.wait() }
+            let job = jobs.removeFirst()
+            condition.unlock()
+
+            autoreleasepool { job() }
+        }
+    }
+}
 
 /// Bridges structured-concurrency cancellation into the detached, blocking walk.
 /// `Task.detached` does not inherit cancellation, so without this the scan's stop

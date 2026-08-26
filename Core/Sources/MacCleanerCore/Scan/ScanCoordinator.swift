@@ -26,8 +26,8 @@ public struct ScanResults: Sendable, Equatable {
         categories.reduce(0) { $0 + $1.totalBytes }
     }
 
-    /// The Dashboard's "Safe to remove" tile: caches and package tarballs that
-    /// regenerate on demand, cleanable without human judgement.
+    /// The Dashboard's "Safe to Remove" tile. It includes cache data that
+    /// regenerates and application leftovers that have no installed owner.
     ///
     /// Judged per entry, not per category. A safe category can still hold the one
     /// thing that does not come back — an `.xcarchive` with a shipped build's only
@@ -61,6 +61,7 @@ public actor ScanCoordinator {
     private static let weights: [CategoryID: Double] = [
         .documentsAndFiles: 3.0,
         .applications: 4.0,
+        .applicationLeftovers: 1.0,
         .hiddenSystemData: 2.0,
         .systemCaches: 1.0,
         .packageManagers: 1.0,
@@ -79,13 +80,12 @@ public actor ScanCoordinator {
         self.scanners = scanners
     }
 
-    /// The seven categories the design specifies, in its listed order.
-    ///
-    /// Order matters only for presentation — the scanners run concurrently.
+    /// Standard categories in display order. Scanners run concurrently.
     public static func standard() -> ScanCoordinator {
         ScanCoordinator(scanners: [
             DocumentsFilesScanner(),
             ApplicationsScanner(),
+            ApplicationLeftoversScanner(),
             HiddenDataScanner(),
             SystemCachesScanner(),
             PackageManagerScanner(),
@@ -154,15 +154,15 @@ public actor ScanCoordinator {
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
-                        // One failing category must not lose the whole scan. It is
-                        // reported as unavailable, with the reason shown in its row.
+                        // One category failure must not lose the whole scan. The row
+                        // reports that category as unavailable and gives the reason.
                         return .unavailable(scanner.id, reason: Self.describe(error))
                     }
                 }
             }
 
             for try await raw in group {
-                // Applied centrally so all seven scanners share one definition of
+                // Apply this centrally so all scanners share one definition of
                 // "too small to bother the user with".
                 let result = raw.filteringNoise(below: Self.entryNoiseFloor)
                 results.append(result)
@@ -172,6 +172,13 @@ public actor ScanCoordinator {
             }
         }
 
+        // An exact application-leftover group owns its paths. Remove each
+        // overlapping generic row before the user can select the same path through
+        // a cleanup route that does not repeat the owner and identity checks. If a
+        // generic row contains a leftover path, remove the full row. Keeping that
+        // parent would also remove the protected child when cleanup removes it.
+        results = removingApplicationLeftoverOverlaps(from: results)
+
         // Present in the design's fixed order, not completion order.
         let order = CategoryID.allCases
         results.sort {
@@ -179,6 +186,45 @@ public actor ScanCoordinator {
         }
 
         return ScanResults(categories: results, startedAt: startedAt, finishedAt: Date())
+    }
+
+    static func removingApplicationLeftoverOverlaps(
+        from results: [ScanCategoryResult]
+    ) -> [ScanCategoryResult] {
+        let leftoverPaths = results
+            .first(where: { $0.categoryID == .applicationLeftovers })?
+            .entries
+            .flatMap(\.children)
+            .map { $0.url.standardizedFileURL.path } ?? []
+        guard !leftoverPaths.isEmpty else { return results }
+
+        func overlapsLeftover(_ entry: FileEntry) -> Bool {
+            let path = entry.url.standardizedFileURL.path
+            return leftoverPaths.contains { leftover in
+                path == leftover
+                    || path.hasPrefix(leftover + "/")
+                    || leftover.hasPrefix(path + "/")
+            }
+        }
+
+        return results.map { result in
+            guard result.categoryID != .applicationLeftovers,
+                  !result.entries.isEmpty
+            else { return result }
+
+            var copy = result
+            copy.entries = result.entries.compactMap { original in
+                guard !overlapsLeftover(original) else { return nil }
+                var entry = original
+                entry.children.removeAll(where: overlapsLeftover)
+                return entry
+            }
+            copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }
+            if copy.entries.isEmpty, copy.availability == .available {
+                copy.availability = .empty
+            }
+            return copy
+        }
     }
 
     private static func describe(_ error: Error) -> String {

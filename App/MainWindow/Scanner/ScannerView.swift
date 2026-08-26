@@ -1,10 +1,10 @@
 import SwiftUI
 import MacCleanerCore
 
-/// The Scanner: all seven categories in one grouped outline, each expanding into a
+/// The Scanner categories in one grouped outline, each expanding into a
 /// file table.
 ///
-/// One box with hairline-separated rows, not the seven detached cards the Electron
+/// One box with hairline-separated rows, not the detached cards the Electron
 /// version used — the design is explicit that this should read like Finder or System
 /// Settings, where a list of things is a list, not a scattering of panels.
 struct ScannerView: View {

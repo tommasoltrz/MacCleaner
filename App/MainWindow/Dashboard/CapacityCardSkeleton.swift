@@ -96,13 +96,23 @@ extension View {
 }
 
 private struct SkeletonPulse: ViewModifier {
-    @State private var pulsing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
-        content
-            .opacity(pulsing ? 0.55 : 1)
-            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulsing)
-            .onAppear { pulsing = true }
+        // A repeating animation transaction can capture the startup layout.
+        // The timeline changes only opacity, so flexible bones keep their width.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            content.opacity(reduceMotion ? 0.8 : pulseOpacity(at: context.date))
+        }
+    }
+
+    private func pulseOpacity(at date: Date) -> Double {
+        let duration = 1.8
+        let phase = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: duration) / duration
+        let triangle = abs(phase * 2 - 1)
+        let eased = triangle * triangle * (3 - 2 * triangle)
+        return 0.55 + 0.45 * eased
     }
 }
 
