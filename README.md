@@ -25,10 +25,11 @@ Core/                    Swift package — the scanning engine, testable without
   Scan/                  breakdown + category scanners + coordinator
   Act/                   cleanup, app uninstall, leftovers, trash, removal log
   Duplicates/            verified file duplicate matching and removal
+  StorageExplorer/       one-level storage accounting and reviewed removal
   maccleaner-cli/        headless harness
 App/                     SwiftUI app — a thin shell over Core
   DesignSystem/          tokens, type ramp, shared components
-  MainWindow/            sidebar, toolbar, five primary views, sheets
+  MainWindow/            sidebar, toolbar, six primary views, sheets
   Photos/                PhotoKit access, thumbnails and deletion
   Preferences/           four panes + settings store
 design/                  the design handoff — spec of record
@@ -104,6 +105,12 @@ is an upper bound. The volume free-space value is the final result.
 
 The Photos tab uses PhotoKit metadata and Vision feature prints. It keeps one copy
 in each group and requires a review before deletion.
+
+**Storage Explorer measures one folder level at a time.** Each row includes all
+allocated bytes below that item. Hard links count once across sibling rows.
+MacCleaner protects system locations, applications, packages, volumes, exclusions,
+and items with unreadable contents. Reviewed unlocked items move to the Trash.
+MacCleaner checks each file identity again before removal.
 
 **Automatic scanning is process-resident.** MacCleaner evaluates daily and weekly
 schedules while it runs. This includes menu-bar-only login launches. No separate

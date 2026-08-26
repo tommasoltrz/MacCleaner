@@ -18,9 +18,11 @@ final class AppModel {
     /// The preferences the engine must obey. Injected at launch; optional only so
     /// previews and tests can build a model without a store.
     @ObservationIgnored var settings: SettingsStore?
+    let storageExplorer: StorageExplorerModel
 
     init(settings: SettingsStore? = nil) {
         self.settings = settings
+        self.storageExplorer = StorageExplorerModel(settings: settings)
         startScheduler()
     }
 
@@ -85,7 +87,7 @@ final class AppModel {
     }
 
     enum View: String, CaseIterable, Identifiable {
-        case dashboard, scanner, uninstaller, trash, duplicates
+        case dashboard, scanner, storageExplorer, uninstaller, trash, duplicates
         // Reached from the Dashboard tiles, not the sidebar. Back returns.
         case safeToRemove, needsReview
         var id: String { rawValue }
@@ -95,13 +97,14 @@ final class AppModel {
         /// Destructive workflows sit at the end: review an application's complete
         /// uninstall first, then the Trash where removed items ultimately land.
         static var sidebarCases: [View] {
-            [.dashboard, .scanner, .duplicates, .uninstaller, .trash]
+            [.dashboard, .scanner, .storageExplorer, .duplicates, .uninstaller, .trash]
         }
 
         var title: String {
             switch self {
             case .dashboard:    "Dashboard"
             case .scanner:      "Scanner"
+            case .storageExplorer: "Storage Explorer"
             case .uninstaller:  "App Uninstaller"
             case .trash:        "Trash"
             case .duplicates:   "Duplicates"
@@ -115,6 +118,7 @@ final class AppModel {
             switch self {
             case .dashboard:    "speedometer"
             case .scanner:      "magnifyingglass"
+            case .storageExplorer: "externaldrive"
             case .uninstaller:  "xmark.app"
             case .trash:        "trash"
             case .duplicates:   "square.on.square"
@@ -125,7 +129,7 @@ final class AppModel {
     }
 
     enum Sheet: String, Identifiable {
-        case cleanUp, emptyTrash, deleteDuplicateFiles, deletePhotos, uninstallApp
+        case cleanUp, emptyTrash, deleteDuplicateFiles, deletePhotos, removeStorageItems, uninstallApp
         var id: String { rawValue }
     }
 
@@ -154,16 +158,36 @@ final class AppModel {
     private var history: [View] = []
     private var forwardStack: [View] = []
 
-    var canGoBack: Bool { !history.isEmpty }
-    var canGoForward: Bool { !forwardStack.isEmpty }
+    var canGoBack: Bool {
+        if view == .storageExplorer, storageExplorer.canGoBack {
+            return !isStorageExplorerMeasurementBlocked
+        }
+        return !history.isEmpty
+    }
+    var canGoForward: Bool {
+        if view == .storageExplorer, storageExplorer.canGoForward {
+            return !isStorageExplorerMeasurementBlocked
+        }
+        return !forwardStack.isEmpty
+    }
 
     func goBack() {
+        if view == .storageExplorer, storageExplorer.canGoBack {
+            guard !isStorageExplorerMeasurementBlocked else { return }
+            storageExplorer.goBack()
+            return
+        }
         guard let previous = history.popLast() else { return }
         forwardStack.append(view)
         withoutHistory { view = previous }
     }
 
     func goForward() {
+        if view == .storageExplorer, storageExplorer.canGoForward {
+            guard !isStorageExplorerMeasurementBlocked else { return }
+            storageExplorer.goForward()
+            return
+        }
         guard let next = forwardStack.popLast() else { return }
         history.append(view)
         withoutHistory { view = next }
@@ -227,6 +251,7 @@ final class AppModel {
         case cleaningUp(itemCount: Int, totalBytes: Int64, permanentCount: Int)
         case emptyingTrash(itemCount: Int, totalBytes: Int64)
         case removingDuplicateFiles(itemCount: Int, totalBytes: Int64)
+        case removingStorageItems(itemCount: Int, totalBytes: Int64)
         case uninstalling(applicationName: String, applicationOnly: Bool, waitingToQuit: Bool)
 
         var title: String {
@@ -241,6 +266,9 @@ final class AppModel {
             case .removingDuplicateFiles(let count, _):
                 let files = count == 1 ? "file" : "files"
                 return "Moving \(count) duplicate \(files) to the Trash"
+            case .removingStorageItems(let count, _):
+                let items = count == 1 ? "item" : "items"
+                return "Moving \(count) \(items) to the Trash"
             case .uninstalling(let name, _, let waiting):
                 return waiting ? "Waiting for \(name) to quit" : "Uninstalling \(name)"
             }
@@ -253,7 +281,8 @@ final class AppModel {
             switch self {
             case .cleaningUp(_, let bytes, _),
                  .emptyingTrash(_, let bytes),
-                 .removingDuplicateFiles(_, let bytes):
+                 .removingDuplicateFiles(_, let bytes),
+                 .removingStorageItems(_, let bytes):
                 return "\(ByteFormatting.string(bytes)). Each item is measured on disk "
                     + "before it goes, so large folders take a moment."
             case .uninstalling(_, let applicationOnly, let waiting):
@@ -280,7 +309,80 @@ final class AppModel {
         if case .removingDuplicateFiles? = activity { return true }
         return false
     }
+    var isRemovingStorageItems: Bool {
+        if case .removingStorageItems? = activity { return true }
+        return false
+    }
     var isShowingAppDataAccessAlert = false
+
+    var currentStatusMessage: String {
+        view == .storageExplorer ? storageExplorer.statusMessage : statusMessage
+    }
+
+    var isStorageExplorerMeasurementBlocked: Bool {
+        isScanning || isScanningDuplicateFiles || isSweepingPhotos || activity != nil
+    }
+
+    private(set) var pendingStorageExplorerItems: [StorageExplorerItem] = []
+
+    var storageExplorerSelectionLabel: String {
+        let count = storageExplorer.selectedItems.count
+        guard count > 0 else { return "Move to Trash" }
+        return "Move \(count) \(count == 1 ? "Item" : "Items") to Trash"
+    }
+
+    func requestStorageExplorerRemoval() {
+        guard storageExplorer.canRemoveSelection, activity == nil else { return }
+        pendingStorageExplorerItems = storageExplorer.selectedItems
+        activeSheet = .removeStorageItems
+    }
+
+    func cancelStorageExplorerRemoval() {
+        pendingStorageExplorerItems.removeAll()
+        activeSheet = nil
+    }
+
+    func performStorageExplorerRemoval() async {
+        let items = pendingStorageExplorerItems
+        guard !items.isEmpty, activity == nil else { return }
+        pendingStorageExplorerItems.removeAll()
+        activeSheet = nil
+        activity = .removingStorageItems(
+            itemCount: items.count,
+            totalBytes: items.reduce(0) { $0 + $1.allocatedBytes }
+        )
+
+        let completionMessage: String
+        do {
+            let outcome = try await storageExplorer.remove(items, keepReceipt: keepReceipt)
+            completionMessage = Self.storageExplorerRemovalStatus(outcome)
+        } catch is CancellationError {
+            completionMessage = "Storage removal stopped."
+        } catch {
+            completionMessage = "The selected items could not move to the Trash."
+        }
+        statusMessage = completionMessage
+
+        activity = nil
+        storageExplorer.refresh(
+            statusAfterLoad: completionMessage,
+            clearAllCachedFolders: true
+        )
+        await refreshAfterRemoval()
+    }
+
+    private static func storageExplorerRemovalStatus(_ outcome: CleanupOutcome) -> String {
+        var message = "Moved \(outcome.removedCount) "
+            + "\(outcome.removedCount == 1 ? "item" : "items") to the Trash."
+        if outcome.freedBytes > 0 {
+            message += " The items used \(ByteFormatting.string(outcome.freedBytes))."
+        }
+        if !outcome.failed.isEmpty {
+            message += " \(outcome.failed.count) "
+                + "\(outcome.failed.count == 1 ? "item could" : "items could") not be moved."
+        }
+        return message
+    }
 
     // MARK: - Derived
 
@@ -1138,6 +1240,7 @@ final class AppModel {
         guard !isScanning,
               !isScanningDuplicateFiles,
               !isSweepingPhotos,
+              !storageExplorer.isLoading,
               activity == nil
         else { return }
         // An override belongs to one reviewed result set. Carrying it into a fresh
@@ -1278,6 +1381,7 @@ final class AppModel {
         guard !isScanningDuplicateFiles,
               !isScanning,
               !isSweepingPhotos,
+              !storageExplorer.isLoading,
               activity == nil
         else { return }
         let scanRoots = roots ?? fileDuplicateResults?.roots ?? []
@@ -1471,6 +1575,7 @@ final class AppModel {
         guard !isSweepingPhotos,
               !isScanning,
               !isScanningDuplicateFiles,
+              !storageExplorer.isLoading,
               activity == nil
         else { return }
         isSweepingPhotos = true

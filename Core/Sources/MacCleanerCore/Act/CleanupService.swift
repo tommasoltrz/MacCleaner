@@ -91,13 +91,15 @@ public struct CleanupService: Sendable {
     ///   explicit authorization to include protected related data. Without the exact
     ///   parent ID, cleanup removes the bundle and regenerable children but preserves
     ///   profiles, preferences, containers and other non-regenerable children.
+    /// - Parameter expectedIdentities: reviewed identities that must still match.
     public func remove(
         entries: [FileEntry],
         trashFirst: Bool,
         privilegedFallback: Bool = false,
         keepReceipt: Bool = true,
         userDataRemovalOverrides: Set<FileEntry.ID> = [],
-        appDataRemovalOverrides: Set<FileEntry.ID> = []
+        appDataRemovalOverrides: Set<FileEntry.ID> = [],
+        expectedIdentities: [FileEntry.ID: String] = [:]
     ) async throws -> CleanupOutcome {
         var outcome = CleanupOutcome()
         // Targets refused for lack of permission, retried below in one privileged
@@ -131,11 +133,22 @@ public struct CleanupService: Sendable {
                 for: entry,
                 removeProtectedAppData: appDataRemovalOverrides.contains(entry.id)
             ) {
+                if let expected = expectedIdentities[target.id],
+                   FileIdentity.of(target.url) != expected {
+                    outcome.failed.append(target.url.path)
+                    continue
+                }
                 // Measured now rather than trusting the scan's figure, which may be
                 // hours old. The measurer throws nothing but `CancellationError`, so
                 // letting this propagate does not turn an unreadable file into an
                 // aborted batch.
                 let measured = try await measurer.measure(target.url).allocatedBytes
+
+                if let expected = expectedIdentities[target.id],
+                   FileIdentity.of(target.url) != expected {
+                    outcome.failed.append(target.url.path)
+                    continue
+                }
 
                 let landed: URL?
                 do {

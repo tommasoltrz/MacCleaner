@@ -61,6 +61,7 @@ struct MacCleanerApp: App {
                         model.isScanning
                             || model.isScanningDuplicateFiles
                             || model.isSweepingPhotos
+                            || model.storageExplorer.isLoading
                             || model.activity != nil
                     )
                 Button("Stop Scan") { model.cancelScan() }
