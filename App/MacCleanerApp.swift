@@ -57,7 +57,12 @@ struct MacCleanerApp: App {
             CommandMenu("Scan") {
                 Button("Scan for Junk") { model.startScan() }
                     .keyboardShortcut("r")
-                    .disabled(model.isScanning)
+                    .disabled(
+                        model.isScanning
+                            || model.isScanningDuplicateFiles
+                            || model.isSweepingPhotos
+                            || model.activity != nil
+                    )
                 Button("Stop Scan") { model.cancelScan() }
                     .keyboardShortcut(".")
                     .disabled(!model.isScanning)

@@ -85,7 +85,7 @@ final class AppModel {
     }
 
     enum View: String, CaseIterable, Identifiable {
-        case dashboard, scanner, uninstaller, trash, photos
+        case dashboard, scanner, uninstaller, trash, duplicates
         // Reached from the Dashboard tiles, not the sidebar. Back returns.
         case safeToRemove, needsReview
         var id: String { rawValue }
@@ -95,7 +95,7 @@ final class AppModel {
         /// Destructive workflows sit at the end: review an application's complete
         /// uninstall first, then the Trash where removed items ultimately land.
         static var sidebarCases: [View] {
-            [.dashboard, .scanner, .photos, .uninstaller, .trash]
+            [.dashboard, .scanner, .duplicates, .uninstaller, .trash]
         }
 
         var title: String {
@@ -104,7 +104,7 @@ final class AppModel {
             case .scanner:      "Scanner"
             case .uninstaller:  "App Uninstaller"
             case .trash:        "Trash"
-            case .photos:       "Photo Duplicates"
+            case .duplicates:   "Duplicates"
             case .safeToRemove: "Safe to Remove"
             case .needsReview:  "Needs Review"
             }
@@ -117,7 +117,7 @@ final class AppModel {
             case .scanner:      "magnifyingglass"
             case .uninstaller:  "xmark.app"
             case .trash:        "trash"
-            case .photos:       "photo.on.rectangle.angled"
+            case .duplicates:   "square.on.square"
             case .safeToRemove: "checkmark.shield"
             case .needsReview:  "questionmark.folder"
             }
@@ -125,8 +125,20 @@ final class AppModel {
     }
 
     enum Sheet: String, Identifiable {
-        case cleanUp, emptyTrash, deletePhotos, uninstallApp
+        case cleanUp, emptyTrash, deleteDuplicateFiles, deletePhotos, uninstallApp
         var id: String { rawValue }
+    }
+
+    enum DuplicateKind: String, CaseIterable, Identifiable {
+        case files, photos
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .files:  "Files"
+            case .photos: "Photos"
+            }
+        }
     }
 
     // MARK: - Navigation
@@ -138,6 +150,7 @@ final class AppModel {
             forwardStack.removeAll()
         }
     }
+    var duplicateKind: DuplicateKind = .files
     private var history: [View] = []
     private var forwardStack: [View] = []
 
@@ -201,7 +214,72 @@ final class AppModel {
     var activeSheet: Sheet?
 
     var statusMessage: String = "Ready to scan"
-    var isCleaningUp = false
+    /// The removal in progress, if any. One at a time: every removal edits the
+    /// same scan results and Trash summary, and the window is covered while it
+    /// runs — see `ActivityOverlay`.
+    ///
+    /// Set for the removal itself, never for the re-measurement after it. The disk
+    /// walk takes ~20 s and has its own skeleton state on the Dashboard; holding
+    /// the scrim through it made every clean-up read as a 20-second freeze.
+    private(set) var activity: Activity?
+
+    enum Activity: Equatable {
+        case cleaningUp(itemCount: Int, totalBytes: Int64, permanentCount: Int)
+        case emptyingTrash(itemCount: Int, totalBytes: Int64)
+        case removingDuplicateFiles(itemCount: Int, totalBytes: Int64)
+        case uninstalling(applicationName: String, applicationOnly: Bool, waitingToQuit: Bool)
+
+        var title: String {
+            switch self {
+            case .cleaningUp(let count, _, let permanent):
+                let items = count == 1 ? "item" : "items"
+                if permanent == 0 { return "Moving \(count) \(items) to the Trash" }
+                if permanent == count { return "Deleting \(count) \(items)" }
+                return "Removing \(count) \(items)"
+            case .emptyingTrash:
+                return "Emptying the Trash"
+            case .removingDuplicateFiles(let count, _):
+                let files = count == 1 ? "file" : "files"
+                return "Moving \(count) duplicate \(files) to the Trash"
+            case .uninstalling(let name, _, let waiting):
+                return waiting ? "Waiting for \(name) to quit" : "Uninstalling \(name)"
+            }
+        }
+
+        /// Says why it takes as long as it does. Every item is measured immediately
+        /// before it goes — the freed figure is what actually went, never the
+        /// selection total — and that measurement is most of the wait.
+        var detail: String {
+            switch self {
+            case .cleaningUp(_, let bytes, _),
+                 .emptyingTrash(_, let bytes),
+                 .removingDuplicateFiles(_, let bytes):
+                return "\(ByteFormatting.string(bytes)). Each item is measured on disk "
+                    + "before it goes, so large folders take a moment."
+            case .uninstalling(_, let applicationOnly, let waiting):
+                if waiting {
+                    return "The application and its helpers are asked to quit. "
+                        + "Nothing is removed until they are gone."
+                }
+                return applicationOnly
+                    ? "Related files stay on disk."
+                    : "The application moves first. Related data stays if that move fails."
+            }
+        }
+    }
+
+    var isCleaningUp: Bool {
+        if case .cleaningUp? = activity { return true }
+        return false
+    }
+    var isUninstallingApp: Bool {
+        if case .uninstalling? = activity { return true }
+        return false
+    }
+    var isRemovingDuplicateFiles: Bool {
+        if case .removingDuplicateFiles? = activity { return true }
+        return false
+    }
     var isShowingAppDataAccessAlert = false
 
     // MARK: - Derived
@@ -456,7 +534,6 @@ final class AppModel {
 
     var appUninstallPlan: AppUninstallPlan?
     var isPlanningAppUninstall = false
-    var isUninstallingApp = false
     var appUninstallError: String?
     var appUninstallOutcome: CleanupOutcome?
     var lastUninstalledApplicationName: String?
@@ -569,12 +646,16 @@ final class AppModel {
     }
 
     func performAppUninstall() async {
-        guard let request = pendingAppUninstall else { return }
+        guard let request = pendingAppUninstall, activity == nil else { return }
         pendingAppUninstall = nil
         activeSheet = nil
-        isUninstallingApp = true
+        let applicationName = request.plan.applicationName
+        let applicationOnly = request.plan.isApplicationOnly
+        activity = .uninstalling(
+            applicationName: applicationName, applicationOnly: applicationOnly, waitingToQuit: false
+        )
         appUninstallError = nil
-        defer { isUninstallingApp = false }
+        defer { activity = nil }
 
         // Ask the selected app and every helper embedded inside its bundle to quit.
         // Cleanup starts only after they are gone; it never force-kills a process
@@ -586,7 +667,13 @@ final class AppModel {
                 return url.path == targetPath || url.path.hasPrefix(targetPath + "/")
             }
         }
-        for application in matchingRunningApplications() { application.terminate() }
+        let running = matchingRunningApplications()
+        if !running.isEmpty {
+            activity = .uninstalling(
+                applicationName: applicationName, applicationOnly: applicationOnly, waitingToQuit: true
+            )
+            for application in running { application.terminate() }
+        }
         for _ in 0..<30 where !matchingRunningApplications().isEmpty {
             try? await Task.sleep(for: .milliseconds(100))
         }
@@ -596,6 +683,9 @@ final class AppModel {
             statusMessage = "Uninstall stopped because the application did not quit."
             return
         }
+        activity = .uninstalling(
+            applicationName: applicationName, applicationOnly: applicationOnly, waitingToQuit: false
+        )
 
         let outcome: CleanupOutcome
         do {
@@ -632,8 +722,8 @@ final class AppModel {
         }
 
         pruneVanishedEntries()
-        await measureStorage()
-        await loadTrash()
+        activity = nil
+        await refreshAfterRemoval()
     }
 
     /// Kept on for the receipt checkbox in the clean-up sheet.
@@ -704,7 +794,7 @@ final class AppModel {
     /// user switched confirmation off in Advanced — their call, made deliberately
     /// in Preferences, so honouring it is not the app being reckless.
     func requestCleanUp() {
-        guard !isCleaningUp else { return }
+        guard activity == nil else { return }
         let entries = selectedEntries
         let selectedIDs = Set(entries.map(\.id))
         let orphanedIdentifiers = selectedOrphanBundleIdentifiersFromScanner
@@ -754,10 +844,15 @@ final class AppModel {
     /// to free rather than what actually went.
     func performCleanUp() async {
         // The captured plan, never the live settings — see `CleanupPlan`.
-        guard let plan = pendingCleanUp, !isCleaningUp else { return }
-        isCleaningUp = true
-        statusMessage = "Moving selected items to the Trash…"
-        defer { isCleaningUp = false }
+        guard let plan = pendingCleanUp, activity == nil else { return }
+        activity = .cleaningUp(
+            itemCount: plan.itemCount,
+            totalBytes: plan.totalBytes,
+            permanentCount: plan.permanentCount
+        )
+        statusMessage = plan.permanentCount == 0
+            ? "Moving selected items to the Trash…" : "Removing selected items…"
+        defer { activity = nil }
         let entries = plan.entries
         pendingCleanUp = nil
         activeSheet = nil
@@ -823,9 +918,19 @@ final class AppModel {
             isShowingAppDataAccessAlert = true
             statusMessage += " Allow access to other application data, then try again."
         }
-        // The disk changed, so the cached breakdown is now wrong.
+        // The removal is over. The window comes back here, before the disk is
+        // walked again — see `activity`.
+        activity = nil
+        await refreshAfterRemoval()
+    }
+
+    /// The disk changed, so the cached breakdown and the Trash summary are both
+    /// wrong. They run together: the Trash read is usually quick and feeds the
+    /// sidebar count, and it should not queue behind a 20-second walk.
+    private func refreshAfterRemoval() async {
+        async let trash: Void = loadTrash()
         await measureStorage()
-        await loadTrash()
+        await trash
     }
 
     /// Says what actually happened, split the way the outcome is: trashed bytes
@@ -881,7 +986,13 @@ final class AppModel {
     }
 
     func emptyTrash() async {
+        guard activity == nil else { return }
         activeSheet = nil
+        activity = .emptyingTrash(
+            itemCount: trashSummary?.itemCount ?? 0,
+            totalBytes: trashSummary?.totalBytes ?? 0
+        )
+        defer { activity = nil }
         do {
             let result = try await trashService.empty(privilegedFallback: true)
             var message = "Emptied the Trash. Reclaimed \(ByteFormatting.string(result.freedBytes))."
@@ -897,7 +1008,10 @@ final class AppModel {
             statusMessage = "The Trash could not be read. Grant Full Disk Access "
                 + "in System Settings, Privacy & Security."
         }
+        // Re-read under the scrim, so the Trash never lifts it over rows that are
+        // gone. The disk walk runs after, on the Dashboard's own skeleton.
         await loadTrash()
+        activity = nil
         await measureStorage()
     }
 
@@ -1019,7 +1133,13 @@ final class AppModel {
     ///   must not steal the view they are looking at; the status bar and the
     ///   toolbar's progress readout say it is running.
     func startScan(automatic: Bool = false) {
-        guard !isScanning else { return }
+        // Not during a removal either: a scan replaces the results the removal
+        // is about to edit, and the scheduler can fire at any moment.
+        guard !isScanning,
+              !isScanningDuplicateFiles,
+              !isSweepingPhotos,
+              activity == nil
+        else { return }
         // An override belongs to one reviewed result set. Carrying it into a fresh
         // scan would turn a newly discovered row into an authorized deletion merely
         // because it reused the same path.
@@ -1111,6 +1231,199 @@ final class AppModel {
         Task { await coordinator.cancel() }
     }
 
+    // MARK: - File duplicates
+
+    private let fileDuplicateService = FileDuplicateService()
+    private let fileDuplicateRemovalService = FileDuplicateRemovalService()
+    private var fileDuplicateTask: Task<Void, Never>?
+
+    var fileDuplicateResults: FileDuplicateResults?
+    var fileDuplicateProgress: FileDuplicateService.Progress?
+    var isScanningDuplicateFiles = false
+    var fileDuplicateSelection: Set<DuplicateFile.ID> = []
+    var fileDuplicateMinimumBytes: Int64 = 1_000_000
+
+    var fileDuplicateGroups: [FileDuplicateGroup] {
+        fileDuplicateResults?.groups ?? []
+    }
+
+    var fileDuplicateSelectionBytes: Int64 {
+        fileDuplicateGroups
+            .flatMap(\.removable)
+            .filter { fileDuplicateSelection.contains($0.id) }
+            .reduce(0) { $0 + $1.allocatedBytes }
+    }
+
+    var fileDuplicateSelectionLabel: String {
+        guard !fileDuplicateSelection.isEmpty else { return "Move to Trash" }
+        let files = fileDuplicateSelection.count == 1 ? "File" : "Files"
+        return "Move \(fileDuplicateSelection.count) \(files) to Trash"
+    }
+
+    func chooseFileDuplicateFolders() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Folders to Scan"
+        panel.message = "MacCleaner compares the contents of files in these folders."
+        panel.prompt = "Scan"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+
+        guard panel.runModal() == .OK else { return }
+        startFileDuplicateScan(roots: panel.urls)
+    }
+
+    func startFileDuplicateScan(roots: [URL]? = nil) {
+        guard !isScanningDuplicateFiles,
+              !isScanning,
+              !isSweepingPhotos,
+              activity == nil
+        else { return }
+        let scanRoots = roots ?? fileDuplicateResults?.roots ?? []
+        if scanRoots.isEmpty {
+            chooseFileDuplicateFolders()
+            return
+        }
+
+        isScanningDuplicateFiles = true
+        fileDuplicateProgress = .init(stage: .enumerating)
+        fileDuplicateSelection.removeAll()
+        duplicateKind = .files
+        view = .duplicates
+        statusMessage = "Scanning selected folders"
+
+        fileDuplicateTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isScanningDuplicateFiles = false
+                self.fileDuplicateTask = nil
+            }
+            do {
+                let results = try await fileDuplicateService.scan(
+                    roots: scanRoots,
+                    options: .init(minimumLogicalBytes: fileDuplicateMinimumBytes),
+                    excludedPaths: settings?.excludedFolderPaths ?? [],
+                    excludedPatterns: settings?.excludedPatterns ?? [],
+                    onProgress: { progress in
+                        Task { @MainActor in self.fileDuplicateProgress = progress }
+                    }
+                )
+                fileDuplicateResults = results
+                statusMessage = Self.fileDuplicateStatus(results)
+            } catch is CancellationError {
+                statusMessage = "Duplicate scan cancelled"
+            } catch {
+                statusMessage = "Duplicate scan failed"
+            }
+        }
+    }
+
+    func cancelFileDuplicateScan() {
+        fileDuplicateTask?.cancel()
+        Task { await fileDuplicateService.cancel() }
+    }
+
+    private static func fileDuplicateStatus(_ results: FileDuplicateResults) -> String {
+        guard !results.groups.isEmpty else {
+            return "No duplicate files found in \(results.examinedCount) files."
+        }
+        return "Found \(results.groups.count) duplicate sets. "
+            + "Up to \(ByteFormatting.string(results.reclaimableBytes)) is available."
+    }
+
+    func selectAllFileDuplicates() {
+        fileDuplicateSelection = Set(fileDuplicateGroups.flatMap(\.removable).map(\.id))
+    }
+
+    func deselectAllFileDuplicates() {
+        fileDuplicateSelection.removeAll()
+    }
+
+    func toggleFileDuplicate(_ fileID: DuplicateFile.ID) {
+        if fileDuplicateSelection.contains(fileID) {
+            fileDuplicateSelection.remove(fileID)
+        } else {
+            fileDuplicateSelection.insert(fileID)
+        }
+    }
+
+    func toggleFileDuplicateGroup(_ group: FileDuplicateGroup) {
+        let ids = Set(group.removable.map(\.id))
+        if ids.isSubset(of: fileDuplicateSelection) {
+            fileDuplicateSelection.subtract(ids)
+        } else {
+            fileDuplicateSelection.formUnion(ids)
+        }
+    }
+
+    func keepFileInstead(groupID: String, fileID: DuplicateFile.ID) {
+        guard var results = fileDuplicateResults,
+              let index = results.groups.firstIndex(where: { $0.id == groupID }),
+              let promoted = results.groups[index].promoting(fileID)
+        else { return }
+
+        let groupWasSelected = results.groups[index].removable.contains {
+            fileDuplicateSelection.contains($0.id)
+        }
+        let previousKeeper = results.groups[index].keeper.id
+        results.groups[index] = promoted
+        fileDuplicateResults = results
+        fileDuplicateSelection.remove(fileID)
+        if groupWasSelected { fileDuplicateSelection.insert(previousKeeper) }
+    }
+
+    func removeSelectedDuplicateFiles() async {
+        let selected = fileDuplicateSelection
+        guard !selected.isEmpty, activity == nil else { return }
+        activeSheet = nil
+        activity = .removingDuplicateFiles(
+            itemCount: selected.count,
+            totalBytes: fileDuplicateSelectionBytes
+        )
+        defer { activity = nil }
+
+        do {
+            let result = try await fileDuplicateRemovalService.remove(
+                selectedIDs: selected,
+                from: fileDuplicateGroups,
+                privilegedFallback: true,
+                keepReceipt: keepReceipt
+            )
+            let outcome = result.cleanup
+            let failed = Set(outcome.failed)
+            let removed = selected.subtracting(failed)
+            let noLongerVerified = removed.union(result.staleFileIDs)
+            if var results = fileDuplicateResults {
+                results.groups = results.groups.compactMap { group in
+                    guard !result.staleGroupIDs.contains(group.id) else { return nil }
+                    return group.removingFiles(withIDs: noLongerVerified)
+                }
+                fileDuplicateResults = results
+            }
+            fileDuplicateSelection.subtract(noLongerVerified)
+
+            var message = "Moved \(outcome.removedCount) duplicate "
+                + (outcome.removedCount == 1 ? "file" : "files") + " to the Trash."
+            if !outcome.failed.isEmpty {
+                message += " \(outcome.failed.count) could not be moved."
+            }
+            if !result.staleFileIDs.isEmpty || !result.staleGroupIDs.isEmpty {
+                message += " Scan again to refresh these results."
+            }
+            statusMessage = message
+            if !outcome.permissionDenied.isEmpty {
+                isShowingAppDataAccessAlert = true
+            }
+            activity = nil
+            await refreshAfterRemoval()
+        } catch is CancellationError {
+            statusMessage = "Duplicate removal cancelled"
+        } catch {
+            statusMessage = "Duplicate files could not be moved"
+        }
+    }
+
     // MARK: - Photo duplicates
 
     private let photoService = PhotoDuplicateService(
@@ -1155,11 +1468,16 @@ final class AppModel {
     }
 
     func startPhotoSweep() {
-        guard !isSweepingPhotos else { return }
+        guard !isSweepingPhotos,
+              !isScanning,
+              !isScanningDuplicateFiles,
+              activity == nil
+        else { return }
         isSweepingPhotos = true
         photoUnavailable = nil
         photoSelection.removeAll()
-        view = .photos
+        view = .duplicates
+        duplicateKind = .photos
 
         photoTask = Task { [weak self] in
             guard let self else { return }
