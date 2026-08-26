@@ -119,13 +119,14 @@ public struct CleanupService: Sendable {
             // absorbed. Recent use is information for the user, not a veto.
             if !Self.removalAllowed(entry, userDataRemovalOverrides: userDataRemovalOverrides) {
                 outcome.failed.append(entry.url.path)
+                if keepReceipt { try? log.append([Self.failureRecord(for: entry)]) }
                 continue
             }
 
             let disposition: RemovalDisposition =
                 (trashFirst || Self.alwaysMovesToTrash(entry)) ? .trashed : .deleted
 
-            var succeeded: [RemovalRecord] = []
+            var records: [RemovalRecord] = []
             // Children before the bundle. For an app this list is deliberately
             // narrower unless the parent has its exact destructive override:
             // caches go with the app, profiles and settings stay by default.
@@ -136,6 +137,7 @@ public struct CleanupService: Sendable {
                 if let expected = expectedIdentities[target.id],
                    FileIdentity.of(target.url) != expected {
                     outcome.failed.append(target.url.path)
+                    records.append(Self.failureRecord(for: target))
                     continue
                 }
                 // Measured now rather than trusting the scan's figure, which may be
@@ -147,6 +149,7 @@ public struct CleanupService: Sendable {
                 if let expected = expectedIdentities[target.id],
                    FileIdentity.of(target.url) != expected {
                     outcome.failed.append(target.url.path)
+                    records.append(Self.failureRecord(for: target, bytes: measured))
                     continue
                 }
 
@@ -174,6 +177,7 @@ public struct CleanupService: Sendable {
                         if permissionDenied {
                             outcome.permissionDenied.append(target.url.path)
                         }
+                        records.append(Self.failureRecord(for: target, bytes: measured))
                     }
                     continue
                 }
@@ -183,7 +187,7 @@ public struct CleanupService: Sendable {
                 if disposition == .trashed { outcome.trashedCount += 1 }
                 else { outcome.deletedCount += 1 }
 
-                succeeded.append(RemovalRecord(
+                records.append(RemovalRecord(
                     timestamp: Date(),
                     originalPath: target.url.path,
                     bytes: measured,
@@ -201,7 +205,7 @@ public struct CleanupService: Sendable {
             // already gone, and reporting a successful removal as failed would be a
             // lie in the other direction. The cost is that those items lose Put Back,
             // which is the state every item the app did not trash is in anyway.
-            if keepReceipt { try? log.append(succeeded) }
+            if keepReceipt { try? log.append(records) }
         }
 
         if !privileged.isEmpty {
@@ -233,16 +237,22 @@ public struct CleanupService: Sendable {
             // inconsistent. A future delegated workflow must remove both together;
             // this direct filesystem path deliberately refuses to split them.
             outcome.failed = [plan.applicationURL.path]
+            if keepReceipt {
+                try? log.append([Self.failureRecord(for: plan.applicationItem.fileEntry)])
+            }
             return outcome
         }
         var failedSubtrees = Set<String>()
         let removalOrder = plan.removalOrder()
         guard !removalOrder.isEmpty else { return outcome }
 
-        func recordFailure(_ item: AppUninstallPlan.Item) {
+        func recordFailure(_ item: AppUninstallPlan.Item, bytes: Int64? = nil) {
             failedSubtrees.insert(item.url.path)
             if !outcome.failed.contains(item.url.path) {
                 outcome.failed.append(item.url.path)
+                if keepReceipt {
+                    try? log.append([Self.failureRecord(for: item.fileEntry, bytes: bytes)])
+                }
             }
         }
 
@@ -299,7 +309,7 @@ public struct CleanupService: Sendable {
                 continue
             } catch {
                 guard privilegedFallback, Self.isPermissionDenied(error) else {
-                    recordFailure(item)
+                    recordFailure(item, bytes: measured)
                     if index == 0 { return outcome }
                     continue
                 }
@@ -343,6 +353,9 @@ public struct CleanupService: Sendable {
                 item, in: plan, installedBundleIdentifiers: installed
             ) else {
                 outcome.failed.append(item.url.path)
+                if keepReceipt {
+                    try? log.append([Self.failureRecord(for: item.fileEntry)])
+                }
                 continue
             }
             safeEntries.append(item.fileEntry)
@@ -361,6 +374,18 @@ public struct CleanupService: Sendable {
     }
 
     // MARK: - Privileged fallback
+
+    private static func failureRecord(
+        for entry: FileEntry,
+        bytes: Int64? = nil
+    ) -> RemovalRecord {
+        RemovalRecord(
+            timestamp: Date(),
+            originalPath: entry.url.path,
+            bytes: max(0, bytes ?? entry.allocatedBytes),
+            disposition: .failed
+        )
+    }
 
     /// True for the errors an admin retry can actually cure.
     private static func isPermissionDenied(_ error: Error) -> Bool {
@@ -449,6 +474,7 @@ public struct CleanupService: Sendable {
             // Declined prompt, or the shell never ran: nothing moved.
             outcome.failed.append(contentsOf: targets.map(\.url.path))
             outcome.permissionDenied.append(contentsOf: targets.map(\.url.path))
+            try? log?.append(targets.map { Self.failureRecord(for: $0) })
             return
         }
 
@@ -467,6 +493,7 @@ public struct CleanupService: Sendable {
                 // which fires only for paths listed as permission-denied.
                 outcome.failed.append(target.url.path)
                 outcome.permissionDenied.append(target.url.path)
+                records.append(Self.failureRecord(for: target))
                 continue
             }
             outcome.freedBytes += target.allocatedBytes
@@ -482,8 +509,7 @@ public struct CleanupService: Sendable {
                 trashedIdentity: FileIdentity.of(URL(fileURLWithPath: destination))
             ))
         }
-        // Receipts for exactly what moved — never for an item that stayed put, and
-        // never withheld from one that went.
+        // Record each result. A failed row never receives a Trash destination.
         if !records.isEmpty { try? log?.append(records) }
     }
 
@@ -580,6 +606,9 @@ public struct CleanupService: Sendable {
         case .restored:
             // Never a removal instruction — `restored` exists only as a log
             // tombstone written by Put Back.
+            return nil
+        case .failed:
+            // Never a removal instruction. This value records an attempt only.
             return nil
         }
     }

@@ -23,13 +23,13 @@ Core/                    Swift package — the scanning engine, testable without
   Measure/               AllocatedSizeMeasurer, ByteFormatting
   System/                diskutil, snapshots, process running
   Scan/                  breakdown + category scanners + coordinator
-  Act/                   cleanup, app uninstall, leftovers, trash, removal log
+  Act/                   cleanup, app uninstall, leftovers, trash, history
   Duplicates/            verified file duplicate matching and removal
   StorageExplorer/       one-level storage accounting and reviewed removal
   maccleaner-cli/        headless harness
 App/                     SwiftUI app — a thin shell over Core
   DesignSystem/          tokens, type ramp, shared components
-  MainWindow/            sidebar, toolbar, six primary views, sheets
+  MainWindow/            sidebar, toolbar, seven primary views, sheets
   Photos/                PhotoKit access, thumbnails and deletion
   Preferences/           four panes + settings store
 design/                  the design handoff — spec of record
@@ -87,6 +87,10 @@ seven tests provide more protection.
 **Put Back only restores what MacCleaner trashed.** macOS exposes no API for the
 original location of a trashed item. Finder stores this location privately. Items
 from Finder have a disabled button and an explanatory tooltip.
+
+**Cleanup History uses saved removal receipts.** The History view lists successful
+removals, permanent removals, and failed attempts. Use the Trash view to put back
+items whose saved identity still matches an item in the Trash.
 
 **"Last opened" often means last *modified*.** `kMDItemLastUsedDate` returns null
 for almost every item on macOS 26. This includes apps that people use daily. Used

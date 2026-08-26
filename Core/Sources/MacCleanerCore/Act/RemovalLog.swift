@@ -7,13 +7,15 @@ import Foundation
 public enum RemovalDisposition: String, Sendable, CaseIterable {
     case trashed
     case deleted
+    /// A requested removal that did not complete.
+    case failed
     /// A Put Back consumed the matching `trashed` record. Appended as a tombstone
     /// (the log is append-only), so the Trash path it names cannot match a later,
     /// unrelated occupant of the same path.
     case restored
 }
 
-/// One logged removal.
+/// One removal record.
 public struct RemovalRecord: Sendable, Equatable {
     public var timestamp: Date
     /// Where the item lived before removal — for a `trashed` item this is also the
@@ -73,7 +75,7 @@ public enum RemovalLogError: Error, Equatable {
     case unwritable(String)
 }
 
-/// The append-only record of everything MacCleaner has removed, at
+/// The append-only record of MacCleaner removal results, at
 /// `~/Library/Logs/MacCleaner/removals.log`.
 ///
 /// It answers "what did this app do to my disk?" in a file the user can read, tail

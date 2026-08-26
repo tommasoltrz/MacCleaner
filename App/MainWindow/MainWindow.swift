@@ -69,6 +69,8 @@ struct MainWindow: View {
                 )
             case .uninstaller:
                 AppUninstallerView(model: model)
+            case .history:
+                CleanupHistoryView(model: model)
             case .trash:
                 TrashView(model: model)
             case .duplicates:
@@ -297,7 +299,7 @@ struct MainWindow: View {
                     : "Select only unlocked items to continue."
             )
 
-        case .uninstaller:
+        case .uninstaller, .history:
             EmptyView()
 
         case .trash:
