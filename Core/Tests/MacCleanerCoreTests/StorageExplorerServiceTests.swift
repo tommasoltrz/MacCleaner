@@ -92,6 +92,38 @@ struct StorageExplorerServiceTests {
         #expect(project.protectionReason == .protectedContents)
     }
 
+    @Test("cloud state distinguishes local and cloud-only content")
+    func cloudStatePolicy() {
+        #expect(StorageExplorerService.cloudState(
+            isUbiquitousItem: false,
+            isDownloaded: false,
+            containsCloudOnlyItems: false
+        ) == .none)
+        #expect(StorageExplorerService.cloudState(
+            isUbiquitousItem: true,
+            isDownloaded: true,
+            containsCloudOnlyItems: false
+        ) == .downloaded)
+        #expect(StorageExplorerService.cloudState(
+            isUbiquitousItem: true,
+            isDownloaded: false,
+            containsCloudOnlyItems: false
+        ) == .cloudOnly)
+        #expect(StorageExplorerService.cloudState(
+            isUbiquitousItem: false,
+            isDownloaded: false,
+            containsCloudOnlyItems: true
+        ) == .containsCloudOnlyItems)
+    }
+
+    @Test("cloud-only state survives measurement addition")
+    func cloudStateCombines() {
+        let local = SizeMeasurement(allocatedBytes: 10, fileCount: 1)
+        let cloud = SizeMeasurement(containsCloudOnlyItem: true)
+
+        #expect((local + cloud).containsCloudOnlyItem)
+    }
+
     @Test("the home Library folder is system managed")
     func protectsHomeLibrary() async throws {
         let box = try Sandbox()
@@ -105,7 +137,7 @@ struct StorageExplorerServiceTests {
         )
         let library = try #require(snapshot.items.first { $0.name == "Library" })
 
-        #expect(library.protectionReason == .system)
+        #expect(library.protectionReason == .library)
     }
 
     @Test("items inside the home Library stay protected")
@@ -119,8 +151,24 @@ struct StorageExplorerServiceTests {
         )
         let preferences = try #require(snapshot.items.first { $0.name == "Preferences" })
 
-        #expect(preferences.protectionReason == .system)
+        #expect(preferences.protectionReason == .library)
         #expect(!preferences.isRemovable)
+    }
+
+    @Test("iCloud Drive contents are not locked as Library data")
+    func allowsUserICloudDocuments() async throws {
+        let box = try Sandbox()
+        let cloudDocs = box.root
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
+        _ = try box.write("Library/Mobile Documents/com~apple~CloudDocs/document.pdf")
+
+        let snapshot = try await StorageExplorerService(home: box.root).scan(
+            directory: cloudDocs
+        )
+        let document = try #require(snapshot.items.first { $0.name == "document.pdf" })
+
+        #expect(document.protectionReason == nil)
+        #expect(document.isRemovable)
     }
 
     @Test("a missing root reports that it is unavailable")
@@ -152,6 +200,59 @@ struct StorageExplorerServiceTests {
 
         #expect(outcome.failed == [reviewed.url.path])
         #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test("selection review refuses a replacement at the same path")
+    func selectionReviewChecksIdentity() async throws {
+        let box = try Sandbox()
+        let file = try box.write("reviewed.bin")
+        let service = StorageExplorerService(home: box.root)
+        let snapshot = try await service.scan(directory: box.root)
+        let reviewed = try #require(snapshot.items.first { $0.name == file.lastPathComponent })
+        try FileManager.default.removeItem(at: file)
+        try Data(repeating: 9, count: 128).write(to: file)
+
+        let review = try await service.reviewSelection([reviewed], in: box.root)
+
+        #expect(!review.isReady)
+        #expect(review.changedPaths == [reviewed.url.path])
+        #expect(review.items.isEmpty)
+    }
+
+    @Test("selection review refreshes a changed size for the same item")
+    func selectionReviewRefreshesSize() async throws {
+        let box = try Sandbox()
+        let file = try box.write("growing.bin", bytes: 128)
+        let service = StorageExplorerService(home: box.root)
+        let snapshot = try await service.scan(directory: box.root)
+        let reviewed = try #require(snapshot.items.first { $0.name == file.lastPathComponent })
+        try Data(repeating: 9, count: 2_000_000).write(to: file)
+
+        let review = try await service.reviewSelection([reviewed], in: box.root)
+        let refreshed = try #require(review.items.first)
+
+        #expect(review.isReady)
+        #expect(refreshed.identity == reviewed.identity)
+        #expect(refreshed.allocatedBytes > reviewed.allocatedBytes)
+    }
+
+    @Test("selection review stops when an item becomes protected")
+    func selectionReviewChecksProtection() async throws {
+        let box = try Sandbox()
+        let file = try box.write("protected.bin")
+        let service = StorageExplorerService(home: box.root)
+        let snapshot = try await service.scan(directory: box.root)
+        let reviewed = try #require(snapshot.items.first { $0.name == file.lastPathComponent })
+
+        let review = try await service.reviewSelection(
+            [reviewed],
+            in: box.root,
+            excludedPaths: [file.path]
+        )
+
+        #expect(!review.isReady)
+        #expect(review.protectedPaths == [reviewed.url.path])
+        #expect(review.items.isEmpty)
     }
 
     @Test("removal accepts only a reviewed direct child")
@@ -197,5 +298,25 @@ struct StorageExplorerServiceTests {
         #expect(outcome.removedCount == 1)
         #expect(!FileManager.default.fileExists(atPath: file.path))
         #expect(FileManager.default.fileExists(atPath: trashed.path))
+    }
+
+    @Test("a document package is a file; a media library and the Trash are locked")
+    func packagesAndLibraries() async throws {
+        let box = try Sandbox()
+        _ = try box.write("Notes.rtfd/TXT.rtf")
+        _ = try box.write("Photos Library.photoslibrary/database/Photos.sqlite")
+        _ = try box.write(".Trash/old.bin")
+
+        let snapshot = try await StorageExplorerService(home: box.root).scan(
+            directory: box.root
+        )
+        let notes = try #require(snapshot.items.first { $0.name.hasPrefix("Notes") })
+        let photos = try #require(snapshot.items.first { $0.name.hasPrefix("Photos") })
+        let trash = try #require(snapshot.items.first { $0.url.lastPathComponent == ".Trash" })
+
+        #expect(notes.protectionReason == nil)
+        #expect(notes.isRemovable)
+        #expect(photos.protectionReason == .mediaLibrary)
+        #expect(trash.protectionReason == .trash)
     }
 }

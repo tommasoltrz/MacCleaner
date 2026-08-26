@@ -78,8 +78,17 @@ final class StorageExplorerModel {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        selectLocation(url)
+        Task { @MainActor in
+            guard await panel.presentAsSheet() == .OK, let url = panel.url else { return }
+            selectLocation(url)
+        }
+    }
+
+    /// Drops every cached level. The model clears its own cache after an Explorer
+    /// removal; `AppModel` calls this after every other removal, since those move
+    /// files the cached levels still count.
+    func invalidateCache() {
+        clearCache()
     }
 
     func selectHome() {
@@ -147,6 +156,30 @@ final class StorageExplorerModel {
             from: directory,
             keepReceipt: keepReceipt
         )
+    }
+
+    func reviewSelectionForRemoval(
+        _ items: [StorageExplorerItem]
+    ) async throws -> StorageExplorerSelectionReview? {
+        guard let currentURL else { return nil }
+        let review = try await service.reviewSelection(
+            items,
+            in: currentURL,
+            excludedPaths: settings?.excludedFolderPaths ?? [],
+            excludedPatterns: settings?.excludedPatterns ?? []
+        )
+        snapshot = review.snapshot
+        store(review.snapshot)
+        selection = selection.intersection(Set(review.snapshot.items.map(\.id)))
+
+        if !review.changedPaths.isEmpty {
+            statusMessage = "The selection changed. Review the updated items and try again."
+        } else if !review.protectedPaths.isEmpty {
+            statusMessage = "Some selected items are now protected. Review them and try again."
+        } else {
+            statusMessage = Self.measurementStatus(review.snapshot)
+        }
+        return review
     }
 
     private func load(

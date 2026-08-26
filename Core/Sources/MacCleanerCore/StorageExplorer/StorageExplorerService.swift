@@ -13,7 +13,9 @@ public struct StorageExplorerService: Sendable {
         .isPackageKey,
         .isApplicationKey,
         .isHiddenKey,
-        .contentModificationDateKey
+        .contentModificationDateKey,
+        .isUbiquitousItemKey,
+        .ubiquitousItemDownloadingStatusKey
     ]
     private static let systemManagedRoots = [
         "/Applications", "/Library", "/System", "/bin", "/cores", "/dev",
@@ -39,6 +41,7 @@ public struct StorageExplorerService: Sendable {
 
         var configuredMeasurer = measurer
         configuredMeasurer.protectedPatterns = excludedPatterns
+        configuredMeasurer.detectCloudOnlyItems = true
         let measurements = try await configuredMeasurer.measureChildren(
             of: directory,
             progress: progress
@@ -54,10 +57,17 @@ public struct StorageExplorerService: Sendable {
                 let measurement = measurements[child] ?? .zero
                 let kind = values.map(Self.kind(for:)) ?? .file
                 let identity = FileIdentity.of(child)
+                let cloudState = Self.cloudState(
+                    isUbiquitousItem: values?.isUbiquitousItem == true,
+                    isDownloaded: values?.ubiquitousItemDownloadingStatus == .current,
+                    containsCloudOnlyItems: measurement.containsCloudOnlyItem
+                )
                 let protection = Self.protectionReason(
                     for: child,
+                    in: directory,
                     kind: kind,
                     measurement: measurement,
+                    cloudState: cloudState,
                     identity: identity,
                     exclusions: exclusions,
                     home: home
@@ -72,6 +82,7 @@ public struct StorageExplorerService: Sendable {
                     modificationDate: values?.contentModificationDate,
                     identity: identity,
                     isHidden: values?.isHidden ?? child.lastPathComponent.hasPrefix("."),
+                    cloudState: cloudState,
                     protectionReason: values == nil ? protection ?? .unavailable : protection
                 )
             }
@@ -83,6 +94,42 @@ public struct StorageExplorerService: Sendable {
             allocatedBytes: items.reduce(0) { $0 + $1.allocatedBytes },
             fileCount: items.reduce(0) { $0 + $1.fileCount },
             unreadableCount: items.reduce(0) { $0 + $1.unreadableCount }
+        )
+    }
+
+    public func reviewSelection(
+        _ selectedItems: [StorageExplorerItem],
+        in directory: URL,
+        excludedPaths: [String] = [],
+        excludedPatterns: [String] = []
+    ) async throws -> StorageExplorerSelectionReview {
+        let snapshot = try await scan(
+            directory: directory,
+            excludedPaths: excludedPaths,
+            excludedPatterns: excludedPatterns
+        )
+        let refreshed = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
+        var items: [StorageExplorerItem] = []
+        var changedPaths: [String] = []
+        var protectedPaths: [String] = []
+
+        for selected in selectedItems {
+            guard let item = refreshed[selected.id], item.identity == selected.identity else {
+                changedPaths.append(selected.url.path)
+                continue
+            }
+            guard item.isRemovable else {
+                protectedPaths.append(item.url.path)
+                continue
+            }
+            items.append(item)
+        }
+
+        return StorageExplorerSelectionReview(
+            snapshot: snapshot,
+            items: items,
+            changedPaths: changedPaths,
+            protectedPaths: protectedPaths
         )
     }
 
@@ -117,8 +164,10 @@ public struct StorageExplorerService: Sendable {
 
     private static func protectionReason(
         for url: URL,
+        in directory: URL,
         kind: StorageExplorerItem.Kind,
         measurement: SizeMeasurement,
+        cloudState: StorageExplorerItem.CloudState,
         identity: String?,
         exclusions: [String],
         home: URL
@@ -127,12 +176,26 @@ public struct StorageExplorerService: Sendable {
         if touchesExclusion(path, exclusions: exclusions) { return .excluded }
         if measurement.containsProtectedPattern { return .protectedContents }
         if measurement.unreadableCount > 0 { return .unreadableContents }
-        if isSystemManaged(url, home: home) { return .system }
+        if let managed = managedLocation(url, in: directory, home: home) { return managed }
         if kind == .application { return .application }
-        if kind == .package { return .package }
+        if AppleMediaLibrary.contains(url, home: home) { return .mediaLibrary }
         if kind == .volume { return .volume }
+        if cloudState == .cloudOnly || cloudState == .containsCloudOnlyItems {
+            return .cloudOnly
+        }
         if identity == nil { return .unavailable }
         return nil
+    }
+
+    static func cloudState(
+        isUbiquitousItem: Bool,
+        isDownloaded: Bool,
+        containsCloudOnlyItems: Bool
+    ) -> StorageExplorerItem.CloudState {
+        if isUbiquitousItem && !isDownloaded { return .cloudOnly }
+        if containsCloudOnlyItems { return .containsCloudOnlyItems }
+        if isUbiquitousItem { return .downloaded }
+        return .none
     }
 
     private static func touchesExclusion(_ path: String, exclusions: [String]) -> Bool {
@@ -143,22 +206,45 @@ public struct StorageExplorerService: Sendable {
         }
     }
 
-    private static func isSystemManaged(_ url: URL, home: URL) -> Bool {
+    /// Locations another part of the app owns, each with its own reason so the
+    /// row can say where to go. `~/Library` is not a "system location" —
+    /// `~/Library/Caches/Google` is the Scanner's job, and the lock should say so.
+    private static func managedLocation(
+        _ url: URL, in directory: URL, home: URL
+    ) -> StorageExplorerItem.ProtectionReason? {
         let path = url.standardizedFileURL.path
+        let homeLibrary = home.appendingPathComponent("Library").path
+        if !isUserCloudDirectory(directory, home: home),
+           (path == homeLibrary || path.hasPrefix(homeLibrary + "/")) {
+            return .library
+        }
+        let homeTrash = home.appendingPathComponent(".Trash").path
+        if path == homeTrash || path.hasPrefix(homeTrash + "/") { return .trash }
+
         if systemManagedRoots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
-            return true
+            return .system
         }
         if path.hasPrefix("/Users/"),
            path != home.path,
            !path.hasPrefix(home.path + "/") {
-            return true
+            return .system
         }
-        if url.deletingLastPathComponent().standardizedFileURL.path == "/" { return true }
-        if path == home.path { return true }
-        let homeLibrary = home.appendingPathComponent("Library").path
-        if path == homeLibrary || path.hasPrefix(homeLibrary + "/") { return true }
-        let homeTrash = home.appendingPathComponent(".Trash").path
-        if path == homeTrash || path.hasPrefix(homeTrash + "/") { return true }
-        return false
+        if url.deletingLastPathComponent().standardizedFileURL.path == "/" { return .system }
+        if path == home.path { return .system }
+        return nil
+    }
+
+    /// Returns true for a user document folder backed by a cloud provider.
+    private static func isUserCloudDirectory(_ directory: URL, home: URL) -> Bool {
+        let path = directory.standardizedFileURL.path
+        let cloudDocs = home
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
+            .standardizedFileURL.path
+        if path == cloudDocs || path.hasPrefix(cloudDocs + "/") { return true }
+
+        let providers = home
+            .appendingPathComponent("Library/CloudStorage")
+            .standardizedFileURL.path
+        return path.hasPrefix(providers + "/")
     }
 }

@@ -32,7 +32,12 @@ struct FileDuplicatesView: View {
         ContentUnavailableView {
             Label("Find duplicate files", systemImage: "doc.on.doc")
         } description: {
-            Text("Select one or more folders. MacCleaner verifies file contents and keeps one copy in each set.")
+            // The skips are said up front. "Package" means nothing to most people,
+            // and Pages, Numbers and Keynote documents are packages — a duplicate
+            // scan that is silent about them reads as having checked them.
+            Text("Select one or more folders. MacCleaner verifies file contents and keeps "
+                 + "one copy in each set. Hidden files, cloud-only files and documents saved "
+                 + "as packages, such as Pages and Keynote files, are not compared.")
         } actions: {
             scanControls(buttonLabel: "Choose Folders")
         }
@@ -111,8 +116,10 @@ struct FileDuplicatesView: View {
                     minimumPicker
                     Button("Scan Again") { model.startFileDuplicateScan() }
                         .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.isBusyWithDisk)
                     Button("Choose Other Folders") { model.chooseFileDuplicateFolders() }
                         .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.isBusyWithDisk)
                 }
                 .padding(.horizontal, 2)
 
@@ -138,6 +145,7 @@ struct FileDuplicatesView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .fixedSize(horizontal: true, vertical: false)
+                .disabled(model.isBusyWithDisk)
         }
     }
 
@@ -252,10 +260,13 @@ struct FileDuplicatesView: View {
                     .foregroundStyle(Token.Text.secondary)
             }
 
-            Text(ByteFormatting.string(file.logicalBytes))
+            // Allocated, like the set's "Up to" figure above it, so the rows add up
+            // to the header. Logical size differs for compressed files.
+            Text(ByteFormatting.string(file.allocatedBytes))
                 .font(.mcRowValue)
                 .foregroundStyle(Token.Text.primary)
                 .frame(width: 84, alignment: .trailing)
+                .help("Space on disk")
 
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([file.url])

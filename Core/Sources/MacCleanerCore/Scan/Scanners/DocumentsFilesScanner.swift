@@ -74,19 +74,10 @@ public struct DocumentsFilesScanner: CategoryScanner {
     /// its own way to reclaim space (Optimize Mac Storage, remove downloads). The
     /// recency badge used to keep these out by accident, since a library is touched
     /// constantly; now that recency is information rather than a filter, the rule
-    /// has to be explicit.
-    private static let mediaLibraryExtensions: Set<String> = [
-        "photoslibrary", "aplibrary", "migratedphotolibrary", "musiclibrary", "tvlibrary",
-    ]
-    private static let mediaLibraryPaths: Set<String> = [
-        "Music/Music", "Music/iTunes", "Movies/TV",
-    ]
-
+    /// has to be explicit. The list itself is `AppleMediaLibrary`, shared with the
+    /// Storage Explorer so the two cannot disagree about what a library is.
     static func isMediaLibrary(_ url: URL, home: URL) -> Bool {
-        if mediaLibraryExtensions.contains(url.pathExtension.lowercased()) { return true }
-        let relative = url.standardizedFileURL.path
-            .dropFirst(home.standardizedFileURL.path.count + 1)
-        return mediaLibraryPaths.contains(String(relative))
+        AppleMediaLibrary.contains(url, home: home)
     }
 
     // MARK: - Thresholds

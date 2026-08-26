@@ -243,4 +243,122 @@ struct FileDuplicateServiceTests {
         #expect(!FileManager.default.fileExists(atPath: selected.url.path))
         #expect(FileManager.default.fileExists(atPath: trashed.path))
     }
+
+    @Test("A second scan is refused while one runs")
+    func refusesConcurrentScan() async throws {
+        let box = try Sandbox()
+        let data = Data(repeating: 2, count: 4 * 1024 * 1024)
+        _ = try box.write("one.bin", data: data)
+        _ = try box.write("two.bin", data: data)
+        let service = FileDuplicateService()
+        let gate = DispatchSemaphore(value: 0)
+        let stage = AsyncStream<Void>.makeStream()
+        let first = Task {
+            try await service.scan(
+                roots: [box.root],
+                options: .init(minimumLogicalBytes: 0),
+                onProgress: { progress in
+                    if progress.stage == .verifying, progress.completed == 0 {
+                        stage.continuation.yield()
+                        gate.wait()
+                    }
+                }
+            )
+        }
+        _ = await stage.stream.first { _ in true }
+
+        let root = box.root
+        await #expect(throws: FileDuplicateError.alreadyRunning) {
+            try await service.scan(roots: [root], options: .init(minimumLogicalBytes: 0))
+        }
+
+        gate.signal()
+        let results = try await first.value
+        #expect(results.groups.count == 1)
+    }
+
+    @Test("Equal creation dates make the keeper the first by name, and say so")
+    func keeperLabelIsHonest() async throws {
+        let box = try Sandbox()
+        let data = Data(repeating: 5, count: 128)
+        let a = try box.write("a.bin", data: data)
+        let b = try box.write("b.bin", data: data)
+        let sameDate = Date(timeIntervalSince1970: 1_700_000_000)
+        for url in [a, b] {
+            try FileManager.default.setAttributes([.creationDate: sameDate], ofItemAtPath: url.path)
+        }
+
+        let tied = try await FileDuplicateService().scan(
+            roots: [box.root], options: .init(minimumLogicalBytes: 0)
+        )
+        let tiedGroup = try #require(tied.groups.first)
+        #expect(tiedGroup.keeperReason == .firstByName)
+        #expect(tiedGroup.keeper.url == a)
+
+        // Now `b` is genuinely older: it keeps, and the label may claim it.
+        try FileManager.default.setAttributes(
+            [.creationDate: sameDate.addingTimeInterval(-3_600)], ofItemAtPath: b.path
+        )
+        let dated = try await FileDuplicateService().scan(
+            roots: [box.root], options: .init(minimumLogicalBytes: 0)
+        )
+        let datedGroup = try #require(dated.groups.first)
+        #expect(datedGroup.keeperReason == .oldestCopy)
+        #expect(datedGroup.keeper.url == b)
+    }
+
+    @Test("Progress is throttled, never runs backwards, and ends done")
+    func progressIsOrdered() async throws {
+        let box = try Sandbox()
+        let data = Data(repeating: 3, count: 256)
+        for index in 0..<200 {
+            _ = try box.write("copy-\(index).bin", data: data)
+        }
+        final class Log: @unchecked Sendable {
+            private let lock = NSLock()
+            private var entries: [FileDuplicateService.Progress] = []
+            func append(_ progress: FileDuplicateService.Progress) {
+                lock.lock(); entries.append(progress); lock.unlock()
+            }
+            var all: [FileDuplicateService.Progress] { lock.lock(); defer { lock.unlock() }; return entries }
+        }
+        let log = Log()
+
+        _ = try await FileDuplicateService().scan(
+            roots: [box.root],
+            options: .init(minimumLogicalBytes: 0),
+            onProgress: { log.append($0) }
+        )
+
+        let entries = log.all
+        #expect(entries.last?.stage == .done)
+        // Far fewer reports than files: 200 sampled + 200 verified would have
+        // been 400 per-file reports before the throttle.
+        #expect(entries.count < 60)
+        for stage in [FileDuplicateService.Progress.Stage.sampling, .verifying] {
+            let steps = entries.filter { $0.stage == stage }.map(\.completed)
+            #expect(steps == steps.sorted())
+            #expect(steps.first == 0)
+            #expect(steps.last == 200)
+        }
+    }
+
+    @Test("A group whose every copy left disappears; a partial removal keeps it")
+    func removingFilesFromGroup() async throws {
+        let box = try Sandbox()
+        let data = Data(repeating: 4, count: 128)
+        _ = try box.write("one.bin", data: data)
+        _ = try box.write("two.bin", data: data)
+        _ = try box.write("three.bin", data: data)
+        let results = try await FileDuplicateService().scan(
+            roots: [box.root], options: .init(minimumLogicalBytes: 0)
+        )
+        let group = try #require(results.groups.first)
+        #expect(group.removable.count == 2)
+
+        let partial = try #require(group.removingFiles(withIDs: [group.removable[0].id]))
+        #expect(partial.removable.count == 1)
+        #expect(partial.keeper == group.keeper)
+        #expect(group.removingFiles(withIDs: Set(group.removable.map(\.id))) == nil)
+    }
 }

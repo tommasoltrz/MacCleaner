@@ -2,6 +2,13 @@ import CryptoKit
 import Darwin
 import Foundation
 
+public enum FileDuplicateError: Error, Sendable, Equatable {
+    /// A scan is already running, and its roots and options are its own. Joining
+    /// it used to hand the second caller results for folders it never asked
+    /// about, and let either caller's cancellation end the other's scan.
+    case alreadyRunning
+}
+
 /// Finds exact duplicate files without reading every file in full.
 public actor FileDuplicateService {
     public struct Options: Sendable, Equatable {
@@ -50,7 +57,7 @@ public actor FileDuplicateService {
         running?.cancel()
     }
 
-    /// Scans selected roots, or joins the scan that is already running.
+    /// Scans the selected roots. One scan at a time; see `FileDuplicateError`.
     public func scan(
         roots: [URL],
         options: Options = Options(),
@@ -58,7 +65,7 @@ public actor FileDuplicateService {
         excludedPatterns: [String] = [],
         onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> FileDuplicateResults {
-        if let running { return try await running.value }
+        guard running == nil else { throw FileDuplicateError.alreadyRunning }
 
         let task = Task.detached(priority: .userInitiated) {
             try FileDuplicateFinder(
@@ -75,6 +82,42 @@ public actor FileDuplicateService {
         } onCancel: {
             task.cancel()
         }
+    }
+}
+
+/// Progress leaves the finder at every stage boundary and then at most once per
+/// 64 files or 100 ms. Every file used to report itself, and the app mirrored each
+/// report into its own MainActor task — tens of thousands for a large folder, with
+/// no ordering guarantee between them, so the bar could step backwards.
+private struct ProgressThrottle {
+    private let report: (@Sendable (FileDuplicateService.Progress) -> Void)?
+    private var lastCompleted = 0
+    private var lastEmitted = ContinuousClock.now
+
+    init(_ report: (@Sendable (FileDuplicateService.Progress) -> Void)?) {
+        self.report = report
+    }
+
+    /// A stage boundary always reports, with the stage's total and nothing done.
+    mutating func begin(_ stage: FileDuplicateService.Progress.Stage, total: Int) {
+        lastCompleted = 0
+        lastEmitted = .now
+        report?(.init(stage: stage, total: total))
+    }
+
+    mutating func advance(_ stage: FileDuplicateService.Progress.Stage, completed: Int, total: Int) {
+        let now = ContinuousClock.now
+        guard completed == total
+            || completed - lastCompleted >= 64
+            || now - lastEmitted >= .milliseconds(100)
+        else { return }
+        lastCompleted = completed
+        lastEmitted = now
+        report?(.init(stage: stage, completed: completed, total: total))
+    }
+
+    func finish(groups: Int) {
+        report?(.init(stage: .done, completed: groups, total: groups))
     }
 }
 
@@ -106,7 +149,8 @@ private struct FileDuplicateFinder {
     ) throws -> FileDuplicateResults {
         let startedAt = Date()
         let roots = normalizedRoots(requestedRoots)
-        onProgress?(.init(stage: .enumerating))
+        var progress = ProgressThrottle(onProgress)
+        progress.begin(.enumerating, total: 0)
 
         var skippedCount = 0
         var examinedCount = 0
@@ -192,7 +236,7 @@ private struct FileDuplicateFinder {
         let sizeCandidates = bySize.values
             .filter { $0.count > 1 }
             .flatMap { $0 }
-        onProgress?(.init(stage: .sampling, total: sizeCandidates.count))
+        progress.begin(.sampling, total: sizeCandidates.count)
 
         var sampled = 0
         var bySample: [String: [Candidate]] = [:]
@@ -200,9 +244,7 @@ private struct FileDuplicateFinder {
             try Task.checkCancellation()
             defer {
                 sampled += 1
-                onProgress?(.init(
-                    stage: .sampling, completed: sampled, total: sizeCandidates.count
-                ))
+                progress.advance(.sampling, completed: sampled, total: sizeCandidates.count)
             }
             guard stillMatches(candidate.file) else {
                 skippedCount += 1
@@ -226,7 +268,7 @@ private struct FileDuplicateFinder {
         let fullCandidates = bySample.values
             .filter { $0.count > 1 }
             .flatMap { $0 }
-        onProgress?(.init(stage: .verifying, total: fullCandidates.count))
+        progress.begin(.verifying, total: fullCandidates.count)
 
         var verified = 0
         var byFullDigest: [String: [Candidate]] = [:]
@@ -234,9 +276,7 @@ private struct FileDuplicateFinder {
             try Task.checkCancellation()
             defer {
                 verified += 1
-                onProgress?(.init(
-                    stage: .verifying, completed: verified, total: fullCandidates.count
-                ))
+                progress.advance(.verifying, completed: verified, total: fullCandidates.count)
             }
             guard stillMatches(candidate.file) else {
                 skippedCount += 1
@@ -266,6 +306,7 @@ private struct FileDuplicateFinder {
                 groups.append(FileDuplicateGroup(
                     id: "\(key):\(stablePath)",
                     keeper: files[0],
+                    keeperReason: Self.datesDecide(files) ? .oldestCopy : .firstByName,
                     removable: Array(files.dropFirst()),
                     contentDigest: String(key.split(separator: ":", maxSplits: 1).last ?? "")
                 ))
@@ -279,7 +320,7 @@ private struct FileDuplicateFinder {
             return $0.keeper.url.path.localizedStandardCompare($1.keeper.url.path)
                 == .orderedAscending
         }
-        onProgress?(.init(stage: .done, completed: groups.count, total: groups.count))
+        progress.finish(groups: groups.count)
 
         return FileDuplicateResults(
             groups: groups,
@@ -413,6 +454,17 @@ private struct FileDuplicateFinder {
             if a != b { return false }
             if a.isEmpty { return true }
         }
+    }
+
+    /// True only when the keeper is strictly older than the next copy. Equal or
+    /// missing dates fell through to the path order in `keeperOrder`, and the
+    /// label must say so.
+    private static func datesDecide(_ files: [DuplicateFile]) -> Bool {
+        guard files.count > 1,
+              let first = files[0].creationDate,
+              let second = files[1].creationDate
+        else { return false }
+        return first < second
     }
 
     private func keeperOrder(_ lhs: DuplicateFile, _ rhs: DuplicateFile) -> Bool {

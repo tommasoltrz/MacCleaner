@@ -96,8 +96,9 @@ It uses `nil` only when the date is unknown.
 
 **File duplicate scans use selected folders.** MacCleaner narrows candidates by size,
 sampled SHA-256, and full SHA-256. It then compares the bytes before it reports a
-match. The app skips hard links, hidden files, package contents, exclusions, and
-cloud-only files. MacCleaner does not select any file automatically. Each set keeps
+match. The app skips hard links, hidden files, exclusions, and cloud-only files. It
+does not compare documents that macOS saves as packages, such as Pages and Keynote
+files. MacCleaner does not select any file automatically. Each set keeps
 one copy, and selected copies move to the Trash.
 
 APFS clones can share storage. Therefore, the available space for duplicate files
@@ -108,9 +109,12 @@ in each group and requires a review before deletion.
 
 **Storage Explorer measures one folder level at a time.** Each row includes all
 allocated bytes below that item. Hard links count once across sibling rows.
-MacCleaner protects system locations, applications, packages, volumes, exclusions,
-and items with unreadable contents. Reviewed unlocked items move to the Trash.
-MacCleaner checks each file identity again before removal.
+MacCleaner protects system locations, applications, managed media libraries, volumes,
+exclusions, cloud-only files, and items with unreadable contents. Alias targets do
+not count towards a row. A mounted volume is separate from its parent. Reviewed
+unlocked items move to the Trash. MacCleaner refreshes each selected size and checks
+each file identity before it shows the removal confirmation. Use List for exact
+rows. Use Map to compare direct-child sizes visually.
 
 **Automatic scanning is process-resident.** MacCleaner evaluates daily and weekly
 schedules while it runs. This includes menu-bar-only login launches. No separate

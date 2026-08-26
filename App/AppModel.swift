@@ -238,13 +238,11 @@ final class AppModel {
     var activeSheet: Sheet?
 
     var statusMessage: String = "Ready to scan"
-    /// The removal in progress, if any. One at a time: every removal edits the
-    /// same scan results and Trash summary, and the window is covered while it
-    /// runs — see `ActivityOverlay`.
+    /// The disk operation in progress, if any. The window is covered while it
+    /// runs. See `ActivityOverlay`.
     ///
-    /// Set for the removal itself, never for the re-measurement after it. The disk
-    /// walk takes ~20 s and has its own skeleton state on the Dashboard; holding
-    /// the scrim through it made every clean-up read as a 20-second freeze.
+    /// Cleared before the post-removal refresh. That disk walk has its own page
+    /// state. Keeping the scrim visible made the cleanup appear frozen.
     private(set) var activity: Activity?
 
     enum Activity: Equatable {
@@ -252,6 +250,7 @@ final class AppModel {
         case emptyingTrash(itemCount: Int, totalBytes: Int64)
         case removingDuplicateFiles(itemCount: Int, totalBytes: Int64)
         case removingStorageItems(itemCount: Int, totalBytes: Int64)
+        case reviewingStorageItems(itemCount: Int)
         case uninstalling(applicationName: String, applicationOnly: Bool, waitingToQuit: Bool)
 
         var title: String {
@@ -269,22 +268,29 @@ final class AppModel {
             case .removingStorageItems(let count, _):
                 let items = count == 1 ? "item" : "items"
                 return "Moving \(count) \(items) to the Trash"
+            case .reviewingStorageItems(let count):
+                let items = count == 1 ? "item" : "items"
+                return "Reviewing \(count) \(items)"
             case .uninstalling(let name, _, let waiting):
                 return waiting ? "Waiting for \(name) to quit" : "Uninstalling \(name)"
             }
         }
 
-        /// Says why it takes as long as it does. Every item is measured immediately
-        /// before it goes — the freed figure is what actually went, never the
-        /// selection total — and that measurement is most of the wait.
+        /// Explains why the current disk operation can take time.
         var detail: String {
             switch self {
             case .cleaningUp(_, let bytes, _),
                  .emptyingTrash(_, let bytes),
-                 .removingDuplicateFiles(_, let bytes),
                  .removingStorageItems(_, let bytes):
                 return "\(ByteFormatting.string(bytes)). Each item is measured on disk "
                     + "before it goes, so large folders take a moment."
+            case .removingDuplicateFiles(_, let bytes):
+                // Not measured: re-hashed. The keeper and every chosen copy are read
+                // in full again, which is what makes a set of large videos slow.
+                return "\(ByteFormatting.string(bytes)). Each copy and its keeper are "
+                    + "verified byte for byte before it goes, so large files take a moment."
+            case .reviewingStorageItems:
+                return "MacCleaner is updating each size and checking each item before confirmation."
             case .uninstalling(_, let applicationOnly, let waiting):
                 if waiting {
                     return "The application and its helpers are asked to quit. "
@@ -323,6 +329,15 @@ final class AppModel {
         isScanning || isScanningDuplicateFiles || isSweepingPhotos || activity != nil
     }
 
+    /// One disk walk at a time. A junk scan, a duplicate scan, a photo sweep, an
+    /// Explorer measurement and a removal all contend for the same disk, and each
+    /// start guard refuses silently — so the buttons that would start one read this
+    /// and disable themselves, rather than clicking to no effect.
+    var isBusyWithDisk: Bool {
+        isScanning || isScanningDuplicateFiles || isSweepingPhotos
+            || storageExplorer.isLoading || activity != nil
+    }
+
     private(set) var pendingStorageExplorerItems: [StorageExplorerItem] = []
 
     var storageExplorerSelectionLabel: String {
@@ -331,10 +346,24 @@ final class AppModel {
         return "Move \(count) \(count == 1 ? "Item" : "Items") to Trash"
     }
 
-    func requestStorageExplorerRemoval() {
-        guard storageExplorer.canRemoveSelection, activity == nil else { return }
-        pendingStorageExplorerItems = storageExplorer.selectedItems
-        activeSheet = .removeStorageItems
+    func requestStorageExplorerRemoval() async {
+        guard storageExplorer.canRemoveSelection, !isBusyWithDisk else { return }
+        let selectedItems = storageExplorer.selectedItems
+        activity = .reviewingStorageItems(itemCount: selectedItems.count)
+
+        do {
+            let review = try await storageExplorer.reviewSelectionForRemoval(selectedItems)
+            activity = nil
+            guard let review, review.isReady else { return }
+            pendingStorageExplorerItems = review.items
+            activeSheet = .removeStorageItems
+        } catch is CancellationError {
+            activity = nil
+            storageExplorer.statusMessage = "Storage review stopped."
+        } catch {
+            activity = nil
+            storageExplorer.statusMessage = "MacCleaner could not verify the selected items."
+        }
     }
 
     func cancelStorageExplorerRemoval() {
@@ -1030,6 +1059,9 @@ final class AppModel {
     /// wrong. They run together: the Trash read is usually quick and feeds the
     /// sidebar count, and it should not queue behind a 20-second walk.
     private func refreshAfterRemoval() async {
+        // Every cached Explorer level is stale too: a folder measured before a
+        // Scanner clean-up came back from the cache with its old figure.
+        storageExplorer.invalidateCache()
         async let trash: Void = loadTrash()
         await measureStorage()
         await trash
@@ -1237,12 +1269,7 @@ final class AppModel {
     func startScan(automatic: Bool = false) {
         // Not during a removal either: a scan replaces the results the removal
         // is about to edit, and the scheduler can fire at any moment.
-        guard !isScanning,
-              !isScanningDuplicateFiles,
-              !isSweepingPhotos,
-              !storageExplorer.isLoading,
-              activity == nil
-        else { return }
+        guard !isBusyWithDisk else { return }
         // An override belongs to one reviewed result set. Carrying it into a fresh
         // scan would turn a newly discovered row into an authorized deletion merely
         // because it reused the same path.
@@ -1338,7 +1365,7 @@ final class AppModel {
 
     private let fileDuplicateService = FileDuplicateService()
     private let fileDuplicateRemovalService = FileDuplicateRemovalService()
-    private var fileDuplicateTask: Task<Void, Never>?
+    @ObservationIgnored private var fileDuplicateTask: Task<Void, Never>?
 
     var fileDuplicateResults: FileDuplicateResults?
     var fileDuplicateProgress: FileDuplicateService.Progress?
@@ -1373,17 +1400,14 @@ final class AppModel {
         panel.allowsMultipleSelection = true
         panel.resolvesAliases = true
 
-        guard panel.runModal() == .OK else { return }
-        startFileDuplicateScan(roots: panel.urls)
+        Task { @MainActor in
+            guard await panel.presentAsSheet() == .OK else { return }
+            startFileDuplicateScan(roots: panel.urls)
+        }
     }
 
     func startFileDuplicateScan(roots: [URL]? = nil) {
-        guard !isScanningDuplicateFiles,
-              !isScanning,
-              !isSweepingPhotos,
-              !storageExplorer.isLoading,
-              activity == nil
-        else { return }
+        guard !isBusyWithDisk else { return }
         let scanRoots = roots ?? fileDuplicateResults?.roots ?? []
         if scanRoots.isEmpty {
             chooseFileDuplicateFolders()
@@ -1516,7 +1540,9 @@ final class AppModel {
                 message += " Scan again to refresh these results."
             }
             statusMessage = message
-            if !outcome.permissionDenied.isEmpty {
+            // The container alert names one remedy, and it is the wrong one for a
+            // root-owned file in ~/Documents. Same filter as the clean-up path.
+            if outcome.permissionDenied.contains(where: Self.isAppDataPath) {
                 isShowingAppDataAccessAlert = true
             }
             activity = nil
@@ -1572,12 +1598,7 @@ final class AppModel {
     }
 
     func startPhotoSweep() {
-        guard !isSweepingPhotos,
-              !isScanning,
-              !isScanningDuplicateFiles,
-              !storageExplorer.isLoading,
-              activity == nil
-        else { return }
+        guard !isBusyWithDisk else { return }
         isSweepingPhotos = true
         photoUnavailable = nil
         photoSelection.removeAll()
