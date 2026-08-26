@@ -28,7 +28,7 @@ struct ConfirmationSheet: View {
             applicationOnly: Bool
         )
         case deleteDuplicateFiles(count: Int, totalBytes: Int64)
-        case removeStorageItems(count: Int, totalBytes: Int64)
+        case removeStorageItems(count: Int, totalBytes: Int64, cloudItemCount: Int)
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
         /// says how many photographs go and stays silent about megabytes rather
         /// than inventing a figure.
@@ -135,7 +135,7 @@ struct ConfirmationSheet: View {
         case .deleteDuplicateFiles(let count, _):
             let noun = count == 1 ? "file" : "files"
             return "Move \(count) duplicate \(noun) to the Trash?"
-        case .removeStorageItems(let count, _):
+        case .removeStorageItems(let count, _, _):
             let noun = count == 1 ? "item" : "items"
             return "Move \(count) \(noun) to the Trash?"
         }
@@ -205,9 +205,14 @@ struct ConfirmationSheet: View {
             return "One verified copy from each set will remain. Up to "
                 + "\(ByteFormatting.string(bytes)) is available because APFS clones can share "
                 + "storage. The selected files will move to the Trash."
-        case .removeStorageItems(_, let bytes):
-            return "MacCleaner will verify each item again. The selected items use "
-                + "\(ByteFormatting.string(bytes)). APFS can share storage between files."
+        case .removeStorageItems(_, let bytes, let cloudItemCount):
+            let cloudWarning = cloudItemCount > 0
+                ? " Moving an iCloud item to the Trash also removes it from iCloud and other devices."
+                : ""
+            return "The selected items currently use \(ByteFormatting.string(bytes)). "
+                + "This amount is not a promise of recovered space because files can share storage. "
+                + "MacCleaner will verify each item again."
+                + cloudWarning
         }
     }
 

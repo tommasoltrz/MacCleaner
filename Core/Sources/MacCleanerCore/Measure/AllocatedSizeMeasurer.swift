@@ -17,6 +17,8 @@ public struct SizeMeasurement: Sendable, Equatable {
     /// this flag must not be offered for removal, because removing it recursively
     /// would take the protected thing with it.
     public var containsProtectedPattern: Bool
+    /// True when this tree contains an iCloud item that is not stored on this Mac.
+    public var containsCloudOnlyItem: Bool
 
     public static let zero = SizeMeasurement(allocatedBytes: 0, fileCount: 0, unreadableCount: 0)
 
@@ -24,12 +26,14 @@ public struct SizeMeasurement: Sendable, Equatable {
         allocatedBytes: Int64 = 0,
         fileCount: Int = 0,
         unreadableCount: Int = 0,
-        containsProtectedPattern: Bool = false
+        containsProtectedPattern: Bool = false,
+        containsCloudOnlyItem: Bool = false
     ) {
         self.allocatedBytes = allocatedBytes
         self.fileCount = fileCount
         self.unreadableCount = unreadableCount
         self.containsProtectedPattern = containsProtectedPattern
+        self.containsCloudOnlyItem = containsCloudOnlyItem
     }
 
     public static func + (lhs: Self, rhs: Self) -> Self {
@@ -37,7 +41,8 @@ public struct SizeMeasurement: Sendable, Equatable {
             allocatedBytes: lhs.allocatedBytes + rhs.allocatedBytes,
             fileCount: lhs.fileCount + rhs.fileCount,
             unreadableCount: lhs.unreadableCount + rhs.unreadableCount,
-            containsProtectedPattern: lhs.containsProtectedPattern || rhs.containsProtectedPattern
+            containsProtectedPattern: lhs.containsProtectedPattern || rhs.containsProtectedPattern,
+            containsCloudOnlyItem: lhs.containsCloudOnlyItem || rhs.containsCloudOnlyItem
         )
     }
 }
@@ -73,8 +78,8 @@ public struct SizeMeasurement: Sendable, Equatable {
 /// external drive under the scan root cannot inflate a local category.
 public struct AllocatedSizeMeasurer: Sendable {
 
-    /// Set when the user enables "Follow symlinks while measuring" in Advanced.
-    /// Off by default — the setting's own description warns it can double-count.
+    /// Available for specialized callers. App scans keep this off to prevent
+    /// linked targets from counting under paths that do not own those bytes.
     public var followSymlinks: Bool
 
     /// Globs from Preferences › Exclusions, matched against every name the walk
@@ -82,12 +87,20 @@ public struct AllocatedSizeMeasurer: Sendable {
     /// enumerated a second time by the caller.
     public var protectedPatterns: [String]
 
+    /// Adds iCloud residency checks. Storage Explorer enables this safety scan.
+    public var detectCloudOnlyItems: Bool
+
     /// How often to check for cancellation, in entries.
     private let cancellationCheckInterval = 512
 
-    public init(followSymlinks: Bool = false, protectedPatterns: [String] = []) {
+    public init(
+        followSymlinks: Bool = false,
+        protectedPatterns: [String] = [],
+        detectCloudOnlyItems: Bool = false
+    ) {
         self.followSymlinks = followSymlinks
         self.protectedPatterns = protectedPatterns
+        self.detectCloudOnlyItems = detectCloudOnlyItems
     }
 
     fileprivate static let keys: [URLResourceKey] = [
@@ -101,6 +114,15 @@ public struct AllocatedSizeMeasurer: Sendable {
         .fileResourceIdentifierKey,
         .volumeIdentifierKey
     ]
+
+    private static let cloudKeys: [URLResourceKey] = [
+        .isUbiquitousItemKey,
+        .ubiquitousItemDownloadingStatusKey
+    ]
+
+    private static func keys(detectingCloudItems: Bool) -> [URLResourceKey] {
+        detectingCloudItems ? keys + cloudKeys : keys
+    }
 
     // MARK: - Measuring
     //
@@ -124,6 +146,7 @@ public struct AllocatedSizeMeasurer: Sendable {
     ) async throws -> SizeMeasurement {
         let followSymlinks = self.followSymlinks
         let protectedPatterns = self.protectedPatterns
+        let keys = Self.keys(detectingCloudItems: detectCloudOnlyItems)
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
@@ -132,13 +155,17 @@ public struct AllocatedSizeMeasurer: Sendable {
                 let url = followSymlinks
                     ? inputURL.resolvingSymlinksInPath()
                     : inputURL
-                let rootValues = try? url.resourceValues(forKeys: Set(Self.keys))
+                let rootValues = try? url.resourceValues(forKeys: Set(keys))
 
                 // A plain file, or a symlink we are not following: measure and return.
                 if rootValues?.isDirectory != true {
                     if rootValues?.isSymbolicLink == true && !followSymlinks { return .zero }
                     if let bytes = Self.allocatedSize(of: rootValues) {
-                        return SizeMeasurement(allocatedBytes: bytes, fileCount: 1)
+                        return SizeMeasurement(
+                            allocatedBytes: bytes,
+                            fileCount: 1,
+                            containsCloudOnlyItem: Self.isCloudOnly(rootValues)
+                        )
                     }
                     return .zero
                 }
@@ -148,8 +175,10 @@ public struct AllocatedSizeMeasurer: Sendable {
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
                     cancelled: cancelled,
+                    keys: keys,
                     progress: progress
                 )
+                if Self.isCloudOnly(rootValues) { walker.markCloudOnly(key) }
                 walker.enqueue(
                     listing: url,
                     attribution: [key],
@@ -181,18 +210,21 @@ public struct AllocatedSizeMeasurer: Sendable {
         precondition(depth >= 1, "depth must be at least 1")
         let followSymlinks = self.followSymlinks
         let protectedPatterns = self.protectedPatterns
+        let keys = Self.keys(detectingCloudItems: detectCloudOnlyItems)
         let cancelled = CancellationFlag()
 
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
                 let standardRoot = root.standardizedFileURL
-                let rootValues = try? standardRoot.resourceValues(forKeys: Set(Self.keys))
+                let rootValues = try? standardRoot.resourceValues(forKeys: Set(keys))
                 let walker = ParallelTreeWalker(
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
                     cancelled: cancelled,
+                    keys: keys,
                     progress: progress
                 )
+                if Self.isCloudOnly(rootValues) { walker.markCloudOnly(standardRoot) }
                 walker.enqueue(
                     listing: standardRoot,
                     attribution: [standardRoot],
@@ -218,12 +250,13 @@ public struct AllocatedSizeMeasurer: Sendable {
     ) async throws -> [URL: SizeMeasurement] {
         let followSymlinks = self.followSymlinks
         let protectedPatterns = self.protectedPatterns
+        let keys = Self.keys(detectingCloudItems: detectCloudOnlyItems)
         let cancelled = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .utility) {
                 let children = (try? FileManager.default.contentsOfDirectory(
                     at: url,
-                    includingPropertiesForKeys: Self.keys,
+                    includingPropertiesForKeys: keys,
                     options: []
                 )) ?? []
 
@@ -234,6 +267,7 @@ public struct AllocatedSizeMeasurer: Sendable {
                     followSymlinks: followSymlinks,
                     protectedPatterns: protectedPatterns,
                     cancelled: cancelled,
+                    keys: keys,
                     progress: progress
                 )
                 for child in children {
@@ -244,10 +278,11 @@ public struct AllocatedSizeMeasurer: Sendable {
                     if walker.matchesProtectedPattern(child.lastPathComponent) {
                         walker.markProtected(child)
                     }
-                    guard let values = try? child.resourceValues(forKeys: Set(Self.keys)) else {
+                    guard let values = try? child.resourceValues(forKeys: Set(keys)) else {
                         walker.recordUnreadable(at: child)
                         continue
                     }
+                    if Self.isCloudOnly(values) { walker.markCloudOnly(child) }
                     if values.isSymbolicLink == true {
                         guard followSymlinks else { continue }
                         // A direct symlink child reports neither directory nor
@@ -255,11 +290,12 @@ public struct AllocatedSizeMeasurer: Sendable {
                         // nothing with the follow setting on.
                         let resolved = child.resolvingSymlinksInPath()
                         guard let target = try? resolved.resourceValues(
-                            forKeys: Set(Self.keys)
+                            forKeys: Set(keys)
                         ) else {
                             walker.recordUnreadable(at: child)
                             continue
                         }
+                        if Self.isCloudOnly(target) { walker.markCloudOnly(child) }
                         if target.isDirectory == true {
                             walker.enqueue(
                                 listing: resolved,
@@ -309,6 +345,11 @@ public struct AllocatedSizeMeasurer: Sendable {
         return nil
     }
 
+    fileprivate static func isCloudOnly(_ values: URLResourceValues?) -> Bool {
+        values?.isUbiquitousItem == true
+            && values?.ubiquitousItemDownloadingStatus != .current
+    }
+
     /// Test support: repeated measurements must use these same long-lived threads.
     static var sharedWorkerIdentities: [ObjectIdentifier] {
         MeasurementWorkerPool.shared.workerIdentities
@@ -342,6 +383,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     private let followSymlinks: Bool
     private let protectedPatterns: [String]
     private let cancelled: CancellationFlag
+    private let keys: [URLResourceKey]
     private let progress: (@Sendable (SizeMeasurement) -> Void)?
 
     private let condition = NSCondition()
@@ -359,6 +401,8 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     private var visitedDirectories = Set<String>()
     /// Attribution keys whose subtree holds something matching a protected glob.
     private var protectedKeys = Set<URL>()
+    /// Attribution keys whose subtree holds an iCloud item that is not local.
+    private var cloudOnlyKeys = Set<URL>()
     /// Every file once, regardless of how many ancestors it is attributed to —
     /// what the progress callback reports.
     private var grandTotal = SizeMeasurement.zero
@@ -373,11 +417,13 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         followSymlinks: Bool,
         protectedPatterns: [String] = [],
         cancelled: CancellationFlag,
+        keys: [URLResourceKey],
         progress: (@Sendable (SizeMeasurement) -> Void)?
     ) {
         self.followSymlinks = followSymlinks
         self.protectedPatterns = protectedPatterns
         self.cancelled = cancelled
+        self.keys = keys
         self.progress = progress
     }
 
@@ -420,6 +466,12 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         condition.unlock()
     }
 
+    func markCloudOnly(_ key: URL) {
+        condition.lock()
+        cloudOnlyKeys.insert(key)
+        condition.unlock()
+    }
+
     /// Guarantees the key appears in the result even if nothing is under it.
     func prefill(_ key: URL) {
         condition.lock()
@@ -439,6 +491,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         at key: URL,
         volume: NSObject?
     ) {
+        if AllocatedSizeMeasurer.isCloudOnly(values) { markCloudOnly(key) }
         if let entryVolume = values.volumeIdentifier as? NSObject, let volume,
            !entryVolume.isEqual(volume) { return }
         guard values.isRegularFile == true else { return }
@@ -474,6 +527,9 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         }
         for key in protectedKeys {
             totals[key, default: .zero].containsProtectedPattern = true
+        }
+        for key in cloudOnlyKeys {
+            totals[key, default: .zero].containsCloudOnlyItem = true
         }
         let result = totals
         condition.unlock()
@@ -513,7 +569,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         guard !cancelled.isCancelled else { return }
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: item.listing,
-            includingPropertiesForKeys: AllocatedSizeMeasurer.keys,
+            includingPropertiesForKeys: keys,
             options: []
         ) else {
             // A permission-denied directory costs one entry — never a subtree,
@@ -531,18 +587,20 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 for key in item.attribution { markProtected(key) }
             }
             guard let values = try? entry.resourceValues(
-                forKeys: Set(AllocatedSizeMeasurer.keys)
+                forKeys: Set(keys)
             ) else {
                 recordUnreadable(at: item.attribution[0])
                 continue
             }
-
             // Never leave the starting volume — a mounted disk under the scan
             // root is not part of this category.
             if let volume = item.volume,
                let entryVolume = values.volumeIdentifier as? NSObject,
                !entryVolume.isEqual(volume) {
                 continue
+            }
+            if AllocatedSizeMeasurer.isCloudOnly(values) {
+                for key in item.attribution { markCloudOnly(key) }
             }
             if values.isSymbolicLink == true {
                 guard followSymlinks else { continue }
@@ -554,7 +612,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 // under different names — the disclosed price of the option.
                 let resolved = entry.resolvingSymlinksInPath()
                 guard let target = try? resolved.resourceValues(
-                    forKeys: Set(AllocatedSizeMeasurer.keys)
+                    forKeys: Set(keys)
                 ) else {
                     recordUnreadable(at: item.attribution[0])
                     continue
@@ -563,6 +621,9 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                    let targetVolume = target.volumeIdentifier as? NSObject,
                    !targetVolume.isEqual(volume) {
                     continue
+                }
+                if AllocatedSizeMeasurer.isCloudOnly(target) {
+                    for key in item.attribution { markCloudOnly(key) }
                 }
                 if target.isDirectory == true {
                     let childKey = item.attribution[item.attribution.count - 1]

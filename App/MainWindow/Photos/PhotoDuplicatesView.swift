@@ -61,6 +61,9 @@ struct PhotoDuplicatesView: View {
             Button("Find Duplicates") { model.startPhotoSweep() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                // The sweep refuses to start over another disk walk; say so here
+                // rather than swallowing the click.
+                .disabled(model.isBusyWithDisk)
         }
         // The Scanner's empty-state geometry exactly: a 320pt block pinned to the
         // top of the page, not a message floating in the middle of it.
@@ -116,6 +119,7 @@ struct PhotoDuplicatesView: View {
                 .frame(maxWidth: 420)
             Button("Try Again") { model.startPhotoSweep() }
                 .buttonStyle(SecondaryButtonStyle())
+                .disabled(model.isBusyWithDisk)
         }
     }
 
@@ -136,6 +140,7 @@ struct PhotoDuplicatesView: View {
             }
             Button("Scan Again") { model.startPhotoSweep() }
                 .buttonStyle(SecondaryButtonStyle())
+                .disabled(model.isBusyWithDisk)
         }
     }
 

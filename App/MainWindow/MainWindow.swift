@@ -127,7 +127,10 @@ struct MainWindow: View {
                         count: model.pendingStorageExplorerItems.count,
                         totalBytes: model.pendingStorageExplorerItems.reduce(0) {
                             $0 + $1.allocatedBytes
-                        }
+                        },
+                        cloudItemCount: model.pendingStorageExplorerItems.filter {
+                            $0.cloudState == .downloaded
+                        }.count
                     ),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performStorageExplorerRemoval() } },
@@ -278,16 +281,16 @@ struct MainWindow: View {
             }
 
             Button("Deselect All") { explorer.selection.removeAll() }
-                .buttonStyle(.bordered)
+                .buttonStyle(SecondaryButtonStyle())
                 .disabled(explorer.selection.isEmpty || model.isRemovingStorageItems)
 
             Button(model.storageExplorerSelectionLabel) {
-                model.requestStorageExplorerRemoval()
+                Task { await model.requestStorageExplorerRemoval() }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             .tint(Token.color(.red))
-            .disabled(!explorer.canRemoveSelection || model.isRemovingStorageItems)
+            .disabled(!explorer.canRemoveSelection || model.isStorageExplorerMeasurementBlocked)
             .help(
                 explorer.canRemoveSelection
                     ? "Review the selected items before they move to the Trash."
@@ -338,19 +341,23 @@ struct MainWindow: View {
             }
         }
 
-        if model.view == .duplicates {
+        // One principal item holding both. The Duplicates picker used to take the
+        // slot alone, so a junk scan started elsewhere lost its readout and its
+        // stop button the moment the user opened Duplicates.
+        if model.view == .duplicates || model.isScanning {
             ToolbarItem(placement: .principal) {
-                Picker("Duplicate type", selection: $model.duplicateKind) {
-                    ForEach(AppModel.DuplicateKind.allCases) { kind in
-                        Text(kind.title).tag(kind)
+                HStack(spacing: 14) {
+                if model.view == .duplicates {
+                    Picker("Duplicate type", selection: $model.duplicateKind) {
+                        ForEach(AppModel.DuplicateKind.allCases) { kind in
+                            Text(kind.title).tag(kind)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize(horizontal: true, vertical: false)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize(horizontal: true, vertical: false)
-            }
-        } else if model.isScanning {
-            ToolbarItem(placement: .principal) {
+                if model.isScanning {
                 HStack(spacing: 8) {
                     // Breathing room on both sides: a principal item otherwise butts
                     // straight against the title on its left and the Scan button on
@@ -371,6 +378,8 @@ struct MainWindow: View {
                     .help("Stop scanning")
 
                     Color.clear.frame(width: 8, height: 1)
+                }
+                }
                 }
             }
         }
@@ -394,13 +403,7 @@ struct MainWindow: View {
             // Large, like the App Store's offer button: a filled capsule at
             // regular size read as an afterthought next to the 52pt bar.
             .controlSize(.large)
-            .disabled(
-                model.isScanning
-                    || model.isScanningDuplicateFiles
-                    || model.isSweepingPhotos
-                    || model.storageExplorer.isLoading
-                    || model.activity != nil
-            )
+            .disabled(model.isBusyWithDisk)
             .help("Scan for reclaimable files")
         }
         .sharedBackgroundVisibility(.hidden)

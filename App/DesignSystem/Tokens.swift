@@ -209,12 +209,12 @@ enum Token {
         static let controlHover = Token.ink(light: 0.12, dark: 0.14)
         static let rowHover = Token.ink(light: 0.04, dark: 0.03)
         // Light matches the App Store's pill: about 4% black over the sidebar
-        // material, a hint rather than a block. Dark is the design's exact pill
-        // (#2C2B2F in Figma) as a solid: as an ink over the translucent sidebar it
+        // material, a hint rather than a block. Dark matches Finder's selected pill
+        // (#2F2C2F) as a solid: as an ink over the translucent sidebar it
         // composited to #3C3B3E and drifted with whatever sat behind the window.
         static let sidebarSelection = Token.dynamic(
             light: NSColor.black.withAlphaComponent(0.045),
-            dark: NSColor(srgbRed: 0.173, green: 0.169, blue: 0.184, alpha: 1)  // #2C2B2F
+            dark: NSColor(srgbRed: 47 / 255, green: 44 / 255, blue: 47 / 255, alpha: 1)  // #2F2C2F
         )
         /// The selected row's label and icon. Not a system token: the App Store
         /// pill this is modelled on paints its selection with a wide-gamut blue —

@@ -11,15 +11,29 @@ public struct StorageExplorerItem: Sendable, Equatable, Identifiable {
         case volume
     }
 
+    /// Why a row cannot be removed from here. Each names a different place to go:
+    /// `library` is the Scanner's territory, `trash` the Trash view's, `application`
+    /// the uninstaller's, `mediaLibrary` the owning app's. Ordinary document
+    /// packages (Pages, Keynote, `.rtfd`) carry no reason — they are files.
     public enum ProtectionReason: String, Sendable, Equatable {
         case excluded
         case protectedContents
         case unreadableContents
         case system
+        case library
+        case trash
         case application
-        case package
+        case mediaLibrary
         case volume
+        case cloudOnly
         case unavailable
+    }
+
+    public enum CloudState: String, Sendable, Equatable {
+        case none
+        case downloaded
+        case cloudOnly
+        case containsCloudOnlyItems
     }
 
     public var id: String { url.path }
@@ -32,6 +46,7 @@ public struct StorageExplorerItem: Sendable, Equatable, Identifiable {
     public var modificationDate: Date?
     public var identity: String?
     public var isHidden: Bool
+    public var cloudState: CloudState
     public var protectionReason: ProtectionReason?
 
     public init(
@@ -44,6 +59,7 @@ public struct StorageExplorerItem: Sendable, Equatable, Identifiable {
         modificationDate: Date? = nil,
         identity: String? = nil,
         isHidden: Bool = false,
+        cloudState: CloudState = .none,
         protectionReason: ProtectionReason? = nil
     ) {
         self.url = url
@@ -55,6 +71,7 @@ public struct StorageExplorerItem: Sendable, Equatable, Identifiable {
         self.modificationDate = modificationDate
         self.identity = identity
         self.isHidden = isHidden
+        self.cloudState = cloudState
         self.protectionReason = protectionReason
     }
 
@@ -64,6 +81,30 @@ public struct StorageExplorerItem: Sendable, Equatable, Identifiable {
 
     public var isRemovable: Bool {
         identity != nil && protectionReason == nil
+    }
+}
+
+/// A fresh review of the rows selected for one Storage Explorer removal.
+public struct StorageExplorerSelectionReview: Sendable, Equatable {
+    public var snapshot: StorageExplorerSnapshot
+    public var items: [StorageExplorerItem]
+    public var changedPaths: [String]
+    public var protectedPaths: [String]
+
+    public init(
+        snapshot: StorageExplorerSnapshot,
+        items: [StorageExplorerItem],
+        changedPaths: [String],
+        protectedPaths: [String]
+    ) {
+        self.snapshot = snapshot
+        self.items = items
+        self.changedPaths = changedPaths
+        self.protectedPaths = protectedPaths
+    }
+
+    public var isReady: Bool {
+        !items.isEmpty && changedPaths.isEmpty && protectedPaths.isEmpty
     }
 }
 

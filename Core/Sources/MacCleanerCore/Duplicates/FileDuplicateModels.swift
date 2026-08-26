@@ -28,13 +28,18 @@ public struct DuplicateFile: Sendable, Equatable, Identifiable {
 
 /// Files that matched by size, sampled hash, full hash, and byte comparison.
 public struct FileDuplicateGroup: Sendable, Equatable, Identifiable {
+    /// Why this copy is the one that stays. Said only when it is true: Finder's
+    /// Duplicate and `cp` preserve creation dates, so ties are ordinary, and a
+    /// copy that merely sorted first by path is not "the oldest".
     public enum KeeperReason: String, Sendable, Equatable {
         case oldestCopy
+        case firstByName
         case chosenByUser
 
         public var label: String {
             switch self {
             case .oldestCopy:   "oldest copy"
+            case .firstByName:  "first by name"
             case .chosenByUser: "you chose this"
             }
         }
