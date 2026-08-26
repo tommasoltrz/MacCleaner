@@ -19,10 +19,19 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
         } detail: {
             detail
-                .disabled(model.isCleaningUp)
                 .navigationTitle(model.view.title)
                 .toolbar { toolbarContent }
         }
+        // Over the whole content area, inside the safe area, so the toolbar above
+        // keeps its glass and its controls. `.disabled` on the detail pane used to
+        // do this job, and it reached the toolbar through the environment.
+        .overlay {
+            if let activity = model.activity {
+                ActivityOverlay(activity: activity)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: model.activity)
         .task { await model.loadDashboard() }
         // Coming back to the app is the moment stale rows show: the user was just
         // in Finder, doing things this snapshot cannot know about.
@@ -57,8 +66,8 @@ struct MainWindow: View {
                 AppUninstallerView(model: model)
             case .trash:
                 TrashView(model: model)
-            case .photos:
-                PhotoDuplicatesView(model: model)
+            case .duplicates:
+                DuplicatesView(model: model)
             case .safeToRemove:
                 FilteredEntriesView(model: model, filter: .safeToRemove)
             case .needsReview:
@@ -95,6 +104,16 @@ struct MainWindow: View {
                     variant: .deletePhotos(count: model.photoSelection.count),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.deleteSelectedPhotos() } },
+                    onCancel: { model.activeSheet = nil }
+                )
+            case .deleteDuplicateFiles:
+                ConfirmationSheet(
+                    variant: .deleteDuplicateFiles(
+                        count: model.fileDuplicateSelection.count,
+                        totalBytes: model.fileDuplicateSelectionBytes
+                    ),
+                    keepReceipt: $model.keepReceipt,
+                    onConfirm: { Task { await model.removeSelectedDuplicateFiles() } },
                     onCancel: { model.activeSheet = nil }
                 )
             case .emptyTrash:
@@ -173,28 +192,65 @@ struct MainWindow: View {
                 // Nothing selected means nothing to confirm; the design renders the
                 // button inert rather than hiding it, so its place stays predictable.
                 .disabled(!model.hasSelection || model.isCleaningUp)
-        case .photos:
-            Button("Select All") { model.selectAllRemovablePhotos() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(model.photoGroups.isEmpty)
+        case .duplicates:
+            switch model.duplicateKind {
+            case .files:
+                Button("Select All") { model.selectAllFileDuplicates() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(
+                        model.fileDuplicateGroups.isEmpty
+                            || model.isScanningDuplicateFiles
+                            || model.isRemovingDuplicateFiles
+                    )
 
-            // The one-click retreat from the judgement calls: everything the sweep is
-            // certain about stays ticked, the "Looks similar" groups come off.
-            Button("Certain Only (\(model.certainRemovableCount))") {
-                model.selectCertainPhotosOnly()
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(model.certainRemovableCount == 0)
+                Button("Deselect All") { model.deselectAllFileDuplicates() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(
+                        model.fileDuplicateSelection.isEmpty || model.isRemovingDuplicateFiles
+                            || model.isScanningDuplicateFiles
+                    )
 
-            Button("Deselect All") { model.deselectAllPhotos() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(model.photoSelection.isEmpty)
-
-            Button(model.photoSelectionLabel) { model.activeSheet = .deletePhotos }
+                Button { model.activeSheet = .deleteDuplicateFiles } label: {
+                    HStack(spacing: 7) {
+                        if model.isRemovingDuplicateFiles {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(
+                            model.isRemovingDuplicateFiles
+                                ? "Moving to Trash…" : model.fileDuplicateSelectionLabel
+                        )
+                    }
+                }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .tint(Token.color(.red))
-                .disabled(model.photoSelection.isEmpty)
+                .disabled(
+                    model.fileDuplicateSelection.isEmpty || model.isRemovingDuplicateFiles
+                        || model.isScanningDuplicateFiles
+                )
+
+            case .photos:
+                Button("Select All") { model.selectAllRemovablePhotos() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.photoGroups.isEmpty)
+
+                // This action excludes groups that need manual review.
+                Button("Certain Only (\(model.certainRemovableCount))") {
+                    model.selectCertainPhotosOnly()
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(model.certainRemovableCount == 0)
+
+                Button("Deselect All") { model.deselectAllPhotos() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.photoSelection.isEmpty)
+
+                Button(model.photoSelectionLabel) { model.activeSheet = .deletePhotos }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(Token.color(.red))
+                    .disabled(model.photoSelection.isEmpty)
+            }
 
         case .uninstaller:
             EmptyView()
@@ -206,7 +262,7 @@ struct MainWindow: View {
                 .tint(Token.color(.red))
                 // Keep the destructive action in its stable footer position while
                 // the Trash is loading or empty, but do not open an empty review.
-                .disabled((model.trashSummary?.itemCount ?? 0) == 0)
+                .disabled((model.trashSummary?.itemCount ?? 0) == 0 || model.activity != nil)
 
         }
     }
@@ -240,7 +296,18 @@ struct MainWindow: View {
             }
         }
 
-        if model.isScanning {
+        if model.view == .duplicates {
+            ToolbarItem(placement: .principal) {
+                Picker("Duplicate type", selection: $model.duplicateKind) {
+                    ForEach(AppModel.DuplicateKind.allCases) { kind in
+                        Text(kind.title).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize(horizontal: true, vertical: false)
+            }
+        } else if model.isScanning {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
                     // Breathing room on both sides: a principal item otherwise butts
@@ -285,7 +352,12 @@ struct MainWindow: View {
             // Large, like the App Store's offer button: a filled capsule at
             // regular size read as an afterthought next to the 52pt bar.
             .controlSize(.large)
-            .disabled(model.isScanning)
+            .disabled(
+                model.isScanning
+                    || model.isScanningDuplicateFiles
+                    || model.isSweepingPhotos
+                    || model.activity != nil
+            )
             .help("Scan for reclaimable files")
         }
         .sharedBackgroundVisibility(.hidden)

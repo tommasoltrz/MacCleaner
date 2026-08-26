@@ -7,7 +7,7 @@ A native macOS disk-cleanup utility, rewritten in Swift from an Electron predece
 ```sh
 xcodegen generate                 # regenerates MacCleaner.xcodeproj from project.yml
 open MacCleaner.xcodeproj         # ⌘R to run
-cd Core && swift test             # 173 tests, no Xcode needed
+cd Core && swift test             # no Xcode needed
 swift run maccleaner-cli scan     # exercise the engine headlessly
 vale README.md AGENTS.md WRITING_STYLE.md  # check project writing
 ```
@@ -24,10 +24,11 @@ Core/                    Swift package — the scanning engine, testable without
   System/                diskutil, snapshots, process running
   Scan/                  breakdown + category scanners + coordinator
   Act/                   cleanup, app uninstall, leftovers, trash, removal log
+  Duplicates/            verified file duplicate matching and removal
   maccleaner-cli/        headless harness
 App/                     SwiftUI app — a thin shell over Core
   DesignSystem/          tokens, type ramp, shared components
-  MainWindow/            sidebar, toolbar, six primary views, sheets
+  MainWindow/            sidebar, toolbar, five primary views, sheets
   Photos/                PhotoKit access, thumbnails and deletion
   Preferences/           four panes + settings store
 design/                  the design handoff — spec of record
@@ -92,10 +93,17 @@ alone, it made every row show "Never opened". The design treats this label as th
 strongest safe-to-delete signal. The app now falls back through modification dates.
 It uses `nil` only when the date is unknown.
 
-**File duplicates are same-size candidates**, grouped by identical allocated size,
-not compared byte for byte. The UI says so. Photo Duplicates is different: it uses
-PhotoKit metadata and Vision feature prints, keeps one copy in every group, and
-requires a review before deletion.
+**File duplicate scans use selected folders.** MacCleaner narrows candidates by size,
+sampled SHA-256, and full SHA-256. It then compares the bytes before it reports a
+match. The app skips hard links, hidden files, package contents, exclusions, and
+cloud-only files. MacCleaner does not select any file automatically. Each set keeps
+one copy, and selected copies move to the Trash.
+
+APFS clones can share storage. Therefore, the available space for duplicate files
+is an upper bound. The volume free-space value is the final result.
+
+The Photos tab uses PhotoKit metadata and Vision feature prints. It keeps one copy
+in each group and requires a review before deletion.
 
 **Automatic scanning is process-resident.** MacCleaner evaluates daily and weekly
 schedules while it runs. This includes menu-bar-only login launches. No separate

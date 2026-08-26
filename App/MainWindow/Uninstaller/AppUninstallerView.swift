@@ -16,7 +16,7 @@ struct AppUninstallerView: View {
 
     var body: some View {
         Group {
-            if model.isPlanningAppUninstall || model.isUninstallingApp {
+            if model.isPlanningAppUninstall {
                 busyState
             } else if let outcome = model.appUninstallOutcome {
                 doneState(outcome)
@@ -92,21 +92,15 @@ struct AppUninstallerView: View {
 
     // MARK: Busy state
 
+    /// Planning only. The uninstall itself is a removal, and removals are shown by
+    /// the window-wide `ActivityOverlay`; a second spinner here said the same thing.
     private var busyState: some View {
         VStack(spacing: 14) {
             Spacer()
             ProgressView().controlSize(.large)
-            Text(model.isUninstallingApp
-                ? "Moving the application to the Trash…" : "Finding related files…")
+            Text("Finding related files…")
                 .font(.mcBody)
                 .foregroundStyle(Token.Text.secondary)
-            if model.isUninstallingApp {
-                Text(model.appUninstallPlan?.isApplicationOnly == true
-                    ? "Related files will stay on disk."
-                    : "The application moves first. Related data stays if that move fails.")
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.tertiary)
-            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

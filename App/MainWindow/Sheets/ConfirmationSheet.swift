@@ -27,6 +27,7 @@ struct ConfirmationSheet: View {
             protectedDataCount: Int,
             applicationOnly: Bool
         )
+        case deleteDuplicateFiles(count: Int, totalBytes: Int64)
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
         /// says how many photographs go and stays silent about megabytes rather
         /// than inventing a figure.
@@ -91,6 +92,7 @@ struct ConfirmationSheet: View {
     private var showsReceipt: Bool {
         if case .cleanUp(let count, _, let permanent, _) = variant { return permanent < count }
         if case .uninstallApp = variant { return true }
+        if case .deleteDuplicateFiles = variant { return true }
         return false
     }
 
@@ -100,7 +102,7 @@ struct ConfirmationSheet: View {
     private var isDestructive: Bool {
         switch variant {
         case .cleanUp(_, _, let permanent, let protected): permanent > 0 || protected > 0
-        case .emptyTrash, .deletePhotos, .uninstallApp: true
+        case .emptyTrash, .deleteDuplicateFiles, .deletePhotos, .uninstallApp: true
         }
     }
 
@@ -127,6 +129,9 @@ struct ConfirmationSheet: View {
         case .deletePhotos(let count):
             let noun = count == 1 ? "photo" : "photos"
             return "Delete \(count) \(noun) from every device?"
+        case .deleteDuplicateFiles(let count, _):
+            let noun = count == 1 ? "file" : "files"
+            return "Move \(count) duplicate \(noun) to the Trash?"
         }
     }
 
@@ -190,6 +195,10 @@ struct ConfirmationSheet: View {
                 + "iPhone and every other device on this iCloud library. They stay "
                 + "recoverable for 30 days, and iCloud storage is not freed until you "
                 + "empty Recently Deleted in Photos yourself."
+        case .deleteDuplicateFiles(_, let bytes):
+            return "One verified copy from each set will remain. Up to "
+                + "\(ByteFormatting.string(bytes)) is available because APFS clones can share "
+                + "storage. The selected files will move to the Trash."
         }
     }
 
@@ -202,6 +211,7 @@ struct ConfirmationSheet: View {
         case .emptyTrash:   return "Erase"
         case .uninstallApp: return "Uninstall"
         case .deletePhotos: return "Delete Everywhere"
+        case .deleteDuplicateFiles: return "Move to Trash"
         }
     }
 
@@ -220,6 +230,7 @@ struct ConfirmationSheet: View {
 
     private var iconName: String {
         if case .deletePhotos = variant { return "photo.badge.minus" }
+        if case .deleteDuplicateFiles = variant { return "doc.on.doc" }
         if case .uninstallApp = variant { return "trash.square" }
         if case .cleanUp(_, _, _, let protected) = variant, protected > 0 {
             return "exclamationmark.triangle"
