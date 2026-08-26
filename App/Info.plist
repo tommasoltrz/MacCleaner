@@ -28,5 +28,32 @@
 	<string></string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it.</string>
+	<key>NSServices</key>
+	<array>
+		<dict>
+			<key>NSMenuItem</key>
+			<dict>
+				<key>default</key>
+				<string>Review Uninstall with MacCleaner</string>
+			</dict>
+			<key>NSMessage</key>
+			<string>reviewUninstall</string>
+			<key>NSPortName</key>
+			<string>MacCleaner</string>
+			<key>NSRequiredContext</key>
+			<dict>
+				<key>NSApplicationIdentifier</key>
+				<string>com.apple.finder</string>
+			</dict>
+			<key>NSRestricted</key>
+			<true/>
+			<key>NSSendFileTypes</key>
+			<array>
+				<string>com.apple.application-bundle</string>
+			</array>
+			<key>NSServiceDescription</key>
+			<string>Open the selected application in MacCleaner for uninstall review.</string>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -31,6 +31,17 @@ targets:
         # administrator retry cannot bypass either privacy decision.
         NSAppDataUsageDescription: "MacCleaner needs access to data from removed apps so it can move files that you select to the Trash."
         NSAppBundlesUsageDescription: "MacCleaner needs permission to move applications that you select to the Trash."
+        NSServices:
+          - NSMenuItem:
+              default: "Review Uninstall with MacCleaner"
+            NSMessage: reviewUninstall
+            NSPortName: MacCleaner
+            NSRequiredContext:
+              NSApplicationIdentifier: com.apple.finder
+            NSRestricted: true
+            NSSendFileTypes:
+              - com.apple.application-bundle
+            NSServiceDescription: "Open the selected application in MacCleaner for uninstall review."
     sources:
       - path: App
     dependencies:
