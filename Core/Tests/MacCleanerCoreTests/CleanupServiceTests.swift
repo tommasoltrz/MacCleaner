@@ -81,8 +81,9 @@ struct CleanupServiceTests {
         #expect(!FileManager.default.fileExists(atPath: first.path))
         // The entry after the failure was still removed.
         #expect(!FileManager.default.fileExists(atPath: last.path))
-        // And only the successes were logged.
-        #expect(log.recentEntries().count == 2)
+        let records = log.recentEntries()
+        #expect(records.count == 3)
+        #expect(records.filter { $0.disposition == .failed }.map(\.originalPath) == [locked.path])
     }
 
     @Test("an already-missing entry is not a failure")
@@ -325,6 +326,124 @@ struct RemovalLogTests {
     func missingLogIsEmpty() throws {
         let sandbox = try Sandbox()
         #expect(RemovalLog(directory: sandbox.root).recentEntries().isEmpty)
+    }
+
+    @Test("a failed removal round-trips")
+    func failedRemovalRoundTrips() throws {
+        let sandbox = try Sandbox()
+        let log = RemovalLog(directory: sandbox.root)
+        let record = RemovalRecord(
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            originalPath: "/Users/someone/locked.data",
+            bytes: 512,
+            disposition: .failed
+        )
+
+        try log.append([record])
+
+        #expect(log.recentEntries() == [record])
+    }
+}
+
+@Suite("Cleanup history")
+struct CleanupHistoryServiceTests {
+
+    @Test("history separates live receipts, permanent removals, restores, and failures")
+    func historyStates() throws {
+        let sandbox = try Sandbox()
+        let home = try sandbox.directory("home")
+        let trash = try sandbox.directory("home/.Trash")
+        let log = RemovalLog(directory: sandbox.root.appendingPathComponent("logs"))
+        let live = try sandbox.writeFile("home/.Trash/Live.cache", bytes: 64)
+        let restoredTrash = trash.appendingPathComponent("Restored.cache")
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+
+        try log.append([
+            RemovalRecord(
+                timestamp: stamp,
+                originalPath: home.appendingPathComponent("Library/Caches/Live.cache").path,
+                bytes: 64,
+                disposition: .trashed,
+                trashedPath: live.path,
+                trashedIdentity: FileIdentity.of(live)
+            ),
+            RemovalRecord(
+                timestamp: stamp.addingTimeInterval(1),
+                originalPath: home.appendingPathComponent("Library/Logs/Old.log").path,
+                bytes: 32,
+                disposition: .deleted
+            ),
+            RemovalRecord(
+                timestamp: stamp.addingTimeInterval(2),
+                originalPath: home.appendingPathComponent("Locked.data").path,
+                bytes: 16,
+                disposition: .failed
+            ),
+            RemovalRecord(
+                timestamp: stamp.addingTimeInterval(3),
+                originalPath: home.appendingPathComponent("Documents/Restored.cache").path,
+                bytes: 8,
+                disposition: .trashed,
+                trashedPath: restoredTrash.path,
+                trashedIdentity: "1:1"
+            ),
+            RemovalRecord(
+                timestamp: stamp.addingTimeInterval(4),
+                originalPath: home.appendingPathComponent("Documents/Restored.cache").path,
+                bytes: 8,
+                disposition: .restored,
+                trashedPath: restoredTrash.path,
+                trashedIdentity: "1:1"
+            ),
+        ])
+
+        let summary = CleanupHistoryService(log: log).summary()
+        let states = Dictionary(uniqueKeysWithValues: summary.items.map { ($0.name, $0.state) })
+
+        #expect(summary.removedBytes == 104)
+        #expect(summary.removedCount == 3)
+        #expect(summary.permanentlyRemovedCount == 1)
+        #expect(summary.failedCount == 1)
+        #expect(summary.availableInTrashCount == 1)
+        #expect(states["Live.cache"] == .availableInTrash)
+        #expect(states["Old.log"] == .removedPermanently)
+        #expect(states["Locked.data"] == .failed)
+        #expect(states["Restored.cache"] == .restored)
+    }
+
+    @Test("history observes a Put Back from the Trash view")
+    func observesTrashPutBack() async throws {
+        let sandbox = try Sandbox()
+        let home = try sandbox.directory("home")
+        _ = try sandbox.directory("home/.Trash")
+        let inTrash = try sandbox.writeFile("home/.Trash/Notes.txt", bytes: 128)
+        let original = home.appendingPathComponent("Documents/Notes.txt")
+        let log = RemovalLog(directory: sandbox.root.appendingPathComponent("logs"))
+        try log.append([RemovalRecord(
+            timestamp: .now,
+            originalPath: original.path,
+            bytes: 128,
+            disposition: .trashed,
+            trashedPath: inTrash.path,
+            trashedIdentity: FileIdentity.of(inTrash)
+        )])
+        let service = CleanupHistoryService(log: log)
+        let item = try #require(service.summary().items.first)
+        let trashService = TrashService(home: home, log: log)
+
+        try await trashService.putBack(TrashItem(
+            url: inTrash,
+            name: item.name,
+            bytes: item.bytes,
+            deletedAt: item.timestamp,
+            canPutBack: true
+        ))
+
+        #expect(FileManager.default.fileExists(atPath: original.path))
+        #expect(!FileManager.default.fileExists(atPath: inTrash.path))
+        let updated = service.summary()
+        #expect(updated.availableInTrashCount == 0)
+        #expect(updated.items.first?.state == .restored)
     }
 }
 

@@ -382,6 +382,8 @@ public struct TrashService: Sendable {
                 if byTrashPath[key] == nil { byTrashPath[key] = record }
             case .deleted:
                 continue
+            case .failed:
+                continue
             }
         }
         return byTrashPath

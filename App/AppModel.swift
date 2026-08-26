@@ -87,7 +87,7 @@ final class AppModel {
     }
 
     enum View: String, CaseIterable, Identifiable {
-        case dashboard, scanner, storageExplorer, uninstaller, trash, duplicates
+        case dashboard, scanner, storageExplorer, uninstaller, history, trash, duplicates
         // Reached from the Dashboard tiles, not the sidebar. Back returns.
         case safeToRemove, needsReview
         var id: String { rawValue }
@@ -97,7 +97,7 @@ final class AppModel {
         /// Destructive workflows sit at the end: review an application's complete
         /// uninstall first, then the Trash where removed items ultimately land.
         static var sidebarCases: [View] {
-            [.dashboard, .scanner, .storageExplorer, .duplicates, .uninstaller, .trash]
+            [.dashboard, .scanner, .storageExplorer, .duplicates, .uninstaller, .history, .trash]
         }
 
         var title: String {
@@ -106,6 +106,7 @@ final class AppModel {
             case .scanner:      "Scanner"
             case .storageExplorer: "Storage Explorer"
             case .uninstaller:  "App Uninstaller"
+            case .history:      "History"
             case .trash:        "Trash"
             case .duplicates:   "Duplicates"
             case .safeToRemove: "Safe to Remove"
@@ -120,6 +121,7 @@ final class AppModel {
             case .scanner:      "magnifyingglass"
             case .storageExplorer: "externaldrive"
             case .uninstaller:  "xmark.app"
+            case .history:      "clock.arrow.circlepath"
             case .trash:        "trash"
             case .duplicates:   "square.on.square"
             case .safeToRemove: "checkmark.shield"
@@ -1099,6 +1101,22 @@ final class AppModel {
             || path.hasPrefix(library + "/Group Containers/")
     }
 
+    // MARK: - Cleanup history
+
+    private let cleanupHistoryService = CleanupHistoryService()
+    var cleanupHistory: CleanupHistorySummary?
+    var isLoadingCleanupHistory = false
+
+    func loadCleanupHistory() async {
+        guard !isLoadingCleanupHistory else { return }
+        isLoadingCleanupHistory = true
+        let service = cleanupHistoryService
+        cleanupHistory = await Task.detached {
+            service.summary()
+        }.value
+        isLoadingCleanupHistory = false
+    }
+
     // MARK: - Trash
 
     private let trashService = TrashService()
@@ -1150,8 +1168,16 @@ final class AppModel {
     }
 
     func putBack(_ item: TrashItem) async {
-        try? await trashService.putBack(item)
+        do {
+            try await trashService.putBack(item)
+            statusMessage = "Put back \(item.name)."
+        } catch TrashError.destinationOccupied {
+            statusMessage = "Put Back stopped because the original location is in use."
+        } catch {
+            statusMessage = "\(item.name) could not be put back."
+        }
         await loadTrash()
+        await loadCleanupHistory()
     }
 
     // MARK: - Loading
