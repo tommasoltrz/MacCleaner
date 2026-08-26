@@ -62,6 +62,11 @@ struct MainWindow: View {
                 DashboardView(model: model, settings: settings)
             case .scanner:
                 ScannerView(model: model)
+            case .storageExplorer:
+                StorageExplorerView(
+                    model: model.storageExplorer,
+                    isMeasurementBlocked: model.isStorageExplorerMeasurementBlocked
+                )
             case .uninstaller:
                 AppUninstallerView(model: model)
             case .trash:
@@ -77,7 +82,7 @@ struct MainWindow: View {
         .frame(minWidth: Token.Size.minimumContentWidth)
         .background(Token.pageBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            StatusBarView(message: model.statusMessage) {
+            StatusBarView(message: model.currentStatusMessage) {
                 statusBarTrailing
             }
         }
@@ -115,6 +120,18 @@ struct MainWindow: View {
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.removeSelectedDuplicateFiles() } },
                     onCancel: { model.activeSheet = nil }
+                )
+            case .removeStorageItems:
+                ConfirmationSheet(
+                    variant: .removeStorageItems(
+                        count: model.pendingStorageExplorerItems.count,
+                        totalBytes: model.pendingStorageExplorerItems.reduce(0) {
+                            $0 + $1.allocatedBytes
+                        }
+                    ),
+                    keepReceipt: $model.keepReceipt,
+                    onConfirm: { Task { await model.performStorageExplorerRemoval() } },
+                    onCancel: { model.cancelStorageExplorerRemoval() }
                 )
             case .emptyTrash:
                 ConfirmationSheet(
@@ -252,6 +269,31 @@ struct MainWindow: View {
                     .disabled(model.photoSelection.isEmpty)
             }
 
+        case .storageExplorer:
+            let explorer = model.storageExplorer
+            if !explorer.selectedItems.isEmpty {
+                Text("\(explorer.selectedItems.count) selected · "
+                     + ByteFormatting.string(explorer.selectedBytes))
+                    .foregroundStyle(Token.Text.secondary)
+            }
+
+            Button("Deselect All") { explorer.selection.removeAll() }
+                .buttonStyle(.bordered)
+                .disabled(explorer.selection.isEmpty || model.isRemovingStorageItems)
+
+            Button(model.storageExplorerSelectionLabel) {
+                model.requestStorageExplorerRemoval()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .tint(Token.color(.red))
+            .disabled(!explorer.canRemoveSelection || model.isRemovingStorageItems)
+            .help(
+                explorer.canRemoveSelection
+                    ? "Review the selected items before they move to the Trash."
+                    : "Select only unlocked items to continue."
+            )
+
         case .uninstaller:
             EmptyView()
 
@@ -356,6 +398,7 @@ struct MainWindow: View {
                 model.isScanning
                     || model.isScanningDuplicateFiles
                     || model.isSweepingPhotos
+                    || model.storageExplorer.isLoading
                     || model.activity != nil
             )
             .help("Scan for reclaimable files")
