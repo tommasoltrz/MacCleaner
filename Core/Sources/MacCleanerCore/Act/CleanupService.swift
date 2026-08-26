@@ -24,19 +24,32 @@ public struct CleanupOutcome: Sendable, Equatable {
     /// can say "freed 3.2 GB, 2 items could not be removed" instead of claiming a
     /// clean run.
     public var failed: [String]
+    /// Paths that failed because macOS denied access.
+    public var permissionDenied: [String]
 
     public init(
         freedBytes: Int64 = 0,
         removedCount: Int = 0,
         failed: [String] = [],
+        permissionDenied: [String] = [],
         trashedCount: Int = 0,
         deletedCount: Int = 0
     ) {
         self.freedBytes = freedBytes
         self.removedCount = removedCount
         self.failed = failed
+        self.permissionDenied = permissionDenied
         self.trashedCount = trashedCount
         self.deletedCount = deletedCount
+    }
+
+    public mutating func merge(_ other: CleanupOutcome) {
+        freedBytes += other.freedBytes
+        removedCount += other.removedCount
+        trashedCount += other.trashedCount
+        deletedCount += other.deletedCount
+        failed.append(contentsOf: other.failed)
+        permissionDenied.append(contentsOf: other.permissionDenied)
     }
 }
 
@@ -134,7 +147,9 @@ public struct CleanupService: Sendable {
                     _ = error
                     continue
                 } catch {
-                    if privilegedFallback, Self.isPermissionDenied(error) {
+                    let permissionDenied = Self.isPermissionDenied(error)
+                    if privilegedFallback, permissionDenied,
+                       !Self.requiresAppDataAuthorization(target.url) {
                         var queued = target
                         queued.allocatedBytes = measured
                         privileged.append(queued)
@@ -143,6 +158,9 @@ public struct CleanupService: Sendable {
                         // the batch. The predecessor's cleanup stopped at the first
                         // error and left the remaining selection untouched.
                         outcome.failed.append(target.url.path)
+                        if permissionDenied {
+                            outcome.permissionDenied.append(target.url.path)
+                        }
                     }
                     continue
                 }
@@ -289,6 +307,46 @@ public struct CleanupService: Sendable {
         return outcome
     }
 
+    /// Moves selected application leftovers to the Trash after a second owner check.
+    public func removeOrphanedAppLeftovers(
+        _ plan: OrphanedAppLeftoverPlan,
+        bundleIdentifiers: Set<String>,
+        itemPaths: Set<String>? = nil,
+        registeredApplicationBundleIdentifiers: Set<String> = [],
+        privilegedFallback: Bool = false,
+        keepReceipt: Bool = true
+    ) async throws -> CleanupOutcome {
+        var installed = AppUninstallPlanner.installedBundleIdentifiers(
+            in: plan.applicationRoots
+        )
+        installed.formUnion(registeredApplicationBundleIdentifiers)
+        let selected = plan.items(for: bundleIdentifiers, itemPaths: itemPaths)
+        var outcome = CleanupOutcome()
+        var safeEntries: [FileEntry] = []
+
+        for item in selected {
+            try Task.checkCancellation()
+            guard OrphanedAppLeftoverPlan.removalIsStillSafe(
+                item, in: plan, installedBundleIdentifiers: installed
+            ) else {
+                outcome.failed.append(item.url.path)
+                continue
+            }
+            safeEntries.append(item.fileEntry)
+        }
+
+        guard !safeEntries.isEmpty else { return outcome }
+        let removed = try await remove(
+            entries: safeEntries,
+            trashFirst: true,
+            privilegedFallback: privilegedFallback,
+            keepReceipt: keepReceipt,
+            userDataRemovalOverrides: Set(safeEntries.map(\.id))
+        )
+        outcome.merge(removed)
+        return outcome
+    }
+
     // MARK: - Privileged fallback
 
     /// True for the errors an admin retry can actually cure.
@@ -301,6 +359,19 @@ public struct CleanupService: Sendable {
         let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError
         return underlying?.domain == NSPOSIXErrorDomain
             && (underlying?.code == 1 || underlying?.code == 13)   // EPERM, EACCES
+    }
+
+    /// An administrator cannot override the privacy decision for another app's
+    /// sandbox data. macOS must authorize the signed MacCleaner application.
+    private static func requiresAppDataAuthorization(_ url: URL) -> Bool {
+        let library = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+        return ["Containers", "Group Containers"].contains { name in
+            let root = library.appendingPathComponent(name, isDirectory: true)
+                .standardizedFileURL.path
+            let path = url.standardizedFileURL.path
+            return path == root || path.hasPrefix(root + "/")
+        }
     }
 
     /// Moves root-owned items to the user's Trash with admin rights, in one batch so
@@ -364,6 +435,7 @@ public struct CleanupService: Sendable {
         } catch {
             // Declined prompt, or the shell never ran: nothing moved.
             outcome.failed.append(contentsOf: targets.map(\.url.path))
+            outcome.permissionDenied.append(contentsOf: targets.map(\.url.path))
             return
         }
 
@@ -376,7 +448,12 @@ public struct CleanupService: Sendable {
         var records: [RemovalRecord] = []
         for (index, target) in targets.enumerated() {
             guard moved.contains(index) else {
+                // Every item here was queued *because* the unprivileged attempt
+                // was denied. Root failing too means the denial is a privacy
+                // decision, not ownership — the one remedy is the access alert,
+                // which fires only for paths listed as permission-denied.
                 outcome.failed.append(target.url.path)
+                outcome.permissionDenied.append(target.url.path)
                 continue
             }
             outcome.freedBytes += target.allocatedBytes

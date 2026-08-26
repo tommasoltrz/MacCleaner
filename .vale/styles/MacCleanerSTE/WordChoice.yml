@@ -1,0 +1,14 @@
+extends: substitution
+message: "Use '%s' instead of '%s'."
+level: warning
+ignorecase: true
+swap:
+  approximately: about
+  commence: start
+  'in order to': to
+  'prior to': before
+  'subsequent to': after
+  terminate: stop
+  utilize: use
+  utilizes: uses
+  utilizing: using

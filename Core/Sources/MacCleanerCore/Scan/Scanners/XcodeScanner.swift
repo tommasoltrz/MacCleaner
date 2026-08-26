@@ -23,11 +23,26 @@ public struct XcodeScanner: CategoryScanner {
     /// real Archives/DerivedData fixture instead of reading the machine's own.
     private let developerRoot: URL
 
+    /// Where projects live. Build output found inside a project here — up to two
+    /// levels down, recognised by shape via `BuildOutputDetector` — is offered as
+    /// its own regenerable row. Xcode puts derived data wherever a project says,
+    /// and a project-local `build` folder is invisible to the roots above.
+    private let projectRoots: [URL]
+
+    public static let defaultProjectRoots: [URL] = {
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        return ["Documents", "Desktop", "Downloads", "Developer", "Projects"].map {
+            home.appending(path: $0, directoryHint: .isDirectory)
+        }
+    }()
+
     public init(
         developerRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appending(path: "Library/Developer", directoryHint: .isDirectory)
+            .appending(path: "Library/Developer", directoryHint: .isDirectory),
+        projectRoots: [URL] = XcodeScanner.defaultProjectRoots
     ) {
         self.developerRoot = developerRoot
+        self.projectRoots = projectRoots
     }
 
     // MARK: - Roots
@@ -190,6 +205,45 @@ public struct XcodeScanner: CategoryScanner {
             }
         }
 
+        // Build output inside the user's own projects. Listed here, not under
+        // Documents & Files, because this is the category that can say "safe":
+        // every root the detector accepts is rebuilt by the next build. The
+        // Documents scanner carves the same bytes out of its project rows, so the
+        // space is offered once. Recency does not apply, for the same reason it
+        // does not apply to caches: build output is touched by every build.
+        for projectRoot in projectRoots {
+            guard fileManager.fileExists(atPath: projectRoot.path),
+                  !context.isWithinExclusion(projectRoot)
+            else { continue }
+            for project in Self.visibleDirectories(in: projectRoot) {
+                try Task.checkCancellation()
+                guard !context.isWithinExclusion(project) else { continue }
+                for output in BuildOutputDetector.roots(under: project)
+                where output.kind.isXcodeOutput {
+                    guard !context.isExcluded(output.url) else { continue }
+                    let measurement = try await context.measurer.measure(output.url)
+                    unreadableCount += measurement.unreadableCount
+                    guard measurement.allocatedBytes > 0,
+                          !measurement.containsProtectedPattern
+                    else { continue }
+                    entries.append(FileEntry(
+                        url: output.url,
+                        displayName: "\(project.lastPathComponent) build output",
+                        parentDisplay: FileEntry.abbreviate(
+                            output.url.deletingLastPathComponent().path
+                        ) + " · " + output.kind.label,
+                        kind: .cache,
+                        allocatedBytes: measurement.allocatedBytes,
+                        lastOpened: lastOpenedDate(for: output.url),
+                        isRegenerable: true,
+                        childCount: (try? fileManager.contentsOfDirectory(
+                            atPath: output.url.path
+                        ))?.count
+                    ))
+                }
+            }
+        }
+
         // System-level simulator runtimes, which this scanner used to omit
         // entirely (see the note above). `FileEntry.manualRemoval` now exists, so
         // they are listed with a locked checkbox and their own `simctl` command
@@ -228,6 +282,19 @@ public struct XcodeScanner: CategoryScanner {
             availability: .available,
             unreadableCount: unreadableCount
         )
+    }
+
+    /// Non-hidden subdirectories, symlinks excluded: a link into another tree must
+    /// not be offered as though removing it freed that tree.
+    private static func visibleDirectories(in url: URL) -> [URL] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
+        let contents = (try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]
+        )) ?? []
+        return contents.filter {
+            let values = try? $0.resourceValues(forKeys: keys)
+            return values?.isDirectory == true && values?.isSymbolicLink != true
+        }.sorted { $0.path < $1.path }
     }
 
     // MARK: - Entries

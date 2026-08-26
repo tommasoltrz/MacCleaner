@@ -42,7 +42,8 @@ struct DashboardView: View {
                     results: model.scanResults,
                     lastScanAt: model.lastScanFinishedAt,
                     onSafeTap: { model.view = .safeToRemove },
-                    onReviewTap: { model.view = .needsReview }
+                    onReviewTap: { model.view = .needsReview },
+                    onScan: { model.startScan() }
                 )
 
                 // Between the tiles and the snapshots row, matching where the

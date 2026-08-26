@@ -3,18 +3,30 @@ import Foundation
 /// One removable thing: a file, a folder, or an app bundle with its leftovers.
 public struct FileEntry: Sendable, Equatable, Identifiable {
 
+    /// A removal workflow that needs more checks than ordinary file cleanup.
+    public enum RemovalAction: Sendable, Equatable {
+        case orphanedApplication(bundleIdentifier: String)
+    }
+
     public enum Kind: String, Sendable {
         case file, folder, appBundle, cache, archive, diskImage
+        /// An `.app` found in the user's folders — an installer in Downloads, a copy
+        /// on the Desktop. Not `appBundle`: that kind means an *installed*
+        /// application and routes to the uninstaller, which reasons about running
+        /// state, leftovers and Homebrew. A bundle lying in Downloads has none of
+        /// that; it is a large file the user downloaded, and it is removed like one.
+        case downloadedApp
 
         /// SF Symbol name, per the design's icon table.
         public var symbolName: String {
             switch self {
-            case .file:      "doc"
-            case .folder:    "folder"
-            case .appBundle: "app"
-            case .cache:     "folder"
-            case .archive:   "doc.zipper"
-            case .diskImage: "externaldrive"
+            case .file:          "doc"
+            case .folder:        "folder"
+            case .appBundle:     "app"
+            case .downloadedApp: "app.dashed"
+            case .cache:         "folder"
+            case .archive:       "doc.zipper"
+            case .diskImage:     "externaldrive"
             }
         }
 
@@ -26,13 +38,21 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
             case .folder:         .teal
             case .cache:          .purple
             case .appBundle:      .accent
+            case .downloadedApp:  .gray
             case .diskImage:      .gray
             }
         }
     }
 
-    /// The absolute path, which is also the selection identity.
-    public var id: String { url.path }
+    /// The absolute path, except for a synthetic application-leftover group.
+    public var id: String {
+        switch removalAction {
+        case .orphanedApplication(let identifier):
+            "orphaned-application:\(identifier)"
+        case nil:
+            url.path
+        }
+    }
 
     public var url: URL
     public var displayName: String
@@ -55,6 +75,12 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         /// The app has a live process right now. Ground truth from NSWorkspace.
         case running
         /// Activity inside the user's protection window (Preferences › Exclusions).
+        ///
+        /// A badge and a tooltip, nothing more: the checkbox works, the row is
+        /// never pre-selected and never counted as safe. This is the one reason
+        /// that does not lock, because a date is not a judgement — the user knows
+        /// whether the folder they built yesterday matters. See
+        /// `ScanContext.protectRecentDays`.
         case recentUse
         /// Profiles, logins, history, documents. Locked by default; an interactive
         /// caller may authorize this exact row after a destructive warning.
@@ -81,6 +107,9 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     public var manualRemoval: ManualRemoval?
 
+    /// A specialized cleanup action for this row.
+    public var removalAction: RemovalAction?
+
     public var protectionReason: ProtectionReason?
     /// Any reason at all: drives the badge, nothing else.
     public var isProtectedFromRemoval: Bool { protectionReason != nil }
@@ -98,8 +127,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     }
     /// Item count for folders, shown as `· 1,204 items`.
     public var childCount: Int?
-    /// Associated files for an app bundle. Regenerable children can follow a generic
-    /// parent removal; protected children require explicit uninstall authorization.
+    /// Files disclosed under this row. A selected parent removes these first.
+    /// Protected app data still requires explicit uninstall authorization.
     public var children: [FileEntry]
 
     public init(
@@ -112,6 +141,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         isRegenerable: Bool = false,
         protectionReason: ProtectionReason? = nil,
         manualRemoval: ManualRemoval? = nil,
+        removalAction: RemovalAction? = nil,
         childCount: Int? = nil,
         children: [FileEntry] = []
     ) {
@@ -125,6 +155,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         self.isRegenerable = isRegenerable
         self.protectionReason = protectionReason
         self.manualRemoval = manualRemoval
+        self.removalAction = removalAction
         self.childCount = childCount
         self.children = children
     }
@@ -138,6 +169,9 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// removable children; counting its own bytes would promise space the app
     /// refuses to free.
     public var reclaimableBytes: Int64 {
+        if removalAction != nil {
+            return children.reduce(0) { $0 + $1.allocatedBytes }
+        }
         let childBytes = children
             .filter { !$0.isRemovalLocked }
             .reduce(Int64(0)) { $0 + $1.allocatedBytes }
@@ -155,7 +189,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// `reclaimableBytes` instead made Docker's 5 GB appear as "0 B" over a list of
     /// gigabyte rows.
     public var displayBytes: Int64 {
-        manualRemoval != nil ? totalBytesIncludingChildren : reclaimableBytes
+        if removalAction != nil { return reclaimableBytes }
+        return manualRemoval != nil ? totalBytesIncludingChildren : reclaimableBytes
+    }
+
+    /// The size shown beside a top-level Scanner row. Applications show only their
+    /// installed bundle. Other parents include their disclosed removal targets.
+    public var rowDisplayBytes: Int64 {
+        kind == .appBundle ? allocatedBytes : displayBytes
+    }
+
+    public var orphanedApplicationBundleIdentifier: String? {
+        guard case .orphanedApplication(let identifier) = removalAction else { return nil }
+        return identifier
     }
 
     /// `/Users/me/Downloads` → `~/Downloads`

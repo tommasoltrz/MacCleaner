@@ -143,15 +143,31 @@ struct CapacityCard: View {
         let leftCount = (entries.count + 1) / 2
 
         return HStack(alignment: .top, spacing: 34) {
-            legendColumn(Array(entries.prefix(leftCount)), valuesAreBones: valuesAreBones)
-            legendColumn(Array(entries.dropFirst(leftCount)), valuesAreBones: valuesAreBones)
+            legendColumn(
+                Array(entries.prefix(leftCount)),
+                unreadableCount: breakdown.unreadableCount,
+                valuesAreBones: valuesAreBones
+            )
+            legendColumn(
+                Array(entries.dropFirst(leftCount)),
+                unreadableCount: breakdown.unreadableCount,
+                valuesAreBones: valuesAreBones
+            )
         }
     }
 
-    private func legendColumn(_ entries: [StorageSegment], valuesAreBones: Bool) -> some View {
+    private func legendColumn(
+        _ entries: [StorageSegment],
+        unreadableCount: Int,
+        valuesAreBones: Bool
+    ) -> some View {
         VStack(spacing: 0) {
             ForEach(entries) { entry in
-                LegendRow(entry: entry, valueIsBone: valuesAreBones)
+                LegendRow(
+                    entry: entry,
+                    unreadableCount: unreadableCount,
+                    valueIsBone: valuesAreBones
+                )
             }
         }
         // Both columns take half of whatever the card is given.
@@ -161,6 +177,7 @@ struct CapacityCard: View {
 
 private struct LegendRow: View {
     let entry: StorageSegment
+    let unreadableCount: Int
     /// A measurement is running: the name stands, the figure is not yet a fact.
     var valueIsBone = false
 
@@ -182,7 +199,10 @@ private struct LegendRow: View {
             // A hover-driven popover, not `.help()`: the native tooltip's dwell delay
             // reads as the icon doing nothing. The popover is its own window, so it
             // appears instantly and can never be clipped by the card.
-            if let explanation = Self.explanation(for: entry.id) {
+            if let explanation = Self.explanation(
+                for: entry.id,
+                unreadableCount: unreadableCount
+            ) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 10))
                     .foregroundStyle(isInfoHovered ? Token.Text.secondary : Token.Text.quaternary)
@@ -214,7 +234,10 @@ private struct LegendRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    private static func explanation(for id: StorageSegmentID) -> String? {
+    private static func explanation(
+        for id: StorageSegmentID,
+        unreadableCount: Int
+    ) -> String? {
         switch id {
         case .systemData:
             return "Machine-wide files outside your home folder: /Library (support "
@@ -222,14 +245,31 @@ private struct LegendRow: View {
                 + "in /private. Some of this is reclaimable, for example Homebrew "
                 + "caches and old logs."
         case .unmeasured:
-            return "Space this app is not allowed to read: the Spotlight index, "
-                + "filesystem metadata, and files only macOS can touch. Reported "
-                + "as unknown, not guessed at. It is not reclaimable."
+            var sentences: [String] = []
+            if unreadableCount > 0 {
+                let count = NumberFormatter.localizedString(
+                    from: NSNumber(value: unreadableCount),
+                    number: .decimal
+                )
+                let locationText = unreadableCount == 1 ? "location" : "locations"
+                sentences.append("The scan could not read \(count) \(locationText).")
+            }
+            sentences.append(
+                "This total includes APFS metadata and files that only macOS can read."
+            )
+            sentences.append("MacCleaner does not mark this space as removable.")
+            return sentences.joined(separator: " ")
         case .otherFilesInHome:
-            return "Everything in your home folder that no named category claims: "
-                + "folders you created at its top level, hidden tool data such as "
-                + "~/.ssh or ~/.npm, and other loose files. Large & Old Files is "
-                + "the place to explore what is in here."
+            return "This group contains home folder items that no named category "
+                + "claims. It can include top-level folders, hidden tool data, "
+                + "and loose files. Use Finder to review these items."
+        case .photos:
+            return "This category measures files in ~/Pictures, including Photos and "
+                + "Photo Booth libraries. MacCleaner does not offer these libraries "
+                + "for removal. Images elsewhere count in their folder category."
+        case .other:
+            return "This group contains measured categories that each use less than "
+                + "0.5% of the disk. It can include Developer, Movies, and Music."
         default:
             return nil
         }

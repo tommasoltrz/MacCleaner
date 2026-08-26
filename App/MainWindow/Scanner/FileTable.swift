@@ -49,8 +49,12 @@ struct FileTable: View {
             }
         case .size:
             entries.sorted {
-                ascending ? $0.allocatedBytes < $1.allocatedBytes
-                          : $0.allocatedBytes > $1.allocatedBytes
+                if $0.rowDisplayBytes == $1.rowDisplayBytes {
+                    return $0.displayName.localizedStandardCompare($1.displayName)
+                        == .orderedAscending
+                }
+                return ascending ? $0.rowDisplayBytes < $1.rowDisplayBytes
+                                 : $0.rowDisplayBytes > $1.rowDisplayBytes
             }
         }
     }
@@ -165,9 +169,8 @@ struct FileTable: View {
                         { action(entry) }
                     }
                 )
-                // An app discloses its associated files for individual cache/data
-                // cleanup. Removing the app itself always opens the dedicated,
-                // complete uninstall review instead of entering this selection.
+                // A parent discloses targets that can be removed separately. An app
+                // still uses the complete uninstall review for its parent action.
                 if expandedRows.contains(entry.id) {
                     ForEach(entry.children) { child in
                         Hairline()
@@ -175,6 +178,8 @@ struct FileTable: View {
                             entry: child,
                             isSelected: selection.contains(child.id),
                             hasUserDataOverride: userDataRemovalOverrides.contains(child.id),
+                            isReadOnly: entry.removalAction != nil
+                                || selection.contains(entry.id),
                             onToggle: { isOn in
                                 if isOn { selection.insert(child.id) }
                                 else {
@@ -334,9 +339,9 @@ private struct FileRow: View {
 
             nameBlock
 
-            Text(lastOpenedText)
+            Text(lastOpenedDisplay)
                 .font(.mcRowValue)
-                .foregroundStyle(entry.lastOpened == nil
+                .foregroundStyle(entry.lastOpened == nil && entry.removalAction == nil
                     ? Token.textColor(.orange) : Token.Text.secondary)
                 .lineLimit(1)
                 .frame(width: Metrics.lastOpened, alignment: .leading)
@@ -344,7 +349,7 @@ private struct FileRow: View {
             // `fixedSize` before the frame: the column is wide enough for every value
             // the formatter produces, and a truncated size would be a lie rather than
             // an abbreviation.
-            Text(ByteFormatting.string(entry.allocatedBytes))
+            Text(ByteFormatting.string(entry.rowDisplayBytes))
                 .font(.mcRowValue)
                 .foregroundStyle(Token.Text.primary)
                 .lineLimit(1)
@@ -391,6 +396,9 @@ private struct FileRow: View {
     }
 
     private var parentHelp: String {
+        if entry.removalAction != nil {
+            return "Select this application group to move all listed files to the Trash."
+        }
         if entry.kind == .appBundle, onUninstallApplication != nil {
             return "Open the complete uninstall review for this application."
         }
@@ -416,7 +424,9 @@ private struct FileRow: View {
     }
 
     private var disclosureHelp: String {
-        "\(entry.children.count) associated files"
+        entry.removalAction == nil
+            ? "\(entry.children.count) associated files"
+            : "\(entry.children.count) application leftover files"
     }
 
     private static func badgeText(for reason: FileEntry.ProtectionReason) -> String {
@@ -476,6 +486,11 @@ private struct FileRow: View {
         guard Date.now.timeIntervalSince(lastOpened) >= 60 else { return "Just now" }
         return lastOpenedFormatter.localizedString(for: lastOpened, relativeTo: .now)
     }
+
+    @MainActor
+    private var lastOpenedDisplay: String {
+        entry.removalAction == nil ? lastOpenedText : "App removed"
+    }
 }
 
 // MARK: - Reveal in Finder
@@ -483,14 +498,13 @@ private struct FileRow: View {
 /// The row's only action. It does not delete, rename or preview: it hands the file to
 /// Finder and lets the user decide there, which is the honest thing for a row whose
 /// checkbox is otherwise a vote to throw something away.
-/// An associated file under a disclosed parent — an app's cache, container, or
-/// preference file. It can be removed on its own unless it is protected or already
-/// covered by the parent selection; the compact row keeps the hierarchy readable
-/// without turning every cache path into a full-sized parent row.
+/// A removable item under a disclosed parent. It can be removed separately unless
+/// it is protected or already covered by the parent selection.
 private struct ChildRow: View {
     let entry: FileEntry
     let isSelected: Bool
     let hasUserDataOverride: Bool
+    var isReadOnly = false
     let onToggle: (Bool) -> Void
     let onRequestUserDataOverride: () -> Void
 
@@ -500,15 +514,24 @@ private struct ChildRow: View {
             // tree line.
             Color.clear.frame(width: Metrics.disclosureSlot, height: 0)
 
-            ProtectedSelectionControl(
-                entry: entry,
-                isSelected: isSelected,
-                hasUserDataOverride: hasUserDataOverride,
-                isCompact: true,
-                help: childHelp,
-                onToggle: onToggle,
-                onRequestUserDataOverride: onRequestUserDataOverride
-            )
+            Group {
+                if isReadOnly {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Token.Text.disabled)
+                        .help(childHelp)
+                } else {
+                    ProtectedSelectionControl(
+                        entry: entry,
+                        isSelected: isSelected,
+                        hasUserDataOverride: hasUserDataOverride,
+                        isCompact: true,
+                        help: childHelp,
+                        onToggle: onToggle,
+                        onRequestUserDataOverride: onRequestUserDataOverride
+                    )
+                }
+            }
                 .frame(width: Metrics.checkbox)
 
             Image(systemName: entry.kind.symbolName)
@@ -535,6 +558,12 @@ private struct ChildRow: View {
                     .foregroundStyle(Token.Text.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+
+                if entry.protectionReason == .userData {
+                    Badge(text: "user data").fixedSize()
+                } else if entry.isRegenerable {
+                    Badge(text: "regenerable", style: .safe).fixedSize()
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .help("\(childHelp)\n\(entry.url.path)")
@@ -552,7 +581,9 @@ private struct ChildRow: View {
         .contentShape(Rectangle())
         .hoverHighlight()
         .onTapGesture {
-            if entry.protectionReason == .userData, !hasUserDataOverride {
+            if isReadOnly {
+                return
+            } else if entry.protectionReason == .userData, !hasUserDataOverride {
                 onRequestUserDataOverride()
             } else if !entry.isRemovalLocked || hasUserDataOverride {
                 onToggle(!isSelected)
@@ -561,6 +592,9 @@ private struct ChildRow: View {
     }
 
     private var childHelp: String {
+        if isReadOnly {
+            return "This item moves with its selected parent."
+        }
         if entry.protectionReason == .userData {
             return hasUserDataOverride
                 ? "Protected user data selected for removal. It will always move to the Trash."
@@ -570,7 +604,7 @@ private struct ChildRow: View {
         if entry.isRemovalLocked {
             return "Protected while the app is running."
         }
-        return "Remove just this file, keeping the app"
+        return "Remove only this item. Keep its parent."
     }
 }
 
@@ -587,33 +621,101 @@ struct ProtectedSelectionControl: View {
     let onToggle: (Bool) -> Void
     let onRequestUserDataOverride: () -> Void
 
+    @State private var isHovered = false
+
     @ViewBuilder
     var body: some View {
-        if !entry.isRemovalLocked || hasUserDataOverride {
-            Toggle(
-                entry.displayName,
-                isOn: Binding(get: { isSelected }, set: { onToggle($0) })
-            )
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-            .controlSize(isCompact ? .small : .regular)
-            .help(help)
-        } else if entry.protectionReason == .userData {
-            Button(action: onRequestUserDataOverride) {
+        Group {
+            if !entry.isRemovalLocked || hasUserDataOverride {
+                Toggle(
+                    entry.displayName,
+                    isOn: Binding(get: { isSelected }, set: { onToggle($0) })
+                )
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+                .controlSize(isCompact ? .small : .regular)
+                .help(help)
+            } else if entry.protectionReason == .userData {
+                Button(action: onRequestUserDataOverride) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
+                        .foregroundStyle(Token.textColor(.orange))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Unlock \(entry.displayName) for removal")
+            } else {
                 Image(systemName: "lock.fill")
                     .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
-                    .foregroundStyle(Token.textColor(.orange))
+                    .foregroundStyle(Token.Text.disabled)
+                    .accessibilityLabel("\(entry.displayName) is locked. \(help)")
             }
-            .buttonStyle(.plain)
-            .help("Protected user data. Click to review and unlock it for removal.")
-            .accessibilityLabel("Unlock \(entry.displayName) for removal")
-        } else {
-            Image(systemName: "lock.fill")
-                .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
-                .foregroundStyle(Token.Text.disabled)
-                .help(help)
-                .accessibilityLabel("\(entry.displayName) is locked. \(help)")
         }
+        .onHover { isHovered = $0 }
+        .overlay(alignment: .bottomLeading) {
+            if isHovered, entry.isRemovalLocked, !hasUserDataOverride {
+                ProtectedItemHoverTip(
+                    title: tooltipTitle,
+                    message: tooltipMessage
+                )
+                .offset(x: -8, y: -(isCompact ? 17 : 20))
+                .transition(.opacity)
+            }
+        }
+        .zIndex(isHovered ? 2 : 0)
+    }
+
+    private var tooltipTitle: String {
+        if entry.protectionReason == .userData { return "Protected user data" }
+        if entry.protectionReason == .running { return "Application is running" }
+        if entry.manualRemoval != nil { return "Manual removal required" }
+        return "Protected item"
+    }
+
+    private var tooltipMessage: String {
+        if entry.protectionReason == .userData {
+            return "This item can contain profiles, logins, history, and settings. "
+                + "Click the lock to review and select it for removal."
+        }
+        if entry.protectionReason == .running {
+            return "Quit the application before you remove it. "
+                + "You can remove its listed support files separately."
+        }
+        if entry.manualRemoval != nil {
+            return "MacCleaner cannot remove this item directly. "
+                + "Use the terminal badge to review the command."
+        }
+        return help
+    }
+}
+
+/// An immediate explanation for a locked selection control.
+private struct ProtectedItemHoverTip: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.mcRowTitle)
+                .foregroundStyle(Token.Text.primary)
+
+            Text(message)
+                .font(.mcSubtitle)
+                .foregroundStyle(Token.Text.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(width: 300, alignment: .leading)
+        .padding(.bottom, UninstallHoverTipShape.pointerHeight)
+        .glassEffect(
+            .regular.interactive(false),
+            in: UninstallHoverTipShape(
+                cornerRadius: Token.Radius.card,
+                pointerCenterX: 22
+            )
+        )
+        .shadow(color: Token.chipShadow, radius: 12, y: 4)
+        .allowsHitTesting(false)
     }
 }
 

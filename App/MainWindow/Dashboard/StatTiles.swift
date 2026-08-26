@@ -4,32 +4,35 @@ import MacCleanerCore
 /// The Dashboard's row of three stat tiles.
 ///
 /// The "Safe to remove" / "Needs review" split is the design's core claim — the app
-/// separates what it will clean unattended from what needs a human — so the two totals
-/// sit side by side at equal weight and are never summed into one headline number.
+/// separates what it will clean unattended from what needs a human. The two totals
+/// sit side by side at equal weight. The app does not sum them into one number.
 struct StatTiles: View {
 
     private let safeToRemoveBytes: Int64?
     private let needsReviewBytes: Int64?
     private let lastScanAt: Date?
     private let reclaimedBytes: Int64?
-    /// Tap targets for the two counting tiles. `nil` leaves a tile inert, which is
-    /// also the pre-scan state: an em dash placeholder leads nowhere.
+    /// Tap targets for the two counting tiles. A first-run placeholder stays inert.
+    /// A saved scan time gives both tiles a fresh-scan action.
     private let onSafeTap: (() -> Void)?
     private let onReviewTap: (() -> Void)?
+    /// Starts a fresh scan when only a saved timestamp remains.
+    private let onScan: (() -> Void)?
 
     /// `nil` results means no scan has run this session: the two counting tiles fall
     /// back to placeholders. `lastScanAt` fills the third tile on launches where no
-    /// scan has run yet — the timestamp survives relaunch even though results don't —
+    /// scan has run yet. The timestamp survives relaunch even without results,
     /// and fresh results win over it.
     ///
-    /// `reclaimedBytes` comes from the clean-up history rather than from the scan, so
-    /// it is passed in; without it the "Last scan" tile shows the timestamp alone.
+    /// The clean-up history supplies `reclaimedBytes`. Without this value, the
+    /// "Last scan" tile shows only the timestamp.
     init(
         results: ScanResults?,
         lastScanAt: Date? = nil,
         reclaimedBytes: Int64? = nil,
         onSafeTap: (() -> Void)? = nil,
-        onReviewTap: (() -> Void)? = nil
+        onReviewTap: (() -> Void)? = nil,
+        onScan: (() -> Void)? = nil
     ) {
         self.safeToRemoveBytes = results?.safeToRemoveBytes
         self.needsReviewBytes = results?.needsReviewBytes
@@ -37,6 +40,7 @@ struct StatTiles: View {
         self.reclaimedBytes = reclaimedBytes
         self.onSafeTap = onSafeTap
         self.onReviewTap = onReviewTap
+        self.onScan = onScan
     }
 
     /// Figures directly. `ScanResults` has no public initializer, so a preview of the
@@ -53,6 +57,7 @@ struct StatTiles: View {
         self.reclaimedBytes = reclaimedBytes
         self.onSafeTap = nil
         self.onReviewTap = nil
+        self.onScan = nil
     }
 
     var body: some View {
@@ -62,19 +67,23 @@ struct StatTiles: View {
         // the three stay equal as the window resizes.
         Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
             GridRow {
-                // The two counting tiles open the list they counted. Links only once
-                // there are figures: an em dash placeholder leads nowhere.
+                // Current figures open their lists. A saved timestamp without
+                // current figures starts a new scan instead.
                 linkedTile(
                     label: "Safe to remove",
                     value: safeToRemoveBytes.map { ByteFormatting.string($0) },
-                    description: "Caches, logs and package tarballs that regenerate on demand.",
-                    action: onSafeTap
+                    emptyValue: savedScanNeedsRefresh ? "Scan again" : nil,
+                    description: "Caches regenerate. Application leftovers have no installed owner.",
+                    action: onSafeTap,
+                    emptyAction: savedScanNeedsRefresh ? onScan : nil
                 )
                 linkedTile(
                     label: "Needs review",
                     value: needsReviewBytes.map { ByteFormatting.string($0) },
+                    emptyValue: savedScanNeedsRefresh ? "Scan again" : nil,
                     description: "Large files and unused apps. You decide, nothing is automatic.",
-                    action: onReviewTap
+                    action: onReviewTap,
+                    emptyAction: savedScanNeedsRefresh ? onScan : nil
                 )
                 StatTile(
                     label: "Last scan",
@@ -91,27 +100,46 @@ struct StatTiles: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// A timestamp is safe to keep. File removal candidates are not safe to keep
+    /// across a relaunch because files can change or move.
+    private var savedScanNeedsRefresh: Bool {
+        safeToRemoveBytes == nil && needsReviewBytes == nil && lastScanAt != nil
+    }
+
     @ViewBuilder
     private func linkedTile(
         label: String,
         value: String?,
+        emptyValue: String?,
         description: String,
-        action: (() -> Void)?
+        action: (() -> Void)?,
+        emptyAction: (() -> Void)?
     ) -> some View {
-        if let action, value != nil {
-            Button(action: action) {
-                StatTile(label: label, value: value, description: description, showsChevron: true)
+        if let activeAction = value != nil ? action : emptyAction {
+            Button(action: activeAction) {
+                StatTile(
+                    label: label,
+                    value: value,
+                    emptyValue: emptyValue,
+                    description: description,
+                    showsChevron: true
+                )
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Show these items")
+            .help(value == nil ? "Run a new scan" : "Show these items")
         } else {
-            StatTile(label: label, value: value, description: description)
+            StatTile(
+                label: label,
+                value: value,
+                emptyValue: emptyValue,
+                description: description
+            )
         }
     }
 
-    /// Relative first: how stale the numbers are matters more than the exact moment
-    /// they were taken, which is on the line below.
+    /// Show the relative time first because the age of the numbers matters most.
+    /// Show the exact time on the line below.
     @MainActor
     private func relativeDescription(_ date: Date) -> String {
         // Inside a minute the formatter produces "in 0 seconds", which reads as a bug.
@@ -140,8 +168,8 @@ struct StatTiles: View {
 
 private struct StatTile: View {
     let label: String
-    /// `nil` before the first scan. Rendered as an em dash in the disabled tone —
-    /// "0 B" would claim the disk was measured and found clean.
+    /// `nil` before the first scan. Use an em dash in the disabled tone. "0 B"
+    /// would incorrectly claim that a scan found no files.
     let value: String?
     /// Used in place of the em dash where the empty state has a word for itself.
     var emptyValue: String?
@@ -168,9 +196,13 @@ private struct StatTile: View {
 
                 Text(value ?? emptyValue ?? "—")
                     .font(.mcStatValue)
-                    // Token has no `disabled` step; quaternary is the bottom of the
-                    // ramp and the nearest thing to the design's text-disabled.
-                    .foregroundStyle(isPlaceholder ? Token.Text.quaternary : Token.Text.primary)
+                    // A bare placeholder is disabled. A named empty value is an
+                    // instruction, and it stays readable as the tile's action.
+                    .foregroundStyle(
+                        isPlaceholder && emptyValue == nil
+                            ? Token.Text.quaternary
+                            : Token.Text.primary
+                    )
                     .lineLimit(1)
                     // A narrow window must not truncate the figure to "5.6…".
                     .minimumScaleFactor(0.7)
@@ -204,6 +236,11 @@ private struct StatTile: View {
             reclaimedBytes: 4_509_715_660          // 4.20 GB
         )
         StatTiles(results: nil)
+        StatTiles(
+            results: nil,
+            lastScanAt: Calendar.current.date(byAdding: .minute, value: -20, to: .now),
+            onScan: {}
+        )
     }
     .padding(24)
     .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth)

@@ -51,15 +51,15 @@ struct BreakdownMathTests {
                 == 60 * Self.gb + 39 * Self.gb + 35 * 1024 * 1024 + 10 * 1024 * 1024 + 384 * 1024 + 8 * 1024)
     }
 
-    @Test("merged slivers get no legend row, per the design")
-    func mergedSliversAreNotInTheLegend() {
+    @Test("merged slivers remain visible in the legend as Other")
+    func mergedSliversAreInTheLegend() {
         let breakdown = StorageBreakdown.make(
             capacityBytes: 100 * Self.gb,
             rawSegments: [.documentsDesktop: 60 * Self.gb, .music: 1024, .free: 40 * Self.gb],
             unreadableCount: 0
         )
         #expect(breakdown.segments.contains { $0.id == .other })
-        #expect(!breakdown.legendEntries.contains { $0.id == .other })
+        #expect(breakdown.legendEntries.contains { $0.id == .other })
     }
 
     @Test("Unmeasured survives the merge however small — it is never hidden")
@@ -109,5 +109,31 @@ struct BreakdownMathTests {
         )
         let sized = breakdown.segments.filter { $0.id != .free }
         #expect(sized.map(\.id) == [.documentsDesktop, .macOSSystem, .applications])
+    }
+
+    @Test("a new free-space snapshot changes only Free and Unmeasured")
+    func reconcileVolume() {
+        let breakdown = StorageBreakdown.make(
+            capacityBytes: 100 * Self.gb,
+            rawSegments: [
+                .applications: 20 * Self.gb,
+                .documentsDesktop: 30 * Self.gb,
+                .unmeasured: 10 * Self.gb,
+                .free: 40 * Self.gb
+            ],
+            unreadableCount: 4
+        )
+
+        let reconciled = breakdown.reconcilingVolume(
+            capacityBytes: 100 * Self.gb,
+            freeBytes: 35 * Self.gb
+        )
+
+        #expect(reconciled.freeBytes == 35 * Self.gb)
+        #expect(reconciled.segments.first { $0.id == .unmeasured }?.bytes == 15 * Self.gb)
+        #expect(reconciled.segments.first { $0.id == .applications }?.bytes == 20 * Self.gb)
+        #expect(reconciled.segments.first { $0.id == .documentsDesktop }?.bytes == 30 * Self.gb)
+        #expect(reconciled.segments.reduce(0) { $0 + $1.bytes } == 100 * Self.gb)
+        #expect(reconciled.unreadableCount == 4)
     }
 }

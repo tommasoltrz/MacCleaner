@@ -3,12 +3,9 @@ import Foundation
 
 /// A reviewed, immutable description of one application uninstall.
 ///
-/// The plan is deliberately stricter than the Applications scanner. A scan may
-/// show a plausible app-name match for the user to inspect; an uninstaller may
-/// only remove paths owned by an exact bundle identifier or by an explicit app
-/// data curation. Every item in the plan belongs to the complete uninstall, and
-/// ``CleanupService/uninstall(_:privilegedFallback:keepReceipt:)`` revalidates the
-/// ownership and paths before moving anything.
+/// The plan uses exact bundle identifiers or explicit app data rules for related files.
+/// If the identifier is not valid, the plan contains only the application.
+/// Cleanup checks each path again before it moves any item.
 public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
 
     public struct ManagedPackage: Sendable, Equatable {
@@ -98,7 +95,7 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     public var id: String { applicationURL.path }
     public let applicationURL: URL
     public let applicationName: String
-    public let bundleIdentifier: String
+    public let bundleIdentifier: String?
     public let items: [Item]
     /// Package ownership is informational and a hard direct-removal gate. The
     /// package manager must remove its own receipt and app artifact together.
@@ -113,6 +110,7 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     let allowedRelatedRoots: [URL]
 
     public var applicationItem: Item { items[0] }
+    public var isApplicationOnly: Bool { bundleIdentifier == nil }
     public var protectedItems: [Item] { items.filter(\.isProtectedUserData) }
     public var totalBytes: Int64 { items.reduce(0) { $0 + $1.allocatedBytes } }
 
@@ -135,7 +133,7 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     init(
         applicationURL: URL,
         applicationName: String,
-        bundleIdentifier: String,
+        bundleIdentifier: String?,
         items: [Item],
         managedPackage: ManagedPackage?,
         preservedPaths: [URL],
@@ -159,7 +157,6 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
 public enum AppUninstallPlanningError: Error, Sendable, Equatable, LocalizedError {
     case notAnApplication
     case untrustedLocation
-    case invalidBundleIdentifier
     case protectedApplication
     case symbolicLink
     case applicationExcluded
@@ -172,8 +169,6 @@ public enum AppUninstallPlanningError: Error, Sendable, Equatable, LocalizedErro
             "Choose a valid macOS application bundle."
         case .untrustedLocation:
             "Only applications installed in /Applications or your Applications folder can be uninstalled."
-        case .invalidBundleIdentifier:
-            "This application has no trustworthy bundle identifier, so its related files cannot be attributed safely."
         case .protectedApplication:
             "System applications and MacCleaner itself cannot be removed here."
         case .symbolicLink:
@@ -190,15 +185,15 @@ public enum AppUninstallPlanningError: Error, Sendable, Equatable, LocalizedErro
 
 /// Builds exact, reviewable uninstall plans for installed applications.
 public struct AppUninstallPlanner: Sendable {
-    private let home: URL
-    private let userLibrary: URL
-    private let systemLibrary: URL
-    private let applicationRoots: [URL]
-    private let darwinCache: URL?
-    private let darwinTemp: URL?
+    let home: URL
+    let userLibrary: URL
+    let systemLibrary: URL
+    let applicationRoots: [URL]
+    let darwinCache: URL?
+    let darwinTemp: URL?
     private let homebrewExecutable: String?
     private let processRunner: ProcessRunner
-    private let protectedBundleIdentifiers: Set<String>
+    let protectedBundleIdentifiers: Set<String>
 
     public init() {
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
@@ -260,12 +255,12 @@ public struct AppUninstallPlanner: Sendable {
         guard !Self.isSymbolicLink(applicationURL),
               applicationURL.resolvingSymlinksInPath().standardizedFileURL == applicationURL
         else { throw AppUninstallPlanningError.symbolicLink }
-        guard let bundleIdentifier = Self.verifiedBundleIdentifier(bundle.bundleIdentifier) else {
-            throw AppUninstallPlanningError.invalidBundleIdentifier
+        let bundleIdentifier = Self.verifiedBundleIdentifier(bundle.bundleIdentifier)
+        if let bundleIdentifier {
+            guard !Self.isProtectedBundleIdentifier(bundleIdentifier),
+                  !protectedBundleIdentifiers.contains(bundleIdentifier)
+            else { throw AppUninstallPlanningError.protectedApplication }
         }
-        guard !Self.isProtectedBundleIdentifier(bundleIdentifier),
-              !protectedBundleIdentifiers.contains(bundleIdentifier)
-        else { throw AppUninstallPlanningError.protectedApplication }
         guard !context.isExcluded(applicationURL) else {
             throw AppUninstallPlanningError.applicationExcluded
         }
@@ -289,6 +284,31 @@ public struct AppUninstallPlanner: Sendable {
             throw AppUninstallPlanningError.packageOwnershipUnavailable
         }
 
+        let applicationItem = AppUninstallPlan.Item(
+            url: applicationURL,
+            displayName: name,
+            category: .application,
+            content: .application,
+            allocatedBytes: applicationMeasurement.allocatedBytes,
+            ownerBundleIdentifier: nil
+        )
+
+        // A missing identifier prevents safe related-file attribution.
+        // The reviewed application can still move to the Trash by itself.
+        guard let bundleIdentifier else {
+            return AppUninstallPlan(
+                applicationURL: applicationURL,
+                applicationName: name,
+                bundleIdentifier: nil,
+                items: [applicationItem],
+                managedPackage: managedPackage,
+                preservedPaths: [],
+                candidateBundleIdentifiers: [],
+                applicationRoots: applicationRoots,
+                allowedRelatedRoots: allowedRelatedRoots
+            )
+        }
+
         let candidateIDs = Self.ownedBundleIdentifiers(
             in: applicationURL, primary: bundleIdentifier, fileManager: fm
         )
@@ -299,14 +319,7 @@ public struct AppUninstallPlanner: Sendable {
             fileManager: fm
         )
 
-        var items: [AppUninstallPlan.Item] = [AppUninstallPlan.Item(
-            url: applicationURL,
-            displayName: name,
-            category: .application,
-            content: .application,
-            allocatedBytes: applicationMeasurement.allocatedBytes,
-            ownerBundleIdentifier: nil
-        )]
+        var items: [AppUninstallPlan.Item] = [applicationItem]
         var preserved: [URL] = []
         var claimedPaths = Set(items.map(\.id))
 
@@ -393,14 +406,6 @@ public struct AppUninstallPlanner: Sendable {
             return $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
         }
 
-        let relatedRoots = [
-            userLibrary,
-            systemLibrary,
-            home.appendingPathComponent(".config", isDirectory: true),
-            home.appendingPathComponent(".cache", isDirectory: true),
-            home.appendingPathComponent(".local/share", isDirectory: true),
-        ] + [darwinCache, darwinTemp].compactMap { $0 }
-
         return AppUninstallPlan(
             applicationURL: applicationURL,
             applicationName: name,
@@ -410,20 +415,20 @@ public struct AppUninstallPlanner: Sendable {
             preservedPaths: Self.deduplicated(preserved),
             candidateBundleIdentifiers: candidateIDs,
             applicationRoots: applicationRoots,
-            allowedRelatedRoots: relatedRoots
+            allowedRelatedRoots: allowedRelatedRoots
         )
     }
 
     // MARK: Candidate discovery
 
-    private struct Candidate {
+    struct Candidate {
         let url: URL
         let category: AppUninstallPlan.Item.Category
         let content: AppUninstallPlan.Item.Content
         let ownerBundleIdentifier: String
     }
 
-    private func candidates(for bundleIdentifiers: Set<String>) -> [Candidate] {
+    func candidates(for bundleIdentifiers: Set<String>) -> [Candidate] {
         var result: [Candidate] = []
 
         func append(
@@ -647,21 +652,24 @@ public struct AppUninstallPlanner: Sendable {
         return !Self.hasSymbolicLinkInParents(of: item.url, through: root)
     }
 
-    private func candidateIsSafe(_ url: URL) -> Bool {
-        let roots = [
+    var allowedRelatedRoots: [URL] {
+        [
             userLibrary,
             systemLibrary,
             home.appendingPathComponent(".config", isDirectory: true),
             home.appendingPathComponent(".cache", isDirectory: true),
             home.appendingPathComponent(".local/share", isDirectory: true),
         ] + [darwinCache, darwinTemp].compactMap { $0 }
-        guard let root = roots.first(where: { Self.isInside(url, root: $0) }),
+    }
+
+    func candidateIsSafe(_ url: URL) -> Bool {
+        guard let root = allowedRelatedRoots.first(where: { Self.isInside(url, root: $0) }),
               !Self.isSymbolicLink(url)
         else { return false }
         return !Self.hasSymbolicLinkInParents(of: url, through: root)
     }
 
-    private static func installedApplications(
+    static func installedApplications(
         in roots: [URL], fileManager: FileManager
     ) -> [URL] {
         var result: [URL] = []
@@ -687,7 +695,7 @@ public struct AppUninstallPlanner: Sendable {
         return result
     }
 
-    private static func allBundleIdentifiers(
+    static func allBundleIdentifiers(
         in applicationURL: URL, fileManager: FileManager
     ) -> Set<String> {
         var result = Set<String>()
@@ -723,27 +731,45 @@ public struct AppUninstallPlanner: Sendable {
         return UUID(uuidString: suffix) != nil
     }
 
-    private static func directoryNames(_ url: URL) -> [String] {
+    static func installedBundleIdentifiers(
+        in roots: [URL], fileManager: FileManager = .default
+    ) -> Set<String> {
+        installedApplications(in: roots, fileManager: fileManager).reduce(into: Set<String>()) {
+            $0.formUnion(allBundleIdentifiers(in: $1, fileManager: fileManager))
+        }
+    }
+
+    static func ownerIsInstalled(
+        _ identifier: String, installedBundleIdentifiers: Set<String>
+    ) -> Bool {
+        installedBundleIdentifiers.contains { installed in
+            identifier == installed
+                || identifier.hasPrefix(installed + ".")
+                || installed.hasPrefix(identifier + ".")
+        }
+    }
+
+    static func directoryNames(_ url: URL) -> [String] {
         (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
     }
 
-    private static func isInside(_ url: URL, oneOf roots: [URL]) -> Bool {
+    static func isInside(_ url: URL, oneOf roots: [URL]) -> Bool {
         roots.contains { isInside(url, root: $0) }
     }
 
-    private static func isInside(_ url: URL, root: URL) -> Bool {
+    static func isInside(_ url: URL, root: URL) -> Bool {
         let path = url.standardizedFileURL.path
         let rootPath = root.standardizedFileURL.path
         return path.hasPrefix(rootPath + "/")
     }
 
-    private static func isSymbolicLink(_ url: URL) -> Bool {
+    static func isSymbolicLink(_ url: URL) -> Bool {
         var information = stat()
         guard lstat(url.path, &information) == 0 else { return false }
         return (information.st_mode & S_IFMT) == S_IFLNK
     }
 
-    private static func hasSymbolicLinkInParents(of url: URL, through root: URL) -> Bool {
+    static func hasSymbolicLinkInParents(of url: URL, through root: URL) -> Bool {
         var current = url.deletingLastPathComponent().standardizedFileURL
         let root = root.standardizedFileURL
         while current.path.count >= root.path.count {

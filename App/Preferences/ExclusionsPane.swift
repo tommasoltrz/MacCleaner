@@ -143,8 +143,9 @@ struct ExclusionsPane: View {
     private var protectRow: some View {
         GroupedBox {
             PrefPickerRow(
-                title: "Protect files opened in the last",
-                description: "Recently used files never appear as removal candidates.",
+                title: "Mark files used in the last",
+                description: "Recently used items stay listed with a “used recently” "
+                    + "badge. They are never selected for you. You decide.",
                 selection: protectBinding,
                 label: \.displayName
             )

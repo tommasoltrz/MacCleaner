@@ -96,11 +96,14 @@ struct AppUninstallerView: View {
         VStack(spacing: 14) {
             Spacer()
             ProgressView().controlSize(.large)
-            Text(model.isUninstallingApp ? "Moving the application to the Trash…" : "Finding related files…")
+            Text(model.isUninstallingApp
+                ? "Moving the application to the Trash…" : "Finding related files…")
                 .font(.mcBody)
                 .foregroundStyle(Token.Text.secondary)
             if model.isUninstallingApp {
-                Text("The application moves first; related data is untouched if that fails.")
+                Text(model.appUninstallPlan?.isApplicationOnly == true
+                    ? "Related files will stay on disk."
+                    : "The application moves first. Related data stays if that move fails.")
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.tertiary)
             }
@@ -174,9 +177,10 @@ struct AppUninstallerView: View {
                 Text(plan.applicationName)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Token.Text.primary)
-                Text(plan.bundleIdentifier)
+                Text(plan.bundleIdentifier ?? "Bundle identifier unavailable")
                     .font(.mcMonoSmall)
-                    .foregroundStyle(Token.Text.secondary)
+                    .foregroundStyle(plan.isApplicationOnly
+                        ? Token.textColor(.orange) : Token.Text.secondary)
                     .lineLimit(1)
             }
 
@@ -185,7 +189,9 @@ struct AppUninstallerView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(ByteFormatting.string(plan.totalBytes))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
-                Text("\(plan.items.count - 1) related items")
+                Text(plan.isApplicationOnly
+                    ? "Application only"
+                    : "\(plan.items.count - 1) related items")
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)
             }
@@ -204,16 +210,21 @@ struct AppUninstallerView: View {
     private func completeUninstallCard(_ plan: AppUninstallPlan) -> some View {
         GroupedBox {
             HStack(spacing: 12) {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: plan.isApplicationOnly
+                    ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 17))
-                    .foregroundStyle(Token.color(.green))
+                    .foregroundStyle(plan.isApplicationOnly
+                        ? Token.textColor(.orange) : Token.color(.green))
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Complete uninstall")
+                    Text(plan.isApplicationOnly
+                        ? "Application-only uninstall" : "Complete uninstall")
                         .font(.mcBody.weight(.medium))
                         .foregroundStyle(Token.Text.primary)
                     Text(
-                        plan.protectedItems.isEmpty
+                        plan.isApplicationOnly
+                            ? "MacCleaner cannot identify related files safely. Only the application will move to the Trash."
+                            : plan.protectedItems.isEmpty
                             ? "Every verified related file below will move to the Trash."
                             : "Every verified related file below will move to the Trash, including profiles and settings."
                     )
@@ -344,7 +355,8 @@ struct AppUninstallerView: View {
     private func footer(_ plan: AppUninstallPlan) -> some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(plan.items.count) items to remove")
+                Text(plan.items.count == 1
+                    ? "1 item to remove" : "\(plan.items.count) items to remove")
                     .font(.mcControlLabel)
                     .foregroundStyle(Token.Text.primary)
                 Text(ByteFormatting.string(plan.totalBytes))
@@ -374,7 +386,8 @@ struct AppUninstallerView: View {
     }
 
     private func uninstallButtonTitle(_ plan: AppUninstallPlan) -> String {
-        "Uninstall · \(ByteFormatting.string(plan.totalBytes))"
+        let action = plan.isApplicationOnly ? "Uninstall Application" : "Uninstall"
+        return "\(action) · \(ByteFormatting.string(plan.totalBytes))"
     }
 
     private func copyHomebrewCommand(_ package: AppUninstallPlan.ManagedPackage) {

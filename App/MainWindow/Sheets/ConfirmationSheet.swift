@@ -24,7 +24,8 @@ struct ConfirmationSheet: View {
             applicationName: String,
             itemCount: Int,
             totalBytes: Int64,
-            protectedDataCount: Int
+            protectedDataCount: Int,
+            applicationOnly: Bool
         )
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
         /// says how many photographs go and stays silent about megabytes rather
@@ -119,7 +120,7 @@ struct ConfirmationSheet: View {
             return "Move \(count) \(noun) to the Trash?"
         case .emptyTrash(let count, _):
             return "Permanently erase the \(count) items in the Trash?"
-        case .uninstallApp(let name, _, _, let protected):
+        case .uninstallApp(let name, _, _, let protected, _):
             return protected > 0
                 ? "Uninstall \(name) and remove its protected data?"
                 : "Uninstall \(name)?"
@@ -148,9 +149,9 @@ struct ConfirmationSheet: View {
             }
             if permanent > 0 {
                 let noun = permanent == 1 ? "item is" : "items are"
-                return "\(ByteFormatting.string(bytes)) will be removed. Apps go to "
-                    + "the Trash, but \(permanent) \(noun) deleted immediately and "
-                    + "cannot be put back." + warning
+                return "\(ByteFormatting.string(bytes)) will be removed. "
+                    + "\(permanent) \(noun) deleted immediately. The other selected "
+                    + "items move to the Trash." + warning
             }
             // The receipt line states what the checkbox below it is currently set
             // to do: promising a removal log while it is unchecked was a lie the
@@ -164,7 +165,11 @@ struct ConfirmationSheet: View {
         case .emptyTrash(_, let bytes):
             return "This erases \(ByteFormatting.string(bytes)) immediately. "
                 + "Items already in the Trash cannot be put back afterwards."
-        case .uninstallApp(_, let count, let bytes, let protected):
+        case .uninstallApp(_, let count, let bytes, let protected, let applicationOnly):
+            if applicationOnly {
+                return "Only the application (\(ByteFormatting.string(bytes))) will move to the Trash. "
+                    + "Related files will stay on disk."
+            }
             let related = max(0, count - 1)
             let noun = related == 1 ? "related item" : "related items"
             var warning = ""

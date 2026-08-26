@@ -9,20 +9,37 @@ public struct ScanContext: Sendable {
     public var excludedPaths: [String]
     /// Glob rules such as `*.sparsebundle`.
     public var excludedPatterns: [String]
-    /// "Protect files opened in the last N days" — recently used files never appear
-    /// as removal candidates.
+    /// Preferences › Exclusions › "Protect files opened in the last N days".
+    ///
+    /// **Recency is information, not a decision.** A recently used item is listed
+    /// with the `recentUse` badge and its checkbox works; it is never hidden, never
+    /// pre-selected, and never counted as safe. The Documents scanner used to treat
+    /// this as an exclusion and *skip* recent items — which hid an 11 GB build
+    /// folder precisely because the user had built something that morning. The
+    /// user decides what to do with a folder they touched yesterday, not a date.
+    /// Consult `isRecencyProtected(_:)` when building an entry; `isExcluded` does
+    /// not know about dates at all.
     public var protectRecentDays: Int
     /// Bundle paths of applications currently running, supplied by the app layer
     /// (NSWorkspace is AppKit, which Core deliberately does not import). Unlike any
     /// date heuristic this is ground truth: a running app is in use, full stop.
     public var runningApplicationPaths: Set<String>
+    /// Application owners that Launch Services currently resolves.
+    public var registeredApplicationBundleIdentifiers: Set<String>
+    /// The candidate scan those owners were resolved from. Handed through so the
+    /// leftover planner examines exactly the identifiers that were resolved,
+    /// rather than scanning again and possibly meeting a new one the resolution
+    /// never saw.
+    public var applicationLeftoverCandidates: OrphanedAppLeftoverPlanner.CandidateScan?
 
     public init(
         measurer: AllocatedSizeMeasurer = AllocatedSizeMeasurer(),
         excludedPaths: [String] = [],
         excludedPatterns: [String] = [],
         protectRecentDays: Int = 30,
-        runningApplicationPaths: Set<String> = []
+        runningApplicationPaths: Set<String> = [],
+        registeredApplicationBundleIdentifiers: Set<String> = [],
+        applicationLeftoverCandidates: OrphanedAppLeftoverPlanner.CandidateScan? = nil
     ) {
         // The measurer must know the globs or nothing detects a protected tree.
         // Taking them from the same argument keeps the two halves of the rule from
@@ -34,18 +51,21 @@ public struct ScanContext: Sendable {
         self.excludedPatterns = excludedPatterns
         self.protectRecentDays = protectRecentDays
         self.runningApplicationPaths = runningApplicationPaths
+        self.registeredApplicationBundleIdentifiers = registeredApplicationBundleIdentifiers
+        self.applicationLeftoverCandidates = applicationLeftoverCandidates
     }
 
-    /// The recency half of the shield on its own, for scanners that separate
-    /// "protect" from "hide".
+    /// Whether an item was used inside the protection window. The answer becomes a
+    /// `FileEntry.ProtectionReason.recentUse` badge on the row — see
+    /// `protectRecentDays` for why it is never anything more.
     public func isRecencyProtected(_ lastOpened: Date?) -> Bool {
         guard let lastOpened, protectRecentDays > 0 else { return false }
         return lastOpened > Date().addingTimeInterval(-Double(protectRecentDays) * 86_400)
     }
 
-    /// True when a path is excluded, protected by recency, inside an excluded
-    /// folder — **or contains one**. Every scanner must consult this before emitting
-    /// an entry.
+    /// True when a path is excluded, inside an excluded folder — **or contains
+    /// one**. Every scanner must consult this before emitting an entry. Recency is
+    /// not part of this answer: see `protectRecentDays`.
     ///
     /// The ancestor rule matters as much as the descendant one: with
     /// `~/Documents/Project/Secrets` excluded, a row for `~/Documents/Project` would
@@ -53,7 +73,7 @@ public struct ScanContext: Sendable {
     /// subtree from whichever row reaches it. Category roots are gated with
     /// ``isWithinExclusion(_:)`` instead, or one deep exclusion would switch off the
     /// whole category above it.
-    public func isExcluded(_ url: URL, lastOpened: Date? = nil) -> Bool {
+    public func isExcluded(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path
 
         if isWithinExclusion(url) { return true }
@@ -77,10 +97,6 @@ public struct ScanContext: Sendable {
                 }
             }
         }
-        if let lastOpened, protectRecentDays > 0 {
-            let cutoff = Date().addingTimeInterval(-Double(protectRecentDays) * 86_400)
-            if lastOpened > cutoff { return true }
-        }
         return false
     }
 
@@ -97,7 +113,8 @@ public struct ScanContext: Sendable {
 ///
 /// Implementations must:
 /// * measure **only** through `context.measurer` — never shell out to `du`;
-/// * consult `context.isExcluded(_:lastOpened:)` before emitting an entry;
+/// * consult `context.isExcluded(_:)` before emitting an entry, and set the
+///   `recentUse` badge from `context.isRecencyProtected(_:)` rather than hiding;
 /// * report `.unavailable(reason:)` with copy that tells the user how to fix it,
 ///   rather than failing silently;
 /// * propagate `CancellationError` so the toolbar's stop button works.
@@ -146,7 +163,7 @@ public extension CategoryScanner {
         isRegenerable: Bool = false
     ) async throws -> FileEntry? {
         let lastOpened = lastOpenedDate(for: url)
-        guard !context.isExcluded(url, lastOpened: lastOpened) else { return nil }
+        guard !context.isExcluded(url) else { return nil }
 
         let measured = try await context.measurer.measure(url)
         guard measured.allocatedBytes > 0 else { return nil }
@@ -162,6 +179,7 @@ public extension CategoryScanner {
             allocatedBytes: measured.allocatedBytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
+            protectionReason: context.isRecencyProtected(lastOpened) ? .recentUse : nil,
             childCount: childCount
         )
     }

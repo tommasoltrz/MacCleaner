@@ -49,6 +49,46 @@ struct AllocatedSizeMeasurerTests {
 
     private static let oneMB = 1024 * 1024
 
+    private final class ProgressRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var activeCallbacks = 0
+        private var recordedSnapshots: [SizeMeasurement] = []
+        private var foundConcurrentCallback = false
+
+        func record(_ measurement: SizeMeasurement) {
+            lock.lock()
+            activeCallbacks += 1
+            foundConcurrentCallback = foundConcurrentCallback || activeCallbacks > 1
+            recordedSnapshots.append(measurement)
+            lock.unlock()
+
+            // Keep the callback active long enough to expose concurrent delivery.
+            Thread.sleep(forTimeInterval: 0.002)
+
+            lock.lock()
+            activeCallbacks -= 1
+            lock.unlock()
+        }
+
+        var result: (snapshots: [SizeMeasurement], foundConcurrency: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (recordedSnapshots, foundConcurrentCallback)
+        }
+    }
+
+    @discardableResult
+    private static func runHdiutil(_ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
     // MARK: - The regression that motivated the rewrite
 
     @Test("an unreadable subdirectory costs only itself — it never zeroes the total")
@@ -159,6 +199,84 @@ struct AllocatedSizeMeasurerTests {
         #expect(children.count == 2)
         let childTotal = children.values.reduce(Int64(0)) { $0 + $1.allocatedBytes }
         #expect(childTotal == whole.allocatedBytes)
+    }
+
+    @Test("measureChildren measures a mounted child from that child's volume")
+    func mountedChildUsesItsOwnVolumeBoundary() async throws {
+        let sandbox = try Sandbox()
+        let image = sandbox.root.deletingLastPathComponent()
+            .appendingPathComponent("maccleaner-volume-\(UUID().uuidString).dmg")
+        let mount = try sandbox.directory("mounted-volume")
+
+        defer {
+            _ = try? Self.runHdiutil(["detach", "-quiet", mount.path])
+            try? FileManager.default.removeItem(at: image)
+        }
+
+        let created = try Self.runHdiutil([
+            "create", "-quiet", "-size", "32m", "-fs", "APFS",
+            "-volname", "MacCleanerMeasureTest", image.path
+        ])
+        try #require(created == 0, "could not create the mounted-volume fixture")
+
+        let attached = try Self.runHdiutil([
+            "attach", "-quiet", "-nobrowse", "-mountpoint", mount.path, image.path
+        ])
+        try #require(attached == 0, "could not attach the mounted-volume fixture")
+
+        let payload = mount.appendingPathComponent("payload.bin")
+        try Data(repeating: 0x41, count: Self.oneMB).write(to: payload)
+
+        let children = try await AllocatedSizeMeasurer().measureChildren(of: sandbox.root)
+        // `/var` is a symlink to `/private/var`. `contentsOfDirectory` can return
+        // either spelling, so identify this unique fixture by its final component.
+        let mountedChild = try #require(children.first {
+            $0.key.lastPathComponent == mount.lastPathComponent
+        }?.value)
+
+        #expect(mountedChild.fileCount == 1)
+        #expect(mountedChild.allocatedBytes >= Int64(Self.oneMB))
+    }
+
+    @Test("progress callbacks are serial, ordered, and not duplicated")
+    func progressCallbacksAreSerialAndOrdered() async throws {
+        let sandbox = try Sandbox()
+        for directory in 0..<4 {
+            for file in 0..<520 {
+                try sandbox.writeFile("dir-\(directory)/file-\(file)", bytes: 1)
+            }
+        }
+        let recorder = ProgressRecorder()
+
+        let result = try await AllocatedSizeMeasurer().measure(
+            sandbox.root,
+            progress: { recorder.record($0) }
+        )
+        let recorded = recorder.result
+
+        #expect(result.fileCount == 2_080)
+        #expect(recorded.snapshots.count == 4)
+        #expect(!recorded.foundConcurrency)
+        for (earlier, later) in zip(recorded.snapshots, recorded.snapshots.dropFirst()) {
+            #expect(earlier.fileCount < later.fileCount)
+            #expect(earlier.allocatedBytes < later.allocatedBytes)
+        }
+    }
+
+    @Test("measurements reuse the process-wide worker threads")
+    func measurementsReuseWorkers() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.writeFile("first/file.bin", bytes: 1)
+        let measurer = AllocatedSizeMeasurer()
+
+        _ = try await measurer.measure(sandbox.root)
+        let firstWorkers = AllocatedSizeMeasurer.sharedWorkerIdentities
+        _ = try await measurer.measure(sandbox.root)
+        let secondWorkers = AllocatedSizeMeasurer.sharedWorkerIdentities
+
+        #expect(!firstWorkers.isEmpty)
+        #expect(firstWorkers.count <= 8)
+        #expect(firstWorkers == secondWorkers)
     }
 
     /// Regression: `.skipsPackageDescendants` was briefly set alongside the symlink

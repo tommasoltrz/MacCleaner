@@ -8,16 +8,14 @@ import Foundation
 ///      < 1 GB  ->  "%.1f MB"
 ///        zero  ->  "0 B"
 ///
-/// and specifies **base 1024** ("the design's numbers assume it"). `ByteCountFormatter`
-/// is not used because its `.binary` style renders "8.42 GB" as "8.42 GB" on some
-/// locales and "8,42 GB" on others, and it switches units on its own thresholds —
-/// neither is acceptable when the spec lists literal expected strings.
+/// Storage figures use decimal units, as macOS does. One GB is 1,000,000,000 bytes.
+/// `ByteCountFormatter` is not used because it can change units and precision.
 public enum ByteFormatting {
 
-    public static let bytesPerMB: Int64 = 1024 * 1024
-    public static let bytesPerGB: Int64 = 1024 * 1024 * 1024
+    public static let bytesPerMB: Int64 = 1_000_000
+    public static let bytesPerGB: Int64 = 1_000_000_000
 
-    public static let bytesPerKB: Int64 = 1024
+    public static let bytesPerKB: Int64 = 1_000
 
     /// Renders a byte count as the design specifies.
     ///
@@ -36,6 +34,25 @@ public enum ByteFormatting {
             return Self.fixed(Double(bytes) / Double(bytesPerMB), decimals: 1) + " MB"
         }
         return Self.fixed(Double(bytes) / Double(bytesPerKB), decimals: 0) + " KB"
+    }
+
+    /// The same rendering over binary units, labelled the way Apple labels them.
+    ///
+    /// For iCloud only. `brctl` reports bytes where iCloud's own pages say
+    /// "200 GB" for exactly 200 GiB, and the plan tiers are stored that way; run
+    /// through the decimal formatter, the user's "200 GB" plan read "214.75 GB".
+    /// On-disk figures stay decimal, as Finder shows them.
+    public static func binaryString(_ bytes: Int64) -> String {
+        let gib: Int64 = 1024 * 1024 * 1024
+        let mib: Int64 = 1024 * 1024
+        if bytes == 0 { return "0 B" }
+        if bytes >= gib {
+            return Self.fixed(Double(bytes) / Double(gib), decimals: 2) + " GB"
+        }
+        if bytes >= mib {
+            return Self.fixed(Double(bytes) / Double(mib), decimals: 1) + " MB"
+        }
+        return Self.fixed(Double(bytes) / 1024, decimals: 0) + " KB"
     }
 
     /// Locale-independent fixed-point rendering. Always a period, never a comma —
