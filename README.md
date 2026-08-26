@@ -128,6 +128,10 @@ persists that state across launches, and limits repeated crossings to one per da
 **Complete uninstall requires an existing application bundle.** App Uninstaller
 attributes related files from the selected app's verified identity.
 
+**Finder only starts an uninstall review.** Select one application in Finder. Then
+choose Services › Review Uninstall with MacCleaner. MacCleaner opens the existing
+App Uninstaller review. The Finder action never removes files.
+
 **Application Leftovers uses strict ownership rules.** The Scanner finds exact
 bundle-identifier paths and roots from curated app rules. It ignores loose name
 matches and shared containers. It keeps exclusions, keychains, ambiguous paths,

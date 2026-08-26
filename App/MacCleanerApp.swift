@@ -13,8 +13,12 @@ struct MacCleanerApp: App {
         // One store, handed to the model so the engine actually receives the
         // preferences the panes edit.
         let settings = SettingsStore()
+        let model = AppModel(settings: settings)
         _settings = State(initialValue: settings)
-        _model = State(initialValue: AppModel(settings: settings))
+        _model = State(initialValue: model)
+        FinderUninstallRequestCenter.shared.install { [weak model] applicationURL in
+            model?.planAppUninstall(applicationURL)
+        }
     }
 
     // No forced appearance. The handoff was authored dark and only dark, and the app
@@ -29,6 +33,7 @@ struct MacCleanerApp: App {
                     minWidth: 1000, idealWidth: Token.Size.windowWidth,
                     minHeight: 640, idealHeight: Token.Size.windowHeight
                 )
+                .background(FinderUninstallRequestReceiver())
         }
         .defaultSize(width: Token.Size.windowWidth, height: Token.Size.windowHeight)
 
@@ -86,6 +91,8 @@ struct MacCleanerApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
+    private let finderUninstallServiceProvider = FinderUninstallServiceProvider()
+
     /// True while a login launch is still settling: SwiftUI can present the
     /// restored window just after `applicationDidFinishLaunching`, and without this
     /// the window observer would promote the app straight back to the Dock.
@@ -102,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Low-space readings often finish while the Dashboard is the active window.
         // Foreground notifications are silent unless the app supplies a delegate.
         UNUserNotificationCenter.current().delegate = self
+        NSApp.servicesProvider = finderUninstallServiceProvider
+        NSUpdateDynamicServices()
         observeWindows()
         // With the menu bar item switched off there is nothing to become: an
         // accessory app with no status item and no window is a process the user
