@@ -82,38 +82,8 @@ struct FinderUninstallRequestReceiver: View {
     }
 
     private func presentMainWindow() {
-        AppDelegate.setPolicy(.regular)
-        NSApp.unhide(nil)
-
-        if let window = NSApp.windows.first(where: {
-            $0.identifier == MainWindowIdentityView.identifier
-        }) {
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-
-        openWindow(id: "main")
-        DispatchQueue.main.async {
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.mainWindow?.makeKeyAndOrderFront(nil)
-        }
-    }
-}
-
-private struct MainWindowIdentityView: NSViewRepresentable {
-    static let identifier = NSUserInterfaceItemIdentifier("Scolo.mainWindow")
-
-    func makeNSView(context: Context) -> NSView {
-        IdentityView()
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    private final class IdentityView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            window?.identifier = MainWindowIdentityView.identifier
+        MainWindowPresenter.present {
+            openWindow(id: "main")
         }
     }
 }
