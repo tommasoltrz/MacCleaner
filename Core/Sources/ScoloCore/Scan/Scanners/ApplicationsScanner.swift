@@ -28,32 +28,45 @@ public struct ApplicationsScanner: CategoryScanner {
 
     public let id: CategoryID = .applications
 
-    public init() {}
+    /// Where installed applications are looked for, and the home whose `Library`
+    /// holds their leftovers.
+    ///
+    /// Injectable for the reason `XcodeScanner`'s roots are: absolute paths compiled
+    /// into a scanner make its own rules untestable, and this scanner holds the ones
+    /// worth testing most — an excluded app is not walked, an app whose data holds a
+    /// protected pattern is not offered at all, and the curated remainder travels
+    /// with the bundle. Production passes nothing and gets the two real directories.
+    ///
+    /// A fixture must pass **both**: `home` alone would leave `/Applications` in the
+    /// search, and the machine's own applications back in the test.
+    private let applicationDirectories: [URL]
+    private let home: URL
 
-    // MARK: - Search roots
-
-    /// Exactly where the original looked. `/System/Applications` is deliberately not
-    /// added: those bundles live on the sealed system volume and cannot be removed,
-    /// so listing them would only offer the user an action that always fails.
-    private static let applicationDirectories: [URL] = [
-        URL(fileURLWithPath: "/Applications", isDirectory: true),
-        URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent("Applications", isDirectory: true)
-    ]
-
-    private static let library = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        .appendingPathComponent("Library", isDirectory: true)
+    /// - Parameters:
+    ///   - applicationDirectories: where to look for `.app` bundles. Defaults to
+    ///     `/Applications` and `<home>/Applications`. `/System/Applications` is
+    ///     deliberately absent: those bundles live on the sealed system volume and
+    ///     cannot be removed, so listing them would offer an action that always fails.
+    ///   - home: the home folder whose `Library` is searched for each app's leftovers.
+    public init(applicationDirectories: [URL]? = nil,
+                home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)) {
+        self.home = home
+        self.applicationDirectories = applicationDirectories ?? [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            home.appendingPathComponent("Applications", isDirectory: true)
+        ]
+    }
 
     // MARK: - Scanning
 
     public func scan(context: ScanContext) async throws -> ScanCategoryResult {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
+        let library = home.appendingPathComponent("Library", isDirectory: true)
         let fileManager = FileManager.default
         var entries: [FileEntry] = []
         var unreadableCount = 0
         var readAnyDirectory = false
 
-        for directory in Self.applicationDirectories {
+        for directory in applicationDirectories {
             guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else {
                 continue
             }
@@ -83,7 +96,9 @@ public struct ApplicationsScanner: CategoryScanner {
                 }
 
                 var children: [FileEntry] = []
-                for candidate in Self.leftoverCandidates(baseName: baseName, bundleID: bundleID) {
+                for candidate in Self.leftoverCandidates(
+                    baseName: baseName, bundleID: bundleID, library: library
+                ) {
                     if let curatedRoot,
                        Self.overlaps(candidate.url.standardizedFileURL.path, curatedRoot) {
                         continue
@@ -587,7 +602,9 @@ public struct ApplicationsScanner: CategoryScanner {
     ///
     /// Only paths that exist are returned, and each path appears once even when two
     /// rules match it.
-    private static func leftoverCandidates(baseName: String, bundleID: String?) -> [Candidate] {
+    private static func leftoverCandidates(
+        baseName: String, bundleID: String?, library: URL
+    ) -> [Candidate] {
         let fileManager = FileManager.default
         var candidates: [Candidate] = []
         var seen = Set<String>()
