@@ -269,6 +269,64 @@ struct AppDataCurationTests {
         #expect(data.entries.isEmpty)
     }
 
+    @Test("a service worker's caches are offered; its registration is not")
+    func serviceWorkerCachesAreSplitFromTheRegistration() async throws {
+        let sandbox = try Sandbox()
+        let folder = Self.support("Google/Chrome")
+        try sandbox.writeFile(
+            "\(folder)/Default/Service Worker/CacheStorage/x", bytes: Self.oneMB
+        )
+        try sandbox.writeFile(
+            "\(folder)/Default/Service Worker/ScriptCache/y", bytes: Self.oneMB
+        )
+        try sandbox.writeFile("\(folder)/Default/Shared Dictionary/db", bytes: Self.oneMB)
+        // The registration itself, and the user's logins beside it.
+        try sandbox.writeFile(
+            "\(folder)/Default/Service Worker/Database/000003.log", bytes: 2 * Self.oneMB
+        )
+        try sandbox.writeFile("\(folder)/Default/Cookies", bytes: Self.oneMB)
+
+        let curation = try #require(ApplicationsScanner.curation(
+            bundleID: "com.google.Chrome", baseName: "Google Chrome", home: sandbox.root
+        ))
+        let data = try await Self.curated(curation, home: sandbox.root)
+
+        let offered = Set(data.entries.map(\.url.lastPathComponent))
+        #expect(offered.contains("CacheStorage"))
+        #expect(offered.contains("ScriptCache"))
+        #expect(offered.contains("Shared Dictionary"))
+        #expect(!offered.contains("Database"),
+                "the registration is what makes an installed web app work")
+
+        // Database and Cookies, and nothing that regenerates.
+        let locked = try #require(Self.remainder(data))
+        #expect(locked.allocatedBytes >= 3 * Int64(Self.oneMB))
+        #expect(locked.allocatedBytes < 4 * Int64(Self.oneMB))
+    }
+
+    @Test("an Electron app's script cache and dictionaries are offered too")
+    func electronAppsGetTheSameTwoCaches() async throws {
+        let sandbox = try Sandbox()
+        let folder = Self.support("Fixture")
+        // The marker that makes this an Electron layout at all.
+        try sandbox.writeFile("\(folder)/Code Cache/index", bytes: Self.oneMB)
+        try sandbox.writeFile("\(folder)/Service Worker/ScriptCache/y", bytes: Self.oneMB)
+        try sandbox.writeFile("\(folder)/Shared Dictionary/db", bytes: Self.oneMB)
+        try sandbox.writeFile("\(folder)/Local Storage/leveldb/CURRENT", bytes: Self.oneMB)
+
+        let curation = try #require(ApplicationsScanner.curation(
+            bundleID: "com.example.fixture", baseName: "Fixture", home: sandbox.root
+        ))
+        let data = try await Self.curated(curation, home: sandbox.root)
+
+        let offered = Set(data.entries.map(\.url.lastPathComponent))
+        #expect(offered.isSuperset(of: ["Code Cache", "ScriptCache", "Shared Dictionary"]))
+
+        // Local Storage is the user's, and stays locked.
+        let locked = try #require(Self.remainder(data))
+        #expect(locked.allocatedBytes >= Int64(Self.oneMB))
+    }
+
     // MARK: - Glob expansion
 
     @Test("one glob level reaches every profile the user made")
