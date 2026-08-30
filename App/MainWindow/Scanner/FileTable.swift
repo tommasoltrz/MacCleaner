@@ -707,18 +707,37 @@ private struct ProtectedItemHoverTip: View {
         .padding(12)
         .frame(width: 300, alignment: .leading)
         .padding(.bottom, UninstallHoverTipShape.pointerHeight)
-        .glassEffect(
-            .regular.interactive(false),
-            in: UninstallHoverTipShape(
-                cornerRadius: Token.Radius.card,
-                pointerCenterX: 22
-            )
-        )
+        .hoverTipSurface()
         .shadow(color: Token.chipShadow, radius: 12, y: 4)
         .allowsHitTesting(false)
     }
 }
 
+
+/// The hover tip's surface, in the shape that carries its pointer.
+///
+/// macOS 26 draws it in Liquid Glass, which refracts the table behind it and
+/// carries the pointer continuously out of the card. Earlier systems have no such
+/// material: `.regularMaterial` in the same shape is the nearest honest
+/// equivalent — a translucent card rather than a lens — with a hairline border,
+/// because without glass's own edge the card and the table it floats over meet
+/// with nothing between them.
+private extension View {
+    @ViewBuilder
+    func hoverTipSurface() -> some View {
+        let shape = UninstallHoverTipShape(
+            cornerRadius: Token.Radius.card,
+            pointerCenterX: 22
+        )
+        if #available(macOS 26, *) {
+            self.glassEffect(.regular.interactive(false), in: shape)
+        } else {
+            self
+                .background(.regularMaterial, in: shape)
+                .overlay(shape.stroke(Token.Fill.boxBorder, lineWidth: Token.hairline))
+        }
+    }
+}
 
 /// The explanation and the command for an entry only a tool can remove.
 struct ManualRemovalPopover: View {
@@ -819,13 +838,7 @@ private struct UninstallHoverTip: View {
         // The pointer is part of the glass shape rather than a separately painted
         // triangle, so its refraction and highlights flow continuously into the card.
         .padding(.bottom, UninstallHoverTipShape.pointerHeight)
-        .glassEffect(
-            .regular.interactive(false),
-            in: UninstallHoverTipShape(
-                cornerRadius: Token.Radius.card,
-                pointerCenterX: 22
-            )
-        )
+        .hoverTipSurface()
         .shadow(color: Token.chipShadow, radius: 12, y: 4)
         .allowsHitTesting(false)
     }

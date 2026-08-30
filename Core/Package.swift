@@ -5,7 +5,7 @@ import PackageDescription
 // can be built and tested headlessly with `swift test` — no Xcode, no signing, no UI.
 let package = Package(
     name: "ScoloCore",
-    platforms: [.macOS("26.0")],
+    platforms: [.macOS("15.0")],
     products: [
         .library(name: "ScoloCore", targets: ["ScoloCore"]),
         .executable(name: "scolo-cli", targets: ["scolo-cli"])
