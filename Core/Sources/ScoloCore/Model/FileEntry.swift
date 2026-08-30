@@ -193,6 +193,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         return manualRemoval != nil ? totalBytesIncludingChildren : reclaimableBytes
     }
 
+    /// Bytes among this row's children that regenerate and can actually be removed.
+    ///
+    /// Counted as safe wherever the row itself is not. An application's caches come
+    /// back the next time it launches even though the application does not, and the
+    /// Scanner has always said so by badging those children `regenerable`; without
+    /// this the Dashboard's "Safe to remove" could not see them, because they are
+    /// children rather than rows and their parent is never safe.
+    public var regenerableChildBytes: Int64 {
+        children
+            .filter { $0.isRegenerable && !$0.isRemovalLocked }
+            .reduce(0) { $0 + $1.allocatedBytes }
+    }
+
     /// The size shown beside a top-level Scanner row. Applications show only their
     /// installed bundle. Other parents include their disclosed removal targets.
     public var rowDisplayBytes: Int64 {

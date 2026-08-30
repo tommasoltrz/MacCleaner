@@ -112,15 +112,28 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     }
 
     /// This category's contribution to "Safe to Remove". It counts regenerable
-    /// rows and verified application-leftover groups. A safe cache category can
-    /// hold data that does not regenerate, such as an `.xcarchive`. Therefore,
-    /// each ordinary row must pass the regenerable check.
+    /// rows, verified application-leftover groups, and the regenerable children of
+    /// rows that are not themselves safe. A safe cache category can hold data that
+    /// does not regenerate, such as an `.xcarchive`. Therefore, each ordinary row
+    /// must pass the regenerable check.
+    ///
+    /// The children matter because of applications. Chrome's caches are children of
+    /// the Chrome row, the Applications category is not safe, and every row in it is
+    /// an app bundle — so before this the tile could not see a single one of them,
+    /// though the Scanner badged them `regenerable` one screen away. On the author's
+    /// Mac that was 1.37 GB in Chrome alone.
     public var safeToRemoveBytes: Int64 {
-        guard categoryID.isSafe else { return 0 }
         if categoryID == .applicationLeftovers {
             return entries.reduce(0) { $0 + $1.displayBytes }
         }
-        return entries.filter(\.isRegenerable).reduce(0) { $0 + $1.displayBytes }
+        return entries.reduce(0) { total, entry in
+            total + (countsAsSafe(entry) ? entry.displayBytes : entry.regenerableChildBytes)
+        }
+    }
+
+    /// Whether the row itself — not merely something inside it — is safe to remove.
+    private func countsAsSafe(_ entry: FileEntry) -> Bool {
+        categoryID == .applicationLeftovers || (categoryID.isSafe && entry.isRegenerable)
     }
 
     /// Everything else: each category without a safe badge, plus each
@@ -129,11 +142,17 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// and the list it opens must state the same figure. A category with no entries
     /// keeps its own total — that is a scanner reporting an aggregate it did not
     /// break into rows.
+    /// The two tiles are a partition, so whatever `safeToRemoveBytes` claims from a
+    /// row is subtracted here. An application keeps its bundle and its user data in
+    /// this figure and loses its caches to the other one; before, it kept both and
+    /// the caches were counted nowhere else.
     public var needsReviewBytes: Int64 {
         if categoryID == .applicationLeftovers { return 0 }
         guard !entries.isEmpty else { return categoryID.isSafe ? 0 : totalBytes }
-        guard categoryID.isSafe else { return entries.reduce(0) { $0 + $1.displayBytes } }
-        return entries.filter { !$0.isRegenerable }.reduce(0) { $0 + $1.displayBytes }
+        return entries.reduce(0) { total, entry in
+            guard !countsAsSafe(entry) else { return total }
+            return total + max(0, entry.displayBytes - entry.regenerableChildBytes)
+        }
     }
 
     public init(
