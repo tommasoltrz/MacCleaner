@@ -190,7 +190,15 @@ struct BuildOutputTests {
         let emptyDeveloper = try sandbox.directory("Library/Developer")
 
         let result = try await XcodeScanner(
-            developerRoot: emptyDeveloper, projectRoots: [documents]
+            developerRoot: emptyDeveloper,
+            projectRoots: [documents],
+            // Every root this scanner reads has to come from the fixture. Left at
+            // its default, the machine's own /Library/Developer/CoreSimulator was
+            // still scanned, and on a Mac with an iOS runtime installed the result
+            // carried a 3.69 GB manual-removal row this test never planted — so
+            // "everything found here is safe" failed for a true reason about the
+            // machine rather than a false one about the code.
+            systemSimulatorRoot: sandbox.home.appendingPathComponent("no-simulators")
         ).scan(context: ScanContext(protectRecentDays: 0))
 
         let row = try #require(result.entries.first { $0.displayName == "Renewals build output" })

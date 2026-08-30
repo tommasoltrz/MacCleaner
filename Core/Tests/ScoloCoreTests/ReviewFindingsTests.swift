@@ -132,7 +132,13 @@ struct ReviewFindingsTests {
         try FileManager.default.createDirectory(at: ordinary, withIntermediateDirectories: true)
         try Data(count: 2 * 1024 * 1024).write(to: ordinary.appendingPathComponent("app.o"))
 
-        let result = try await XcodeScanner(developerRoot: developer).scan(
+        let result = try await XcodeScanner(
+            developerRoot: developer,
+            // The fixture is the whole world here: the default roots are the real
+            // home folders and the real system simulator directory.
+            projectRoots: [],
+            systemSimulatorRoot: developer.appendingPathComponent("no-simulators")
+        ).scan(
             context: ScanContext(excludedPatterns: ["*.keychain-db"], protectRecentDays: 0)
         )
         #expect(!result.entries.contains { $0.url.lastPathComponent == "Guarded-abc" },
@@ -176,8 +182,11 @@ struct ReviewFindingsTests {
         try FileManager.default.createDirectory(at: derived, withIntermediateDirectories: true)
         try Data(count: 2 * 1024 * 1024).write(to: derived.appendingPathComponent("build.o"))
 
-        let result = try await XcodeScanner(developerRoot: developer)
-            .scan(context: ScanContext(protectRecentDays: 0))
+        let result = try await XcodeScanner(
+            developerRoot: developer,
+            projectRoots: [],
+            systemSimulatorRoot: developer.appendingPathComponent("no-simulators")
+        ).scan(context: ScanContext(protectRecentDays: 0))
 
         let archiveRow = try #require(result.entries.first { $0.url.path.contains("Archives") })
         let derivedRow = try #require(result.entries.first { $0.url.path.contains("DerivedData") })
