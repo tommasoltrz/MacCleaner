@@ -3,17 +3,39 @@ import Foundation
 /// What a cleanup actually did.
 public struct CleanupOutcome: Sendable, Equatable {
 
-    /// The sum of what each item measured immediately before it was removed.
+    /// What the removed items *occupied*: allocated size, summed as each item was
+    /// measured immediately before it went.
     ///
-    /// **An upper bound, not a promise.** APFS clones share blocks between distinct
-    /// files and no per-file API can see that sharing, so two 16 MB clones measure
-    /// 32 MB while removing both recovers 16 MB. The same applies to any
-    /// content-addressable store built on `clonefile` — a pnpm or Homebrew cache
-    /// frees less than the sum of its entries. There is no correction to apply here:
-    /// the only honest number available per file is its allocated size, and the
-    /// figure this reports is exactly the one ``AllocatedSizeMeasurer`` documents as
-    /// an upper bound. Volume free space is the authority on what was reclaimed.
+    /// An upper bound on reclaimed space, and deliberately so — APFS clones share
+    /// blocks between distinct files, so two 16 MB clones occupy 32 MB while the
+    /// disk holds 16. Use it to say what was removed, never what was freed.
+    /// ``freedBytes`` answers that.
+    public var removedBytes: Int64
+
+    /// What the removal releases: private size — bytes belonging to that file alone
+    /// — read for each item in the instant before it goes.
+    ///
+    /// **Exact for a permanent deletion.** Removals run in sequence, so the second
+    /// of a cloned pair is measured after the first has already been deleted, by
+    /// which time it holds those blocks alone and reports all of them. The sum
+    /// telescopes: delete one of a cloned pair and this is 0, delete both and it is
+    /// the full size, and both answers are right.
+    ///
+    /// **A floor for a move to the Trash**, because a trashed file still exists and
+    /// still holds its blocks. Trash two clones and each reads zero as it goes; the
+    /// 4 MB they share comes back when the Trash is emptied, credited to neither
+    /// removal. Understating is the direction to be wrong in — the alternative is
+    /// promising space the disk has not given back.
+    ///
+    /// Falls short by ``unreportedFreedCount`` items besides, whose filesystem
+    /// would not answer at all.
     public var freedBytes: Int64
+
+    /// Removed items whose private size the filesystem declined to report, so their
+    /// bytes are in ``removedBytes`` and absent from ``freedBytes``. Non-zero means
+    /// the freed figure understates by an unknown amount.
+    public var unreportedFreedCount: Int
+
     public var removedCount: Int
     /// The split behind `removedCount`, because the two halves make different
     /// promises: a trashed item can come back, a deleted one cannot, and the
@@ -28,14 +50,18 @@ public struct CleanupOutcome: Sendable, Equatable {
     public var permissionDenied: [String]
 
     public init(
+        removedBytes: Int64 = 0,
         freedBytes: Int64 = 0,
+        unreportedFreedCount: Int = 0,
         removedCount: Int = 0,
         failed: [String] = [],
         permissionDenied: [String] = [],
         trashedCount: Int = 0,
         deletedCount: Int = 0
     ) {
+        self.removedBytes = removedBytes
         self.freedBytes = freedBytes
+        self.unreportedFreedCount = unreportedFreedCount
         self.removedCount = removedCount
         self.failed = failed
         self.permissionDenied = permissionDenied
@@ -43,8 +69,14 @@ public struct CleanupOutcome: Sendable, Equatable {
         self.deletedCount = deletedCount
     }
 
+    /// Bytes the removed items claimed but did not give back, because another file
+    /// still holds them. Zero for everything that was not sharing storage.
+    public var sharedBytes: Int64 { max(0, removedBytes - freedBytes) }
+
     public mutating func merge(_ other: CleanupOutcome) {
+        removedBytes += other.removedBytes
         freedBytes += other.freedBytes
+        unreportedFreedCount += other.unreportedFreedCount
         removedCount += other.removedCount
         trashedCount += other.trashedCount
         deletedCount += other.deletedCount
@@ -63,6 +95,10 @@ public struct CleanupOutcome: Sendable, Equatable {
 public struct CleanupService: Sendable {
 
     private let measurer: AllocatedSizeMeasurer
+    /// Read per item in the instant before that item is removed. Kept out of the
+    /// scan's measurement entirely — see ``PrivateSizeMeasurer`` for the 62 % that
+    /// would have cost on every whole-disk walk.
+    private let privateMeasurer = PrivateSizeMeasurer()
     private let log: RemovalLog
 
     public init(
@@ -107,6 +143,9 @@ public struct CleanupService: Sendable {
         // unprivileged `trashItem` cannot touch them even though Finder can, via
         // exactly the admin prompt this fallback raises.
         var privileged: [FileEntry] = []
+        /// Private size read at queue time for each privileged target, since the
+        /// batch moves them all at once and nothing can be measured afterwards.
+        var privilegedFreed: [FileEntry.ID: Int64?] = [:]
 
         for entry in entries {
             // Between entries, never mid-item: a half-removed app bundle is worse
@@ -153,6 +192,12 @@ public struct CleanupService: Sendable {
                     continue
                 }
 
+                // The last read before the item goes. Private size is what this
+                // file holds alone, so a clone whose sibling an earlier iteration
+                // already removed reports here as the sole owner of those blocks —
+                // which is exactly what removing it now gives back.
+                let freed = try? await privateMeasurer.measure([target.url])
+
                 let landed: URL?
                 do {
                     landed = try Self.discard(target.url, disposition: disposition)
@@ -168,6 +213,10 @@ public struct CleanupService: Sendable {
                        !Self.requiresAppDataAuthorization(target.url) {
                         var queued = target
                         queued.allocatedBytes = measured
+                        // Read now, before the batch runs. Two clones both queued
+                        // here each read zero, so a wholly-shared privileged batch
+                        // under-reports — the honest direction for a promise.
+                        privilegedFreed[target.id] = freed?.privateBytes
                         privileged.append(queued)
                     } else {
                         // One unremovable file must not cost the user the rest of
@@ -182,7 +231,9 @@ public struct CleanupService: Sendable {
                     continue
                 }
 
-                outcome.freedBytes += measured
+                outcome.removedBytes += measured
+                if let freed { outcome.freedBytes += freed.privateBytes }
+                else { outcome.unreportedFreedCount += 1 }
                 outcome.removedCount += 1
                 if disposition == .trashed { outcome.trashedCount += 1 }
                 else { outcome.deletedCount += 1 }
@@ -194,7 +245,8 @@ public struct CleanupService: Sendable {
                     disposition: disposition,
                     trashedPath: landed?.path,
                     // Read now, while the item is certainly the one just trashed.
-                    trashedIdentity: landed.flatMap(FileIdentity.of)
+                    trashedIdentity: landed.flatMap(FileIdentity.of),
+                    freedBytes: freed?.privateBytes
                 ))
             }
 
@@ -210,7 +262,8 @@ public struct CleanupService: Sendable {
 
         if !privileged.isEmpty {
             await Self.removeWithPrivileges(
-                privileged, log: keepReceipt ? log : nil, outcome: &outcome
+                privileged, freedByID: privilegedFreed,
+                log: keepReceipt ? log : nil, outcome: &outcome
             )
         }
 
@@ -287,9 +340,12 @@ public struct CleanupService: Sendable {
             }
 
             let measured = try await measurer.measure(item.url).allocatedBytes
+            let freed = try? await privateMeasurer.measure([item.url])
             do {
                 let landed = try Self.discard(item.url, disposition: .trashed)
-                outcome.freedBytes += measured
+                outcome.removedBytes += measured
+                if let freed { outcome.freedBytes += freed.privateBytes }
+                else { outcome.unreportedFreedCount += 1 }
                 outcome.removedCount += 1
                 outcome.trashedCount += 1
                 if keepReceipt {
@@ -318,7 +374,8 @@ public struct CleanupService: Sendable {
                 privilegedEntry.allocatedBytes = measured
                 let removedBefore = outcome.removedCount
                 await Self.removeWithPrivileges(
-                    [privilegedEntry], log: keepReceipt ? log : nil, outcome: &outcome
+                    [privilegedEntry], freedByID: [privilegedEntry.id: freed?.privateBytes],
+                    log: keepReceipt ? log : nil, outcome: &outcome
                 )
                 if outcome.removedCount == removedBefore {
                     recordFailure(item)
@@ -429,6 +486,7 @@ public struct CleanupService: Sendable {
     /// same basename cannot be handed the same path.
     private static func removeWithPrivileges(
         _ targets: [FileEntry],
+        freedByID: [FileEntry.ID: Int64?],
         log: RemovalLog?,
         outcome: inout CleanupOutcome
     ) async {
@@ -496,7 +554,10 @@ public struct CleanupService: Sendable {
                 records.append(Self.failureRecord(for: target))
                 continue
             }
-            outcome.freedBytes += target.allocatedBytes
+            let freed = freedByID[target.id] ?? nil
+            outcome.removedBytes += target.allocatedBytes
+            if let freed { outcome.freedBytes += freed }
+            else { outcome.unreportedFreedCount += 1 }
             outcome.removedCount += 1
             outcome.trashedCount += 1
             let destination = destinations[index]
@@ -506,7 +567,8 @@ public struct CleanupService: Sendable {
                 bytes: target.allocatedBytes,
                 disposition: .trashed,
                 trashedPath: destination,
-                trashedIdentity: FileIdentity.of(URL(fileURLWithPath: destination))
+                trashedIdentity: FileIdentity.of(URL(fileURLWithPath: destination)),
+                freedBytes: freed
             ))
         }
         // Record each result. A failed row never receives a Trash destination.

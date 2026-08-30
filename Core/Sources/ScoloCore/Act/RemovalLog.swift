@@ -36,6 +36,13 @@ public struct RemovalRecord: Sendable, Equatable {
     /// restore a stranger to this record's folder. `nil` on records written before
     /// this field existed, which fall back to the timestamp window.
     public var trashedIdentity: String?
+    /// What the disk actually gave back, read in the instant before the item was
+    /// removed. Differs from `bytes` — which is what the item *occupied* — whenever
+    /// APFS was sharing its blocks with another file: removing one of two clones
+    /// records its full size here as zero, because zero is what the volume gained.
+    /// `nil` on records written before this field existed, and on items whose
+    /// filesystem would not report it.
+    public var freedBytes: Int64?
 
     public init(
         timestamp: Date,
@@ -43,7 +50,8 @@ public struct RemovalRecord: Sendable, Equatable {
         bytes: Int64,
         disposition: RemovalDisposition,
         trashedPath: String? = nil,
-        trashedIdentity: String? = nil
+        trashedIdentity: String? = nil,
+        freedBytes: Int64? = nil
     ) {
         self.timestamp = timestamp
         self.originalPath = originalPath
@@ -51,6 +59,7 @@ public struct RemovalRecord: Sendable, Equatable {
         self.disposition = disposition
         self.trashedPath = trashedPath
         self.trashedIdentity = trashedIdentity
+        self.freedBytes = freedBytes
     }
 }
 
@@ -191,16 +200,22 @@ public struct RemovalLog: Sendable {
 
     private static let timestampStyle = Date.ISO8601FormatStyle()
 
-    /// `<timestamp> "<original>" <bytes> <disposition> ["<trash path>" [dev:ino]]`
-    /// — the trailing fields are optional, so older lines still parse.
+    /// `<timestamp> "<original>" <bytes> <disposition> ["<trash path>" [dev:ino] [freed=<n>]]`
+    /// — everything after the disposition is optional, so older lines still parse.
+    ///
+    /// A permanent deletion has no Trash path but can still carry a freed figure,
+    /// so it writes an empty quoted field to hold the position. The tail after that
+    /// field is a set of tokens rather than fixed columns: `dev:ino` bare, for the
+    /// records already on disk that end that way, and `freed=` prefixed. Order is
+    /// not relied on when reading.
     static func line(for record: RemovalRecord) -> String {
         let timestamp = record.timestamp.formatted(timestampStyle)
         let path = quote(record.originalPath)
         var line = "\(timestamp) \(path) \(record.bytes) \(record.disposition.rawValue)"
-        if let trashed = record.trashedPath {
-            line += " " + quote(trashed)
-            if let identity = record.trashedIdentity { line += " " + identity }
-        }
+        guard record.trashedPath != nil || record.freedBytes != nil else { return line }
+        line += " " + quote(record.trashedPath ?? "")
+        if let identity = record.trashedIdentity { line += " " + identity }
+        if let freed = record.freedBytes { line += " freed=\(freed)" }
         return line
     }
 
@@ -218,10 +233,18 @@ public struct RemovalLog: Sendable {
         else { return nil }
         var trashedPath: String?
         var trashedIdentity: String?
+        var freedBytes: Int64?
         if fields.count == 3, let (trashed, rest) = unquote(fields[2]) {
-            trashedPath = trashed
-            let tail = rest.trimmingCharacters(in: .whitespaces)
-            if !tail.isEmpty { trashedIdentity = tail }
+            // An empty quoted field is a placeholder written by a permanent
+            // deletion that still had a freed figure to record; it names no path.
+            trashedPath = trashed.isEmpty ? nil : trashed
+            for token in rest.split(separator: " ", omittingEmptySubsequences: true) {
+                if token.hasPrefix("freed=") {
+                    freedBytes = Int64(token.dropFirst("freed=".count))
+                } else if trashedIdentity == nil {
+                    trashedIdentity = String(token)
+                }
+            }
         }
 
         return RemovalRecord(
@@ -230,7 +253,8 @@ public struct RemovalLog: Sendable {
             bytes: bytes,
             disposition: disposition,
             trashedPath: trashedPath,
-            trashedIdentity: trashedIdentity
+            trashedIdentity: trashedIdentity,
+            freedBytes: freedBytes
         )
     }
 

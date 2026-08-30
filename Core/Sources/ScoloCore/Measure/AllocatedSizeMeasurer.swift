@@ -61,17 +61,22 @@ public struct SizeMeasurement: Sendable, Equatable {
 ///    reflects what the file actually occupies, including compression, which `du`
 ///    approximates.
 ///
-/// ### Known limitation: APFS clones
+/// ### By design: this measures occupancy, not reclaimable space
 ///
-/// Block sharing between *distinct files* (APFS clones, as made by `cp -c` or
-/// Finder duplication) is invisible to every per-file API, this one included. Two
-/// 16 MB clones sharing all their blocks report 32 MB, though freeing both recovers
-/// only 16 MB. Hard links are different — several directory entries for one inode —
-/// and those are deduplicated below.
+/// Block sharing between *distinct files* (APFS clones, as made by `cp -c` or by
+/// Finder copying within one volume) is not reflected here. Two 16 MB clones
+/// sharing all their blocks report 32 MB, though freeing both recovers only 16 MB.
+/// Hard links are different — several directory entries for one inode — and those
+/// are deduplicated below.
 ///
-/// This is not a defect to fix but a property to disclose: a reported total is an
+/// This is a property to disclose, not a defect to fix here: a reported total is an
 /// upper bound on what deleting would reclaim. It is precisely why a real cleanup of
 /// a pnpm content-addressable store frees less than the sum of its entries.
+///
+/// The filesystem *will* answer the other question — ``PrivateSizeMeasurer`` reads
+/// `ATTR_CMNEXT_PRIVATESIZE` for it — but the kernel must consult each file's
+/// extent map, which measured 62 % slower over `~/Library`. That price is paid
+/// where the app promises to free space, not on every whole-disk walk.
 ///
 /// Symlinks are not followed by default: the old scanner could double-count linked
 /// build outputs. Enumeration also stays on the starting volume, so a mounted
@@ -793,7 +798,9 @@ private final class MeasurementWorkerPool: @unchecked Sendable {
 /// Bridges structured-concurrency cancellation into the detached, blocking walk.
 /// `Task.detached` does not inherit cancellation, so without this the scan's stop
 /// button would do nothing.
-private final class CancellationFlag: @unchecked Sendable {
+/// Shared with `PrivateSizeMeasurer`: both walks hand a detached task a flag the
+/// cancellation handler can raise from outside it.
+final class CancellationFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var flag = false
 

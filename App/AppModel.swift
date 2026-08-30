@@ -405,8 +405,14 @@ final class AppModel {
     private static func storageExplorerRemovalStatus(_ outcome: CleanupOutcome) -> String {
         var message = "Moved \(outcome.removedCount) "
             + "\(outcome.removedCount == 1 ? "item" : "items") to the Trash."
-        if outcome.freedBytes > 0 {
-            message += " The items used \(ByteFormatting.string(outcome.freedBytes))."
+        if outcome.removedBytes > 0 {
+            message += " The items used \(ByteFormatting.string(outcome.removedBytes))."
+            // "Used" is exactly right for occupied bytes; what the disk gained is a
+            // separate claim, and only worth making when it is a smaller one.
+            if outcome.unreportedFreedCount == 0, outcome.sharedBytes > 0 {
+                message += " \(ByteFormatting.string(outcome.freedBytes)) was freed — "
+                    + "other copies still hold the rest."
+            }
         }
         if !outcome.failed.isEmpty {
             message += " \(outcome.failed.count) "
@@ -847,7 +853,7 @@ final class AppModel {
         } else {
             let survivorCount = outcome.failed.count
             statusMessage = "Uninstalled \(request.plan.applicationName) and moved "
-                + "\(ByteFormatting.string(outcome.freedBytes)) to the Trash."
+                + "\(ByteFormatting.string(outcome.removedBytes)) to the Trash."
             if survivorCount > 0 {
                 let noun = survivorCount == 1 ? "item" : "items"
                 statusMessage += " \(survivorCount) related \(noun) could not be removed."
@@ -877,6 +883,15 @@ final class AppModel {
         let applicationLeftoverPlan: OrphanedAppLeftoverPlan?
         let orphanedApplicationBundleIdentifiers: Set<String>
         let orphanedApplicationItemPaths: Set<String>
+
+        /// What this plan would actually free, filled in after the sheet is already
+        /// on screen. The plan itself is fixed at capture; this is a reading of the
+        /// same set taken a moment later, and it changes nothing the confirmation
+        /// executes — only what it tells the user to expect.
+        ///
+        /// `nil` while the measurement is still running, or when the filesystem
+        /// would not answer, and the sheet then says nothing rather than guessing.
+        var freed: PrivateSizeMeasurement?
 
         var orphanedApplicationItems: [AppUninstallPlan.Item] {
             applicationLeftoverPlan?.groups.filter {
@@ -955,13 +970,41 @@ final class AppModel {
         // user had to unlock explicitly.
         if settings?.confirmBeforeCleanup ?? true || plan.protectedDataCount > 0 {
             activeSheet = .cleanUp
+            measureCleanUpSaving(for: plan)
         } else {
             Task { await performCleanUp() }
         }
     }
 
+    /// Reads how much of the pending plan the disk would actually give back.
+    ///
+    /// Runs *after* the sheet is presented, never before: the walk costs one
+    /// `getattrlist` per file, and a plan holding a DerivedData tree would keep the
+    /// user staring at a button that had not appeared yet. The sheet opens on the
+    /// figures it always had and gains this one when it arrives.
+    private func measureCleanUpSaving(for plan: CleanupPlan) {
+        let urls = plan.entries.flatMap {
+            CleanupService.removalTargets(for: $0, removeProtectedAppData: false).map(\.url)
+        } + plan.orphanedApplicationItems.map(\.url)
+        guard !urls.isEmpty else { return }
+
+        cleanUpSavingTask?.cancel()
+        cleanUpSavingTask = Task { [weak self] in
+            let measurement = try? await PrivateSizeMeasurer().measure(urls)
+            guard !Task.isCancelled, let measurement else { return }
+            // The plan may have been confirmed or cancelled while this ran. Only a
+            // sheet still showing the same plan may be updated.
+            guard let self, self.activeSheet == .cleanUp else { return }
+            self.pendingCleanUp?.freed = measurement
+        }
+    }
+
+    private var cleanUpSavingTask: Task<Void, Never>?
+
     /// Dismissing the sheet abandons the plan; nothing may run afterwards.
     func cancelCleanUp() {
+        cleanUpSavingTask?.cancel()
+        cleanUpSavingTask = nil
         pendingCleanUp = nil
         activeSheet = nil
     }
@@ -1075,18 +1118,37 @@ final class AppModel {
     /// invite an undo, deleted bytes must never pretend to.
     private static func cleanUpStatus(_ outcome: CleanupOutcome, keptReceipt: Bool) -> String {
         var message: String
+        let size = ByteFormatting.string(outcome.removedBytes)
         if outcome.removedCount == 0, !outcome.failed.isEmpty {
             message = "No items were removed."
         } else if outcome.deletedCount == 0 {
-            message = "Moved \(ByteFormatting.string(outcome.freedBytes)) to the Trash."
+            message = "Moved \(size) to the Trash."
             if outcome.trashedCount > 0 && keptReceipt {
                 message += " Put Back is available while those items remain in the Trash."
             }
         } else if outcome.trashedCount == 0 {
-            message = "Deleted \(ByteFormatting.string(outcome.freedBytes)) permanently."
+            message = "Deleted \(size) permanently."
         } else {
-            message = "Removed \(ByteFormatting.string(outcome.freedBytes)) — "
+            message = "Removed \(size) — "
                 + "\(outcome.trashedCount) to the Trash, \(outcome.deletedCount) deleted permanently."
+        }
+        // The size above is what the items occupied; this is what the disk gets
+        // back. They differ only when APFS was sharing those blocks with files that
+        // are still here, and saying nothing would leave the user expecting space
+        // that is not coming. Withheld when part of the run went unmeasured,
+        // because a partial figure presented as the total is its own small lie.
+        //
+        // Worded by disposition: deleted bytes are gone now, trashed bytes are not
+        // gone at all until the Trash is emptied, so neither may borrow the other's
+        // tense.
+        if outcome.removedCount > 0, outcome.unreportedFreedCount == 0,
+           outcome.sharedBytes > 0 {
+            let freed = ByteFormatting.string(outcome.freedBytes)
+            message += outcome.trashedCount == 0
+                ? " Of that, \(freed) was actually freed — other copies of the same "
+                    + "files still hold the rest."
+                : " Of that, \(freed) will come back when you empty the Trash — other "
+                    + "copies of the same files still hold the rest."
         }
         if !outcome.failed.isEmpty {
             // Silent partial failure is how a cleaner loses trust.

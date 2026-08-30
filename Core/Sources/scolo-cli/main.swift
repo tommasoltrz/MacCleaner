@@ -44,10 +44,16 @@ struct CLI {
                     throw CLIError.usage("measure needs a path")
                 }
                 try await measure(path: arguments[1])
+            case "reclaim":
+                guard arguments.count > 1 else {
+                    throw CLIError.usage("reclaim needs a path")
+                }
+                try await reclaim(path: arguments[1])
             default:
                 print("scolo-cli — ScoloCore engine harness")
                 print("commands: volume | snapshots | breakdown | snapshot"
-                      + " | growth [previous|7d|cleanup] | scan | apps | measure <path>")
+                      + " | growth [previous|7d|cleanup] | scan | apps | measure <path>"
+                      + " | reclaim <path>")
             }
         } catch {
             FileHandle.standardError.write(Data("error: \(error)\n".utf8))
@@ -304,6 +310,32 @@ struct CLI {
             print("  [\(tag)] \(snapshot.name)")
             print("           uuid \(snapshot.uuid)  volume \(snapshot.volumeDisk)")
         }
+    }
+
+    /// What a path occupies beside what removing it would actually give back.
+    ///
+    /// The two figures part company on APFS whenever blocks are shared: a folder
+    /// copied within one volume is a clone of the original, and both copies then
+    /// report their full size while the disk holds one. Kept in the harness so the
+    /// claim can be checked against a real path without opening the app.
+    static func reclaim(path: String) async throws {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        let started = Date()
+        let measurement = try await PrivateSizeMeasurer().measure([url])
+        let elapsed = Date().timeIntervalSince(started)
+
+        print(url.path)
+        guard let measurement else {
+            print("  this filesystem does not report block sharing")
+            return
+        }
+        print("  occupies    \(ByteFormatting.string(measurement.allocatedBytes))")
+        print("  frees       \(ByteFormatting.string(measurement.privateBytes))"
+              + (measurement.containsSharedGroups ? "  (at least — holds whole clone families)" : ""))
+        print("  shared      \(ByteFormatting.string(measurement.sharedBytes))")
+        print("  files       \(measurement.fileCount)")
+        print("  unreported  \(measurement.unreportedCount)")
+        print("  elapsed     \(String(format: "%.2fs", elapsed))")
     }
 
     static func measure(path: String) async throws {

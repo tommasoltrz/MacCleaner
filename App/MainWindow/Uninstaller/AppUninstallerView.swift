@@ -407,7 +407,7 @@ struct AppUninstallerView: View {
             Text(applicationFailed ? "Could not uninstall \(applicationName)" : "\(applicationName) uninstalled")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(Token.Text.primary)
-            Text("Moved \(ByteFormatting.string(outcome.freedBytes)) to the Trash.")
+            Text("Moved \(ByteFormatting.string(outcome.removedBytes)) to the Trash.")
                 .font(.mcBody)
                 .foregroundStyle(Token.Text.secondary)
 

@@ -128,8 +128,15 @@ struct CleanupHistoryView: View {
         var parts = [
             "\(summary.removedCount) \(summary.removedCount == 1 ? "item" : "items") removed",
             "Removed size \(ByteFormatting.string(summary.removedBytes))",
-            "\(summary.availableInTrashCount) available in Trash",
         ]
+        // Only when the two figures actually part company. They agree for every
+        // ordinary removal, and repeating one number twice would read as a defect;
+        // they diverge when APFS was sharing the removed files' blocks with copies
+        // that are still on the disk, and then the second number is the true one.
+        if summary.freedBytes != summary.removedBytes {
+            parts.append("Freed \(ByteFormatting.string(summary.freedBytes))")
+        }
+        parts.append("\(summary.availableInTrashCount) available in Trash")
         if summary.permanentlyRemovedCount > 0 {
             parts.append("\(summary.permanentlyRemovedCount) permanent")
         }
