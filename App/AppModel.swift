@@ -570,48 +570,19 @@ final class AppModel {
     /// category (an `.xcarchive`) belongs to "Needs review", whatever badge its
     /// category wears. Deduplicated by path, because an entry two categories both
     /// claim is one thing to remove, not two.
+    /// The rows behind a Dashboard tile.
+    ///
+    /// The split itself is `ScanCategoryResult.tileRows`, in Core beside the two
+    /// figures the tiles print, so the number and the list it opens cannot come apart.
+    /// This adds only what is view-level: one appearance per row across categories,
+    /// and the order the table draws.
     func tileEntries(safeToRemove wantSafe: Bool) -> [FileEntry] {
         guard let results = scanResults else { return [] }
         var seen: Set<FileEntry.ID> = []
         return results.categories
-            .flatMap { category in
-                category.entries.flatMap { split(entry: $0, in: category, wantSafe: wantSafe) }
-            }
+            .flatMap { $0.tileRows(safeToRemove: wantSafe) }
             .filter { seen.insert($0.id).inserted }
             .sorted { $0.displayBytes > $1.displayBytes }
-    }
-
-    /// One scanner row, sorted into the tile that counts it — and sometimes into
-    /// both, because a row that is not safe can still carry children that are.
-    ///
-    /// An application is the case this exists for. Chrome is not safe to remove and
-    /// its caches are, so the caches are lifted out as rows of their own for "Safe to
-    /// remove" and the row that appears under "Needs review" is Chrome *without*
-    /// them. Trimming rather than listing Chrome whole is what keeps the two lists
-    /// from claiming the same bytes: each list's header sums the rows it shows, so a
-    /// row left intact in both would be counted twice, which is the arithmetic the
-    /// storage breakdown already had to be rescued from once.
-    ///
-    /// The Scanner is untouched by this. There, Chrome keeps every child it has —
-    /// that view is about one application, not about a total.
-    private func split(
-        entry: FileEntry, in category: ScanCategoryResult, wantSafe: Bool
-    ) -> [FileEntry] {
-        let entryIsSafe = category.categoryID == .applicationLeftovers
-            || (category.categoryID.isSafe && entry.isRegenerable)
-        if entryIsSafe { return wantSafe ? [entry] : [] }
-
-        let isSafeChild: (FileEntry) -> Bool = { $0.isRegenerable && !$0.isRemovalLocked }
-        let safeChildren = entry.children.filter(isSafeChild)
-        if wantSafe { return safeChildren }
-        guard !safeChildren.isEmpty else { return [entry] }
-
-        var remainder = entry
-        remainder.children = entry.children.filter { !isSafeChild($0) }
-        // A locked row whose only removable content was those children is now worth
-        // nothing here. It counted zero towards the tile, so it does not belong in
-        // the list the tile opens.
-        return remainder.displayBytes > 0 ? [remainder] : []
     }
 
     /// Rows in the current drill-down whose checkbox actually works. A locked entry
