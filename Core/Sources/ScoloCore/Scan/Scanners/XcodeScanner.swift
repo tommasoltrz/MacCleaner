@@ -29,6 +29,13 @@ public struct XcodeScanner: CategoryScanner {
     /// and a project-local `build` folder is invisible to the roots above.
     private let projectRoots: [URL]
 
+    /// The machine-wide simulator directory, whose runtimes are reported as a
+    /// manual-removal row. Injectable for the same reason `developerRoot` is: it is
+    /// an absolute system path, so a scanner built entirely out of fixtures still
+    /// reached the real one, and every assertion about a fixture's totals was really
+    /// an assertion about whether this Mac had an iOS runtime installed.
+    private let systemSimulatorRoot: URL
+
     public static let defaultProjectRoots: [URL] = {
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         return ["Documents", "Desktop", "Downloads", "Developer", "Projects"].map {
@@ -39,10 +46,12 @@ public struct XcodeScanner: CategoryScanner {
     public init(
         developerRoot: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appending(path: "Library/Developer", directoryHint: .isDirectory),
-        projectRoots: [URL] = XcodeScanner.defaultProjectRoots
+        projectRoots: [URL] = XcodeScanner.defaultProjectRoots,
+        systemSimulatorRoot: URL = URL(fileURLWithPath: "/Library/Developer/CoreSimulator")
     ) {
         self.developerRoot = developerRoot
         self.projectRoots = projectRoots
+        self.systemSimulatorRoot = systemSimulatorRoot
     }
 
     // MARK: - Roots
@@ -349,7 +358,9 @@ public struct XcodeScanner: CategoryScanner {
     /// and dyld caches beside the images belong to no single runtime, and a made-up
     /// per-runtime split would be a guess dressed as a measurement.
     private func simulatorRuntimeEntry(context: ScanContext) async throws -> FileEntry? {
-        let root = URL(fileURLWithPath: "/Library/Developer/CoreSimulator")
+        let root = systemSimulatorRoot
+        // Before `xcrun`: a machine without the directory has no runtimes to
+        // describe, and a fixture pointed elsewhere should not pay for a subprocess.
         guard FileManager.default.fileExists(atPath: root.path) else { return nil }
         guard !context.isWithinExclusion(root) else { return nil }
 
