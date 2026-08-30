@@ -38,9 +38,18 @@ struct DashboardView: View {
                     measuringPlaceholder
                 }
 
-                // Directly under the capacity card, because it answers the question
-                // that card provokes. It carries no measuring state: the report is
-                // dated history, and it stays on screen while the next walk runs.
+                StatTiles(
+                    results: model.scanResults,
+                    lastScanAt: model.lastScanFinishedAt,
+                    onSafeTap: { model.view = .safeToRemove },
+                    onReviewTap: { model.view = .needsReview },
+                    onScan: { model.startScan() }
+                )
+
+                // Below the tiles: the capacity card and the tiles are what the
+                // disk is now, and this is what it did since a date the user picks.
+                // It carries no measuring state — the report is dated history, so it
+                // stays on screen while the next walk runs.
                 if let growth = model.growth {
                     GrowthCard(
                         presentation: GrowthCard.Presentation(growth),
@@ -50,17 +59,9 @@ struct DashboardView: View {
                     )
                 }
 
-                StatTiles(
-                    results: model.scanResults,
-                    lastScanAt: model.lastScanFinishedAt,
-                    onSafeTap: { model.view = .safeToRemove },
-                    onReviewTap: { model.view = .needsReview },
-                    onScan: { model.startScan() }
-                )
-
-                // Between the tiles and the snapshots row, matching where the
-                // account sits in the user's mental model: after "what is on this
-                // disk", before the system-level footnotes.
+                // After everything about this disk and before the system-level
+                // footnotes, matching where the account sits in the user's mental
+                // model.
                 if let iCloud = model.iCloudStorage {
                     ICloudCard(storage: iCloud)
                         // Re-measures when the plan setting changes, so correcting a
