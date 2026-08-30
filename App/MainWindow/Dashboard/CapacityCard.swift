@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The Dashboard's capacity card: how full the volume is, and what is filling it.
 ///
@@ -35,7 +35,7 @@ struct CapacityCard: View {
     }
 
     /// Figures directly. `VolumeInfo` has no public initializer, so a preview outside
-    /// `MacCleanerCore` has no other way in.
+    /// `ScoloCore` has no other way in.
     init(
         eyebrow: String,
         capacityBytes: Int64,
@@ -257,7 +257,7 @@ private struct LegendRow: View {
             sentences.append(
                 "This total includes APFS metadata and files that only macOS can read."
             )
-            sentences.append("MacCleaner does not mark this space as removable.")
+            sentences.append("Scolo does not mark this space as removable.")
             return sentences.joined(separator: " ")
         case .otherFilesInHome:
             return "This group contains home folder items that no named category "
@@ -265,7 +265,7 @@ private struct LegendRow: View {
                 + "and loose files. Use Finder to review these items."
         case .photos:
             return "This category measures files in ~/Pictures, including Photos and "
-                + "Photo Booth libraries. MacCleaner does not offer these libraries "
+                + "Photo Booth libraries. Scolo does not offer these libraries "
                 + "for removal. Images elsewhere count in their folder category."
         case .other:
             return "This group contains measured categories that each use less than "

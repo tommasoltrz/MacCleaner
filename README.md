@@ -1,18 +1,18 @@
-# MacCleaner
+# Scolo
 
 A native macOS disk-cleanup utility, rewritten in Swift from an Electron predecessor.
 
 ## Build and run
 
 ```sh
-xcodegen generate                 # regenerates MacCleaner.xcodeproj from project.yml
-open MacCleaner.xcodeproj         # ⌘R to run
+xcodegen generate                 # regenerates Scolo.xcodeproj from project.yml
+open Scolo.xcodeproj         # ⌘R to run
 cd Core && swift test             # no Xcode needed
-swift run maccleaner-cli scan     # exercise the engine headlessly
+swift run scolo-cli scan     # exercise the engine headlessly
 vale README.md AGENTS.md WRITING_STYLE.md  # check project writing
 ```
 
-`project.yml` generates `MacCleaner.xcodeproj`, and Git ignores the generated
+`project.yml` generates `Scolo.xcodeproj`, and Git ignores the generated
 project. Change targets or build settings only in `project.yml`. XcodeGen includes
 new source files from `App/` automatically.
 
@@ -26,7 +26,7 @@ Core/                    Swift package — the scanning engine, testable without
   Act/                   cleanup, app uninstall, leftovers, trash, history
   Duplicates/            verified file duplicate matching and removal
   StorageExplorer/       one-level storage accounting and reviewed removal
-  maccleaner-cli/        headless harness
+  scolo-cli/        headless harness
 App/                     SwiftUI app — a thin shell over Core
   DesignSystem/          tokens, type ramp, shared components
   MainWindow/            sidebar, toolbar, seven primary views, sheets
@@ -84,7 +84,7 @@ seven tests provide more protection.
 
 ## Deliberate limitations
 
-**Put Back only restores what MacCleaner trashed.** macOS exposes no API for the
+**Put Back only restores what Scolo trashed.** macOS exposes no API for the
 original location of a trashed item. Finder stores this location privately. Items
 from Finder have a disabled button and an explanatory tooltip.
 
@@ -98,11 +98,11 @@ alone, it made every row show "Never opened". The design treats this label as th
 strongest safe-to-delete signal. The app now falls back through modification dates.
 It uses `nil` only when the date is unknown.
 
-**File duplicate scans use selected folders.** MacCleaner narrows candidates by size,
+**File duplicate scans use selected folders.** Scolo narrows candidates by size,
 sampled SHA-256, and full SHA-256. It then compares the bytes before it reports a
 match. The app skips hard links, hidden files, exclusions, and cloud-only files. It
 does not compare documents that macOS saves as packages, such as Pages and Keynote
-files. MacCleaner does not select any file automatically. Each set keeps
+files. Scolo does not select any file automatically. Each set keeps
 one copy, and selected copies move to the Trash.
 
 APFS clones can share storage. Therefore, the available space for duplicate files
@@ -113,18 +113,18 @@ in each group and requires a review before deletion.
 
 **Storage Explorer measures one folder level at a time.** Each row includes all
 allocated bytes below that item. Hard links count once across sibling rows.
-MacCleaner protects system locations, applications, managed media libraries, volumes,
+Scolo protects system locations, applications, managed media libraries, volumes,
 exclusions, cloud-only files, and items with unreadable contents. Alias targets do
 not count towards a row. A mounted volume is separate from its parent. Reviewed
-unlocked items move to the Trash. MacCleaner refreshes each selected size and checks
+unlocked items move to the Trash. Scolo refreshes each selected size and checks
 each file identity before it shows the removal confirmation. Use List for exact
 rows. Use Map to compare direct-child sizes visually.
 
-**Automatic scanning is process-resident.** MacCleaner evaluates daily and weekly
+**Automatic scanning is process-resident.** Scolo evaluates daily and weekly
 schedules while it runs. This includes menu-bar-only login launches. No separate
 launch daemon wakes the application after a full quit.
 
-**Low-space notifications are process-resident too.** MacCleaner checks the live
+**Low-space notifications are process-resident too.** Scolo checks the live
 volume total on launch, after its own storage operations, and every five minutes
 while running. It warns on a transition below the threshold in General settings,
 persists that state across launches, and limits repeated crossings to one per day.
@@ -133,14 +133,14 @@ persists that state across launches, and limits repeated crossings to one per da
 attributes related files from the selected app's verified identity.
 
 **Finder only starts an uninstall review.** Select one application in Finder. Then
-choose Services › Review Uninstall with MacCleaner. MacCleaner opens the existing
+choose Services › Review Uninstall with Scolo. Scolo opens the existing
 App Uninstaller review. The Finder action never removes files.
 
 **Application Leftovers uses strict ownership rules.** The Scanner finds exact
 bundle-identifier paths and roots from curated app rules. It ignores loose name
 matches and shared containers. It keeps exclusions, keychains, ambiguous paths,
 and files for installed applications protected. Safe to Remove includes each
-verified application group. MacCleaner checks the owner and the file identity
+verified application group. Scolo checks the owner and the file identity
 again before removal.
 
 **The app does not include "Storage Report…".** The design specified only its
@@ -154,8 +154,8 @@ so TCC grants survive rebuilds. Do not validate the app with
 `CODE_SIGNING_ALLOWED=NO`: that replaces the Debug product with an ad-hoc identity
 and macOS correctly asks for access again. The app target rejects unsigned builds.
 
-MacCleaner stores the last breakdown at
-`~/Library/Application Support/MacCleaner/breakdown-cache.json`. This data seeds the
+Scolo stores the last breakdown at
+`~/Library/Application Support/Scolo/breakdown-cache.json`. This data seeds the
 initial layout. The Dashboard refreshes it at launch. A scan also refreshes it with
 the category results.
 

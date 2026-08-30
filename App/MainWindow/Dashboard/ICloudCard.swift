@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import MacCleanerCore
+import ScoloCore
 
 /// The Dashboard's iCloud row.
 ///

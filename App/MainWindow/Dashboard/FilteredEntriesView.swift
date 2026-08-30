@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The list behind a Dashboard stat tile: only the entries the tile counted.
 ///

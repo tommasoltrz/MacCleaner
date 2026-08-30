@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// Preferences → Categories: which categories the Scanner is allowed to measure.
 struct CategoriesPane: View {

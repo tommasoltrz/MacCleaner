@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The menu bar item: a live free-space readout and a one-click purge, as the
 /// design's Preferences › General describes it.
@@ -41,7 +41,7 @@ struct MenuBarView: View {
             }
             .disabled(model.isScanning)
 
-            Button("Open MacCleaner") {
+            Button("Open Scolo") {
                 // Promote before the window exists so it opens already in the Dock
                 // and takes focus on the first try; the delegate would otherwise do
                 // it a beat later, after the window has become main.
@@ -52,7 +52,7 @@ struct MenuBarView: View {
 
             Divider()
 
-            Button("Quit MacCleaner") { NSApp.terminate(nil) }
+            Button("Quit Scolo") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }
         .buttonStyle(.plain)

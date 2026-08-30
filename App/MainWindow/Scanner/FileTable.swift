@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import MacCleanerCore
+import ScoloCore
 
 /// The expanded body of a Scanner category: a recessed well holding a column header
 /// and one row per removable thing.
@@ -90,7 +90,7 @@ struct FileTable: View {
                 message: Text(
                     "This folder can contain profiles, logins, history, and settings. "
                     + "Removing it may sign you out or reset the app. Quit the app first. "
-                    + "MacCleaner will always move this protected data to the Trash."
+                    + "Scolo will always move this protected data to the Trash."
                 ),
                 primaryButton: .destructive(Text("Unlock & Select")) {
                     userDataRemovalOverrides.insert(entry.id)
@@ -681,7 +681,7 @@ struct ProtectedSelectionControl: View {
                 + "You can remove its listed support files separately."
         }
         if entry.manualRemoval != nil {
-            return "MacCleaner cannot remove this item directly. "
+            return "Scolo cannot remove this item directly. "
                 + "Use the terminal badge to review the command."
         }
         return help

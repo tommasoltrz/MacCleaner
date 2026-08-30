@@ -102,7 +102,7 @@ struct FinderUninstallRequestReceiver: View {
 }
 
 private struct MainWindowIdentityView: NSViewRepresentable {
-    static let identifier = NSUserInterfaceItemIdentifier("MacCleaner.mainWindow")
+    static let identifier = NSUserInterfaceItemIdentifier("Scolo.mainWindow")
 
     func makeNSView(context: Context) -> NSView {
         IdentityView()

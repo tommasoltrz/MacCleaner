@@ -21,25 +21,25 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSAppBundlesUsageDescription</key>
-	<string>MacCleaner needs permission to move applications that you select to the Trash.</string>
+	<string>Scolo needs permission to move applications that you select to the Trash.</string>
 	<key>NSAppDataUsageDescription</key>
-	<string>MacCleaner needs access to data from removed apps so it can move files that you select to the Trash.</string>
+	<string>Scolo needs access to data from removed apps so it can move files that you select to the Trash.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it.</string>
+	<string>Scolo reads your photo library to find duplicates. Nothing is deleted until you confirm it.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Review Uninstall with MacCleaner</string>
+				<string>Review Uninstall with Scolo</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>reviewUninstall</string>
 			<key>NSPortName</key>
-			<string>MacCleaner</string>
+			<string>Scolo</string>
 			<key>NSRequiredContext</key>
 			<dict>
 				<key>NSApplicationIdentifier</key>
@@ -52,7 +52,7 @@
 				<string>com.apple.application-bundle</string>
 			</array>
 			<key>NSServiceDescription</key>
-			<string>Open the selected application in MacCleaner for uninstall review.</string>
+			<string>Open the selected application in Scolo for uninstall review.</string>
 		</dict>
 	</array>
 </dict>

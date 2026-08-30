@@ -1,6 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import MacCleanerCore
+import ScoloCore
 
 /// Preferences → Exclusions: the paths and patterns every scan skips.
 struct ExclusionsPane: View {

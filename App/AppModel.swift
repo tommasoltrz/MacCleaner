@@ -3,7 +3,7 @@ import AppKit
 import CoreGraphics
 import IOKit.ps
 import Observation
-import MacCleanerCore
+import ScoloCore
 
 /// The design's `State Management` block, as one observable object.
 ///
@@ -292,7 +292,7 @@ final class AppModel {
                 return "\(ByteFormatting.string(bytes)). Each copy and its keeper are "
                     + "verified byte for byte before it goes, so large files take a moment."
             case .reviewingStorageItems:
-                return "MacCleaner is updating each size and checking each item before confirmation."
+                return "Scolo is updating each size and checking each item before confirmation."
             case .uninstalling(_, let applicationOnly, let waiting):
                 if waiting {
                     return "The application and its helpers are asked to quit. "
@@ -364,7 +364,7 @@ final class AppModel {
             storageExplorer.statusMessage = "Storage review stopped."
         } catch {
             activity = nil
-            storageExplorer.statusMessage = "MacCleaner could not verify the selected items."
+            storageExplorer.statusMessage = "Scolo could not verify the selected items."
         }
     }
 
@@ -1419,7 +1419,7 @@ final class AppModel {
     func chooseFileDuplicateFolders() {
         let panel = NSOpenPanel()
         panel.title = "Choose Folders to Scan"
-        panel.message = "MacCleaner compares the contents of files in these folders."
+        panel.message = "Scolo compares the contents of files in these folders."
         panel.prompt = "Scan"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

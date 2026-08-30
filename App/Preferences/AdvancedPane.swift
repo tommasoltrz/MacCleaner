@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// Preferences → Advanced: how removal behaves, the diagnostics, and the reset.
 struct AdvancedPane: View {
@@ -129,7 +129,7 @@ struct AdvancedPane: View {
 enum RemovalLog {
 
     static var url: URL {
-        URL.libraryDirectory.appending(path: "Logs/MacCleaner/removals.log")
+        URL.libraryDirectory.appending(path: "Logs/Scolo/removals.log")
     }
 
     /// Tilde-abbreviated, as the design prints it.

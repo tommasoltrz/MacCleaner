@@ -1,6 +1,6 @@
 import Foundation
 import UserNotifications
-import MacCleanerCore
+import ScoloCore
 
 /// Bridges the pure threshold policy to Notification Center.
 ///
@@ -9,7 +9,7 @@ import MacCleanerCore
 /// not ask again after a denial.
 @MainActor
 final class LowDiskNotificationService {
-    nonisolated static let notificationIdentifier = "com.tommasolaterza.MacCleaner.low-disk"
+    nonisolated static let notificationIdentifier = "com.tommasolaterza.Scolo.low-disk"
 
     private let center: UNUserNotificationCenter
     private let defaults: UserDefaults
