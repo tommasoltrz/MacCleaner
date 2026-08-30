@@ -40,7 +40,13 @@ public struct PackageManagerScanner: CategoryScanner {
 
     public let id: CategoryID = .packageManagers
 
-    public init() {}
+    /// The home whose cache roots are scanned. Injectable so the rules above can be
+    /// exercised against a fixture tree; production reads the real home.
+    private let home: URL
+
+    public init(home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)) {
+        self.home = home
+    }
 
     // MARK: - Cache roots
 
@@ -126,8 +132,6 @@ public struct PackageManagerScanner: CategoryScanner {
     // MARK: - Scan
 
     public func scan(context: ScanContext) async throws -> ScanCategoryResult {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-
         var entries: [FileEntry] = []
         var totalBytes: Int64 = 0
         var unreadableCount = 0
