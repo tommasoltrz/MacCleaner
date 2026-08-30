@@ -40,7 +40,10 @@ struct CleanupServiceTests {
 
         #expect(outcome.removedCount == 1)
         #expect(outcome.failed.isEmpty)
-        #expect(outcome.freedBytes >= Int64(3 * oneMB))
+        #expect(outcome.removedBytes >= Int64(3 * oneMB))
+        // Nothing shares this fixture's blocks, so what it occupied and what the
+        // disk got back are the same figure.
+        #expect(outcome.freedBytes == outcome.removedBytes)
 
         let trashed = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".Trash").appendingPathComponent(name)
@@ -50,7 +53,8 @@ struct CleanupServiceTests {
         let logged = try #require(log.recentEntries().first)
         #expect(logged.originalPath == fixture.path)
         #expect(logged.disposition == .trashed)
-        #expect(logged.bytes == outcome.freedBytes)
+        #expect(logged.bytes == outcome.removedBytes)
+        #expect(logged.freedBytes == outcome.freedBytes)
     }
 
     @Test("one failure does not abort the batch and is named in `failed`")
@@ -77,7 +81,7 @@ struct CleanupServiceTests {
         #expect(outcome.removedCount == 2)
         #expect(outcome.failed == [locked.path])
         #expect(outcome.permissionDenied == [locked.path])
-        #expect(outcome.freedBytes >= Int64(2 * oneMB))
+        #expect(outcome.removedBytes >= Int64(2 * oneMB))
         #expect(!FileManager.default.fileExists(atPath: first.path))
         // The entry after the failure was still removed.
         #expect(!FileManager.default.fileExists(atPath: last.path))
@@ -127,7 +131,7 @@ struct CleanupServiceTests {
         let outcome = try await CleanupService(log: log).remove(entries: [group], trashFirst: false)
 
         #expect(outcome.removedCount == 2)
-        #expect(outcome.freedBytes >= Int64(3 * oneMB))
+        #expect(outcome.removedBytes >= Int64(3 * oneMB))
         #expect(!FileManager.default.fileExists(atPath: parent.path))
         #expect(!FileManager.default.fileExists(atPath: dependency.path))
 

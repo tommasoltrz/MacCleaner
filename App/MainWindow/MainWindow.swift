@@ -100,7 +100,20 @@ struct MainWindow: View {
                         itemCount: model.pendingCleanUp?.itemCount ?? 0,
                         totalBytes: model.pendingCleanUp?.totalBytes ?? 0,
                         permanentCount: model.pendingCleanUp?.permanentCount ?? 0,
-                        protectedDataCount: model.pendingCleanUp?.protectedDataCount ?? 0
+                        protectedDataCount: model.pendingCleanUp?.protectedDataCount ?? 0,
+                        // Absent until the private-size reading lands, a moment
+                        // after the sheet appears.
+                        saving: model.pendingCleanUp?.freed.flatMap {
+                            // A reading with gaps in it is no reading: an item the
+                            // filesystem would not answer for could hold anything,
+                            // so the sheet says nothing rather than a partial total.
+                            $0.unreportedCount == 0
+                                ? ConfirmationSheet.CleanupSaving(
+                                    freedBytes: $0.privateBytes,
+                                    isMinimum: $0.containsSharedGroups
+                                )
+                                : nil
+                        }
                     ),
                     keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performCleanUp() } },

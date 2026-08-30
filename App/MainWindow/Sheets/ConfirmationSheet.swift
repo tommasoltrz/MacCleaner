@@ -17,7 +17,11 @@ struct ConfirmationSheet: View {
             itemCount: Int,
             totalBytes: Int64,
             permanentCount: Int,
-            protectedDataCount: Int
+            protectedDataCount: Int,
+            /// What the disk would actually give back, once measured. `nil` while
+            /// the reading is still running or when the filesystem declined it, and
+            /// the copy then makes no claim about freed space at all.
+            saving: CleanupSaving?
         )
         case emptyTrash(itemCount: Int, totalBytes: Int64)
         case uninstallApp(
@@ -33,6 +37,21 @@ struct ConfirmationSheet: View {
         /// says how many photographs go and stays silent about megabytes rather
         /// than inventing a figure.
         case deletePhotos(count: Int)
+    }
+
+    /// The gap between what a selection occupies and what removing it frees.
+    ///
+    /// APFS shares blocks between distinct files — a Finder copy within one volume
+    /// is a clone — so a selection can be large and cost the disk nothing. Measured
+    /// on this Mac: a 1.05 GB folder copied from Downloads into Documents reported
+    /// its full size in both places and zero private bytes in either.
+    struct CleanupSaving: Equatable {
+        /// Bytes no other file holds. A lower bound when ``isMinimum`` is set.
+        let freedBytes: Int64
+        /// The selection holds two or more members of one clone family, whose
+        /// shared blocks belong privately to none of them. Removing them together
+        /// frees more than the sum, so the figure is worded as a floor.
+        let isMinimum: Bool
     }
 
     let variant: Variant
@@ -91,7 +110,7 @@ struct ConfirmationSheet: View {
     /// own Recently Deleted, which this app has no hand in — and a wholly
     /// permanent clean-up has nothing a receipt could bring back.
     private var showsReceipt: Bool {
-        if case .cleanUp(let count, _, let permanent, _) = variant { return permanent < count }
+        if case .cleanUp(let count, _, let permanent, _, _) = variant { return permanent < count }
         if case .uninstallApp = variant { return true }
         if case .deleteDuplicateFiles = variant { return true }
         if case .removeStorageItems = variant { return true }
@@ -103,7 +122,7 @@ struct ConfirmationSheet: View {
     /// the destructive tint rather than the neutral one.
     private var isDestructive: Bool {
         switch variant {
-        case .cleanUp(_, _, let permanent, let protected): permanent > 0 || protected > 0
+        case .cleanUp(_, _, let permanent, let protected, _): permanent > 0 || protected > 0
         case .emptyTrash, .deleteDuplicateFiles, .removeStorageItems,
              .deletePhotos, .uninstallApp: true
         }
@@ -111,7 +130,7 @@ struct ConfirmationSheet: View {
 
     private var title: String {
         switch variant {
-        case .cleanUp(let count, _, let permanent, let protected):
+        case .cleanUp(let count, _, let permanent, let protected, _):
             let noun = count == 1 ? "item" : "items"
             if protected > 0 {
                 return "Remove \(count) \(noun), including protected data?"
@@ -143,7 +162,7 @@ struct ConfirmationSheet: View {
 
     private var message: String {
         switch variant {
-        case .cleanUp(let count, let bytes, let permanent, let protected):
+        case .cleanUp(let count, let bytes, let permanent, let protected, let saving):
             let warning: String
             if protected > 0 {
                 let noun = protected == 1 ? "item" : "items"
@@ -153,16 +172,17 @@ struct ConfirmationSheet: View {
             } else {
                 warning = ""
             }
+            let sharing = Self.sharedStorageClause(selected: bytes, saving: saving)
             if permanent == count {
                 return "\(ByteFormatting.string(bytes)) will be deleted immediately — "
                     + "not moved to the Trash — because \u{201C}Always move to Trash\u{201D} "
-                    + "is off in Advanced. This cannot be undone." + warning
+                    + "is off in Advanced. This cannot be undone." + sharing + warning
             }
             if permanent > 0 {
                 let noun = permanent == 1 ? "item is" : "items are"
                 return "\(ByteFormatting.string(bytes)) will be removed. "
                     + "\(permanent) \(noun) deleted immediately. The other selected "
-                    + "items move to the Trash." + warning
+                    + "items move to the Trash." + sharing + warning
             }
             // The receipt line states what the checkbox below it is currently set
             // to do: promising a removal log while it is unchecked was a lie the
@@ -172,6 +192,7 @@ struct ConfirmationSheet: View {
                 + (keepReceipt
                     ? "Every path is written to the removal log."
                     : "No receipt will be kept, so Put Back will not be available here.")
+                + sharing
                 + warning
         case .emptyTrash(_, let bytes):
             return "This erases \(ByteFormatting.string(bytes)) immediately. "
@@ -216,9 +237,43 @@ struct ConfirmationSheet: View {
         }
     }
 
+    /// The one sentence that separates what a selection *occupies* from what
+    /// removing it *frees*.
+    ///
+    /// Silent in the ordinary case — the two figures agree for anything not sharing
+    /// storage, and a sentence appearing on every clean-up would train the user to
+    /// skip it. Silent too while the measurement is still running, and when the
+    /// filesystem declined to answer: this sheet names a figure or says nothing.
+    ///
+    /// The threshold is a tenth of the selection and at least 16 MB, so a few
+    /// cloned files inside a large cache do not raise it, and a small selection
+    /// that frees nothing at all still does.
+    static func sharedStorageClause(selected: Int64, saving: CleanupSaving?) -> String {
+        guard let saving, selected > 0 else { return "" }
+        let shared = selected - saving.freedBytes
+        guard shared >= max(16 * 1_048_576, selected / 10) else { return "" }
+
+        let amount = ByteFormatting.string(saving.freedBytes)
+        // "Will get back", not "will be freed": these items may be going to the
+        // Trash, where they keep holding their blocks until it is emptied. Both
+        // sentences have to stay true under either disposition.
+        guard saving.isMinimum else {
+            return " Only about \(amount) of that is storage this Mac will get back — "
+                + "the rest is shared with other copies still on this disk."
+        }
+        // The selection holds two or more members of one clone family. Their shared
+        // blocks are private to neither, so the figure is a floor — and "only at
+        // least 0 B" is not a sentence. The selection total is the safe thing to
+        // rule out instead: when items share blocks with each other, their sizes
+        // add up to more storage than exists, so the whole of it can never return.
+        return " Some of these items share storage with each other and with copies "
+            + "still on this disk, so this Mac will get back at least \(amount) of "
+            + "that — never the whole \(ByteFormatting.string(selected))."
+    }
+
     private var confirmLabel: String {
         switch variant {
-        case .cleanUp(let count, _, let permanent, let protected):
+        case .cleanUp(let count, _, let permanent, let protected, _):
             if protected > 0 { return "Remove Anyway" }
             if permanent == count { return "Delete" }
             return permanent > 0 ? "Remove" : "Move to Trash"
@@ -248,7 +303,7 @@ struct ConfirmationSheet: View {
         if case .deleteDuplicateFiles = variant { return "doc.on.doc" }
         if case .removeStorageItems = variant { return "trash" }
         if case .uninstallApp = variant { return "trash.square" }
-        if case .cleanUp(_, _, _, let protected) = variant, protected > 0 {
+        if case .cleanUp(_, _, _, let protected, _) = variant, protected > 0 {
             return "exclamationmark.triangle"
         }
         return "trash"
@@ -282,7 +337,7 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 4, totalBytes: 4_512_000_000,
-            permanentCount: 0, protectedDataCount: 0
+            permanentCount: 0, protectedDataCount: 0, saving: nil
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
@@ -293,7 +348,7 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 4, totalBytes: 4_512_000_000,
-            permanentCount: 4, protectedDataCount: 0
+            permanentCount: 4, protectedDataCount: 0, saving: nil
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
@@ -304,7 +359,21 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 2, totalBytes: 2_400_000_000,
-            permanentCount: 0, protectedDataCount: 1
+            permanentCount: 0, protectedDataCount: 1, saving: nil
+        ),
+        keepReceipt: .constant(true),
+        onConfirm: {}, onCancel: {}
+    )
+}
+
+/// The user's real case: a 1.05 GB folder copied from Downloads into Documents,
+/// where both copies share every block and removing one frees nothing.
+#Preview("Clean up — shares storage") {
+    ConfirmationSheet(
+        variant: .cleanUp(
+            itemCount: 1, totalBytes: 1_108_205_568,
+            permanentCount: 0, protectedDataCount: 0,
+            saving: .init(freedBytes: 0, isMinimum: false)
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}

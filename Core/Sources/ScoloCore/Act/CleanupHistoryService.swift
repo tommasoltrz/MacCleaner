@@ -39,7 +39,13 @@ public struct CleanupHistoryItem: Sendable, Identifiable, Equatable {
 
 /// The figures and rows for Cleanup History.
 public struct CleanupHistorySummary: Sendable, Equatable {
+    /// What the removed items occupied. An upper bound on space recovered.
     public let removedBytes: Int64
+    /// What the disk actually gave back, from the freed figure each receipt
+    /// records. Receipts written before that field existed contribute their
+    /// occupied size instead, so old history reads exactly as it did — the two
+    /// totals then agree, which is the honest reading of "we did not measure it".
+    public let freedBytes: Int64
     public let removedCount: Int
     public let permanentlyRemovedCount: Int
     public let failedCount: Int
@@ -48,6 +54,7 @@ public struct CleanupHistorySummary: Sendable, Equatable {
 
     public init(
         removedBytes: Int64 = 0,
+        freedBytes: Int64 = 0,
         removedCount: Int = 0,
         permanentlyRemovedCount: Int = 0,
         failedCount: Int = 0,
@@ -55,6 +62,7 @@ public struct CleanupHistorySummary: Sendable, Equatable {
         items: [CleanupHistoryItem] = []
     ) {
         self.removedBytes = removedBytes
+        self.freedBytes = freedBytes
         self.removedCount = removedCount
         self.permanentlyRemovedCount = permanentlyRemovedCount
         self.failedCount = failedCount
@@ -78,6 +86,7 @@ public struct CleanupHistoryService: Sendable {
         var retiredByTrashPath: [String: Int] = [:]
         var items: [CleanupHistoryItem] = []
         var removedBytes: Int64 = 0
+        var freedBytes: Int64 = 0
         var removedCount = 0
         var permanentlyRemovedCount = 0
         var failedCount = 0
@@ -92,6 +101,7 @@ public struct CleanupHistoryService: Sendable {
 
             case .trashed:
                 removedBytes += max(0, record.bytes)
+                freedBytes += max(0, record.freedBytes ?? record.bytes)
                 removedCount += 1
                 let state = trashState(
                     for: record,
@@ -102,6 +112,7 @@ public struct CleanupHistoryService: Sendable {
 
             case .deleted:
                 removedBytes += max(0, record.bytes)
+                freedBytes += max(0, record.freedBytes ?? record.bytes)
                 removedCount += 1
                 permanentlyRemovedCount += 1
                 items.append(item(record, state: .removedPermanently, occurrences: &occurrences))
@@ -114,6 +125,7 @@ public struct CleanupHistoryService: Sendable {
 
         return CleanupHistorySummary(
             removedBytes: removedBytes,
+            freedBytes: freedBytes,
             removedCount: removedCount,
             permanentlyRemovedCount: permanentlyRemovedCount,
             failedCount: failedCount,
