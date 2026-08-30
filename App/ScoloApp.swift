@@ -27,7 +27,7 @@ struct ScoloApp: App {
     // a person sees and the app follows System Settings like any other Mac app.
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        Window("Scolo", id: "main") {
             MainWindow(model: model, settings: settings)
                 .frame(
                     minWidth: 1000, idealWidth: Token.Size.windowWidth,
@@ -116,14 +116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // With the menu bar item switched off there is nothing to become: an
         // accessory app with no status item and no window is a process the user
         // can neither see nor quit. It keeps its Dock icon instead.
-        guard Self.launchedAsLoginItem, Self.menuBarItemIsVisible else { return }
-        isSettlingLoginLaunch = true
-        Self.setPolicy(.accessory)
-        closeMainWindows()
-        // Sweep once more on the next runloop turn for the late-presented window.
-        DispatchQueue.main.async {
-            self.closeMainWindows()
-            self.isSettlingLoginLaunch = false
+        if Self.launchedAsLoginItem, Self.menuBarItemIsVisible {
+            isSettlingLoginLaunch = true
+            Self.setPolicy(.accessory)
+            closeMainWindows()
+            // Sweep once more on the next runloop turn for the late-presented window.
+            DispatchQueue.main.async {
+                self.closeMainWindows()
+                self.isSettlingLoginLaunch = false
+            }
+        } else {
+            MainWindowPresenter.activateAfterLaunch()
         }
     }
 

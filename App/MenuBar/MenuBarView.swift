@@ -42,12 +42,14 @@ struct MenuBarView: View {
             .disabled(model.isScanning)
 
             Button("Open Scolo") {
-                // Promote before the window exists so it opens already in the Dock
-                // and takes focus on the first try; the delegate would otherwise do
-                // it a beat later, after the window has become main.
-                AppDelegate.setPolicy(.regular)
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "main")
+                // Hide the menu window before the main window requests key status.
+                NSApp.keyWindow?.orderOut(nil)
+                // Wait until AppKit finishes the menu click and releases key status.
+                DispatchQueue.main.async {
+                    MainWindowPresenter.present {
+                        openWindow(id: "main")
+                    }
+                }
             }
 
             Divider()
