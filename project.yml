@@ -43,7 +43,16 @@ targets:
               - com.apple.application-bundle
             NSServiceDescription: "Open the selected application in Scolo for uninstall review."
     sources:
+      # Everything but the app icon, which is declared as a single file below:
+      # `AppIcon.icon` is an Icon Composer bundle, and xcodegen would otherwise
+      # walk into it and add its layer SVGs as loose resources. actool compiles
+      # the bundle when it is one file reference.
       - path: App
+        excludes:
+          - "Resources/AppIcon.icon"
+          - "Resources/AppIcon.icon/**"
+      - path: App/Resources/AppIcon.icon
+        type: file
     dependencies:
       - package: ScoloCore
         product: ScoloCore

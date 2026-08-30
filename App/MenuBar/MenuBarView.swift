@@ -67,7 +67,12 @@ struct MenuBarLabel: View {
 
     var body: some View {
         // Icon only: the menu bar is crowded real estate, and the figure is one
-        // click away inside the menu.
-        Image(systemName: "internaldrive")
+        // click away inside the menu. The asset is the app mark as a vector with
+        // its own 6 pt of padding baked in, tagged `template-rendering-intent`
+        // so the menu bar tints it — black on light, white on dark, inverted
+        // while the popover is open. 18 pt total puts the 15 pt glyph at the
+        // same optical weight as the SF Symbol it replaces.
+        Image(.menuBarIcon)
+            .renderingMode(.template)
     }
 }
