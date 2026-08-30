@@ -281,10 +281,24 @@ public struct ApplicationsScanner: CategoryScanner {
                 "GrShaderCache", "ShaderCache", "Crashpad",
                 // Per-profile caches. The caches inside a profile regenerate, the
                 // databases beside them are the user's life.
+                //
+                // `Service Worker` holds three things and only two of them are
+                // cache: `CacheStorage` (what a site stored for offline use),
+                // `ScriptCache` (the compiled worker scripts, re-fetched on the
+                // next registration) and `Database`, which is the registration
+                // itself and stays. `Shared Dictionary` is the compression
+                // dictionaries the browser downloaded, and costs a re-download.
+                // Measured across this Mac's eight Chrome profiles: ScriptCache
+                // 72.8 MB, Shared Dictionary 52.2 MB, both of which used to sit
+                // in the locked remainder as though they were the user's data.
                 "Default/Service Worker/CacheStorage",
+                "Default/Service Worker/ScriptCache",
+                "Default/Shared Dictionary",
                 "Default/Code Cache",
                 "Default/GPUCache",
                 "Profile */Service Worker/CacheStorage",
+                "Profile */Service Worker/ScriptCache",
+                "Profile */Shared Dictionary",
                 "Profile */Code Cache",
                 "Profile */GPUCache"
             ],
@@ -385,7 +399,13 @@ public struct ApplicationsScanner: CategoryScanner {
     static let electronRegenerable = [
         "Cache", "Code Cache", "GPUCache",
         "DawnWebGPUCache", "DawnGraphiteCache", "DawnCache",
-        "Service Worker/CacheStorage", "Crashpad", "component_crx_cache"
+        // `ScriptCache` sits beside `CacheStorage` and is a cache in the same
+        // sense — compiled worker scripts, re-fetched on the next registration.
+        // `Service Worker/Database` is the registration itself and is not listed.
+        // Both of these, and `Shared Dictionary`, were seen in Electron apps on
+        // this Mac (VS Code, Cursor, Ferdium) before being listed here.
+        "Service Worker/CacheStorage", "Service Worker/ScriptCache",
+        "Shared Dictionary", "Crashpad", "component_crx_cache"
     ]
 
     /// Name for the locked entry an Electron app gets for everything else.
