@@ -6,9 +6,9 @@ A native macOS disk-cleanup utility, rewritten in Swift from an Electron predece
 
 ```sh
 xcodegen generate                 # regenerates Scolo.xcodeproj from project.yml
-open Scolo.xcodeproj         # ⌘R to run
+open Scolo.xcodeproj              # ⌘R to run
 cd Core && swift test             # no Xcode needed
-swift run scolo-cli scan     # exercise the engine headlessly
+swift run scolo-cli scan          # exercise the engine headlessly
 vale README.md AGENTS.md WRITING_STYLE.md  # check project writing
 ```
 
@@ -26,7 +26,7 @@ Core/                    Swift package — the scanning engine, testable without
   Act/                   cleanup, app uninstall, leftovers, trash, history
   Duplicates/            verified file duplicate matching and removal
   StorageExplorer/       one-level storage accounting and reviewed removal
-  scolo-cli/        headless harness
+  scolo-cli/             headless harness
 App/                     SwiftUI app — a thin shell over Core
   DesignSystem/          tokens, type ramp, shared components
   MainWindow/            sidebar, toolbar, seven primary views, sheets
@@ -68,6 +68,14 @@ until you update the overlapping scanner.
 files and no per-file API can see it, so removing two clones frees less than their
 sum. The measurer counts hard links once. Do not change this estimate into a
 promise.
+
+**Compare only measurements that use the same rules.** Scolo stores each
+finished measurement together with the rules that produced it. The Dashboard then
+subtracts two stored measurements and reports what grew, and where. A change to the
+rules makes the two figures different kinds of measurement. The report states "not
+comparable" and shows no numbers. Scolo keeps this history in
+`~/Library/Application Support/Scolo/storage-history/`. Preferences › Advanced
+clears it.
 
 ## The boot snapshot
 

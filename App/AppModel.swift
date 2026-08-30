@@ -1065,7 +1065,9 @@ final class AppModel {
         // Scanner clean-up came back from the cache with its old figure.
         storageExplorer.invalidateCache()
         async let trash: Void = loadTrash()
-        await measureStorage()
+        // `removal` marks this measurement as the post-clean-up baseline, which is
+        // what "since the last clean-up" reads and what the ring never thins away.
+        await measureStorage(trigger: .removal)
         await trash
     }
 
@@ -1164,7 +1166,9 @@ final class AppModel {
         // gone. The disk walk runs after, on the Dashboard's own skeleton.
         await loadTrash()
         activity = nil
-        await measureStorage()
+        // Emptying the Trash frees space, so this measurement is a clean-up
+        // baseline like any other removal's.
+        await measureStorage(trigger: .removal)
     }
 
     func putBack(_ item: TrashItem) async {
@@ -1238,11 +1242,20 @@ final class AppModel {
         // `measureStorage` refreshes volume totals and checks the low-space threshold.
         snapshots = (try? await snapshotService.listAll()) ?? []
 
-        await measureStorage()
+        // The growth report is dated history, so the one the previous session left
+        // is already true. Reading it first puts it on screen at once instead of
+        // leaving the card blank for the length of a disk walk.
+        await loadStorageHistory()
+
+        await measureStorage(trigger: .launch)
     }
 
     /// Walks the disk. Only ever called deliberately.
-    func measureStorage() async {
+    ///
+    /// - Parameter trigger: what caused this measurement. It is stored with the
+    ///   snapshot, and `removal` is the one "since the last clean-up" reads, so a
+    ///   wrong trigger costs the user a baseline rather than a figure.
+    func measureStorage(trigger: SnapshotTrigger = .manual) async {
         guard !isLoadingBreakdown else { return }
         isLoadingBreakdown = true
         defer { isLoadingBreakdown = false }
@@ -1256,8 +1269,12 @@ final class AppModel {
         // bar, Dashboard warning and system notification in step after cleanup too.
         await refreshVolumeInfo()
 
-        guard let measured = try? await breakdownService.breakdown() else { return }
-        breakdown = measured
+        // `measure` rather than `breakdown`: the same single walk, with the folder
+        // tables it produced kept instead of thrown away. The growth report reads
+        // those, and a second traversal to collect them would double the cost of
+        // the most expensive measurement in the app.
+        guard let measured = try? await breakdownService.measure() else { return }
+        breakdown = measured.breakdown
 
         // The walk takes time. Read the volatile volume figures again, then put
         // Available, Free, and the sidebar on this one completed snapshot.
@@ -1267,6 +1284,106 @@ final class AppModel {
         if let volume, let breakdown {
             BreakdownCache(volume: volume, breakdown: breakdown, measuredAt: Date()).save()
         }
+
+        await recordSnapshot(of: measured, trigger: trigger)
+    }
+
+    // MARK: - What grew
+
+    /// The ring of dated measurements the Dashboard compares. One JSON file per
+    /// measurement; ``StorageSnapshotStore`` documents the retention rules.
+    private let snapshotStore = StorageSnapshotStore()
+
+    /// Every stored measurement, newest first. Held in memory so that changing the
+    /// baseline is arithmetic over figures already read, not a second disk walk.
+    @ObservationIgnored private var storageHistory: [StorageSnapshot] = []
+
+    /// What changed since the chosen baseline.
+    ///
+    /// `nil` until the history has been read. The Dashboard draws no growth card at
+    /// all until then, rather than announcing "first measurement" before it has
+    /// looked at what is stored.
+    private(set) var growth: GrowthComparison?
+
+    /// Which stored measurement the report compares against.
+    ///
+    /// Persisted: it is how the user reads the card, not a per-session choice.
+    var growthBaseline: GrowthBaseline = UserDefaults.standard.string(forKey: "growthBaseline")
+        .flatMap(GrowthBaseline.init(rawValue:)) ?? .sevenDays {
+        didSet {
+            guard growthBaseline != oldValue else { return }
+            UserDefaults.standard.set(growthBaseline.rawValue, forKey: "growthBaseline")
+            // Nothing is measured again. Every baseline is a different subtraction
+            // over the same stored figures.
+            recomputeGrowth()
+        }
+    }
+
+    /// Reads the stored measurements without walking anything.
+    private func loadStorageHistory() async {
+        let store = snapshotStore
+        storageHistory = await Task.detached(priority: .utility) { store.load() }.value
+        recomputeGrowth()
+    }
+
+    /// Stores one finished measurement, then recomputes the report.
+    ///
+    /// All of it runs off the main actor: ``SnapshotCapture`` reads one `device:inode`
+    /// per recorded folder — a few hundred on this Mac — and the store then writes a
+    /// file and prunes the ring. Only the finished history comes back.
+    ///
+    /// A measurement whose segments do not sum to capacity is never stored:
+    /// ``SnapshotCapture/snapshot(from:trigger:now:id:minimumNodeBytes:maximumNodes:identity:)``
+    /// returns nil for it. One dropped snapshot costs one comparison; a stored bad
+    /// one would poison every future comparison.
+    private func recordSnapshot(
+        of measurement: StorageMeasurement,
+        trigger: SnapshotTrigger
+    ) async {
+        let store = snapshotStore
+        storageHistory = await Task.detached(priority: .utility) { () -> [StorageSnapshot] in
+            if let snapshot = SnapshotCapture.snapshot(from: measurement, trigger: trigger) {
+                try? store.save(snapshot)
+            }
+            return store.load()
+        }.value
+        recomputeGrowth()
+    }
+
+    private func recomputeGrowth() {
+        growth = StorageGrowth.comparison(growthBaseline, in: storageHistory)
+    }
+
+    /// Preferences › Advanced › "Clear measurement history".
+    ///
+    /// The breakdown cache is a different file and a different button: this one
+    /// removes the dated measurements the Dashboard subtracts, and the next two
+    /// measurements start a new history.
+    func clearMeasurementHistory() {
+        try? snapshotStore.clear()
+        storageHistory = []
+        growth = .insufficientHistory
+    }
+
+    /// Opens the Storage Explorer at the folder the growth report named.
+    ///
+    /// The Explorer measures the *parent*, because it lists a folder's children:
+    /// opening the changed folder itself would show what is inside it and hide the
+    /// row the user clicked. The row is selected once that measurement arrives —
+    /// the Explorer clears its selection on every load, so the request travels with
+    /// the navigation instead of being written afterwards.
+    ///
+    /// One disk walk at a time, like every other start button: during a scan or a
+    /// removal the click is answered in the status bar instead of starting a
+    /// second measurement underneath the first.
+    func revealGrowth(_ attribution: GrowthAttribution) {
+        guard !isBusyWithDisk else {
+            statusMessage = "Wait for the current measurement to finish, then open the folder."
+            return
+        }
+        let url = URL(fileURLWithPath: attribution.path)
+        storageExplorer.selectLocation(url.deletingLastPathComponent(), revealing: url)
+        view = .storageExplorer
     }
 
     /// Refreshes only the cheap volume totals, without walking user folders. This is
@@ -1309,7 +1426,10 @@ final class AppModel {
         // The breakdown refresh runs alongside the scan, not after it: the
         // Dashboard's main card should already be recalculating by the time the
         // user looks at it, and the scan is paying the traversal cost anyway.
-        Task { await self.measureStorage() }
+        //
+        // The scheduler's scan is the one that fills the ring while nobody is
+        // looking, so it is stored under its own trigger.
+        Task { await self.measureStorage(trigger: automatic ? .scheduled : .scan) }
 
         scanTask = Task { [weak self] in
             guard let self else { return }

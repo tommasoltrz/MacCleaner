@@ -36,6 +36,21 @@ public enum ByteFormatting {
         return Self.fixed(Double(bytes) / Double(bytesPerKB), decimals: 0) + " KB"
     }
 
+    /// Renders a change in bytes, with the sign in front.
+    ///
+    /// The minus is U+2212 MINUS SIGN, not the hyphen-minus a keyboard types. At the
+    /// weight the Dashboard renders growth figures, a hyphen sits too high and too
+    /// short beside a plus sign, and the two signs must read as a pair.
+    ///
+    /// Zero has no sign: nothing changed, so neither direction is true.
+    public static func signedString(_ delta: Int64) -> String {
+        if delta == 0 { return "0 B" }
+        // `abs` traps on `Int64.min`. The magnitude is a `UInt64`, so clamping it
+        // back into `Int64` costs one byte of a figure that cannot occur anyway.
+        let magnitude = string(Int64(clamping: delta.magnitude))
+        return (delta > 0 ? "+" : "\u{2212}") + magnitude
+    }
+
     /// The same rendering over binary units, labelled the way Apple labels them.
     ///
     /// For iCloud only. `brctl` reports bytes where iCloud's own pages say

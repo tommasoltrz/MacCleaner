@@ -23,6 +23,15 @@ final class StorageExplorerModel {
     @ObservationIgnored private var scanGeneration = 0
     @ObservationIgnored private var cachedSnapshots: [String: StorageExplorerSnapshot] = [:]
     @ObservationIgnored private var cacheOrder: [String] = []
+    /// A row to select as soon as the folder holding it has been measured.
+    ///
+    /// Every load clears the selection, because a new folder's rows have nothing to
+    /// do with the previous folder's. A caller that wants one row picked out
+    /// therefore cannot simply write `selection` and navigate: the request has to
+    /// travel with the navigation and be applied when the measurement arrives. The
+    /// Dashboard's growth report is the one caller — it opens the parent folder and
+    /// names the folder that changed.
+    @ObservationIgnored private var pendingSelection: URL?
 
     private static let cacheLimit = 32
 
@@ -95,10 +104,11 @@ final class StorageExplorerModel {
         selectLocation(URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
     }
 
-    func selectLocation(_ url: URL) {
+    /// - Parameter revealing: a direct child of `url` to select once it is measured.
+    func selectLocation(_ url: URL, revealing item: URL? = nil) {
         history.removeAll()
         forwardHistory.removeAll()
-        load(url, useCache: false)
+        load(url, useCache: false, revealing: item)
     }
 
     func open(_ item: StorageExplorerItem) {
@@ -185,12 +195,16 @@ final class StorageExplorerModel {
     private func load(
         _ url: URL,
         useCache: Bool = true,
-        statusAfterLoad: String? = nil
+        statusAfterLoad: String? = nil,
+        revealing item: URL? = nil
     ) {
         scanGeneration += 1
         let generation = scanGeneration
         scanTask?.cancel()
         selection.removeAll()
+        // Set on every load, so a navigation that asks for nothing also discards a
+        // request the previous navigation never got to apply.
+        pendingSelection = item
         progress = .zero
         error = nil
         wasCancelled = false
@@ -201,6 +215,7 @@ final class StorageExplorerModel {
             isLoading = false
             scanTask = nil
             statusMessage = statusAfterLoad ?? Self.measurementStatus(cached)
+            applyPendingSelection()
             return
         }
 
@@ -233,6 +248,7 @@ final class StorageExplorerModel {
                 isLoading = false
                 scanTask = nil
                 statusMessage = statusAfterLoad ?? Self.measurementStatus(snapshot)
+                applyPendingSelection()
             } catch is CancellationError {
                 guard scanGeneration == generation else { return }
                 isLoading = false
@@ -251,6 +267,21 @@ final class StorageExplorerModel {
                 statusMessage = "The folder could not be read."
             }
         }
+    }
+
+    /// Selects the requested row, if the measurement found it.
+    ///
+    /// The request is consumed either way: a folder that was removed between the
+    /// report and the click is simply not there, and the Explorer shows its parent
+    /// rather than pretending otherwise.
+    private func applyPendingSelection() {
+        guard let pending = pendingSelection, let snapshot else { return }
+        pendingSelection = nil
+        let path = pending.standardizedFileURL.path
+        guard let item = snapshot.items.first(
+            where: { $0.url.standardizedFileURL.path == path }
+        ) else { return }
+        selection = [item.id]
     }
 
     private static func measurementStatus(_ snapshot: StorageExplorerSnapshot) -> String {
