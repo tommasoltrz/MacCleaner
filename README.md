@@ -32,7 +32,7 @@ App/                     SwiftUI app — a thin shell over Core
   MainWindow/            sidebar, toolbar, seven primary views, sheets
   Photos/                PhotoKit access, thumbnails and deletion
   Preferences/           four panes + settings store
-design/                  the design handoff — spec of record
+design/                  the design handoff — spec of record, kept locally
 ```
 
 Run `swift test` to prove engine correctness before you build the interface.
@@ -169,7 +169,8 @@ the category results.
 
 ## Design
 
-`design/README.md` is the specification of record. Its pixel values describe the
+`design/README.md` is the specification of record. It lives beside the code but
+is not in the repository — ask the author for it. Its pixel values describe the
 appearance of standard native controls. The app uses these stock controls. The
 platform supplies all three glass tiers. They use `.listStyle(.sidebar)`, the
 unified toolbar, and `.bar` in a `safeAreaInset`. The app does not draw gradients.
