@@ -1,5 +1,5 @@
 import AppKit
-import MacCleanerCore
+import ScoloCore
 import QuickLook
 import SwiftUI
 
@@ -83,7 +83,7 @@ struct StorageExplorerView: View {
         ContentUnavailableView {
             Label("Explore storage", systemImage: "internaldrive")
         } description: {
-            Text("Choose a folder or volume. MacCleaner will measure each item on disk.")
+            Text("Choose a folder or volume. Scolo will measure each item on disk.")
         } actions: {
             locationMenu
                 .controlSize(.large)
@@ -273,7 +273,7 @@ struct StorageExplorerView: View {
             if item.kind == .symbolicLink {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.tertiary)
-                    .help("MacCleaner measures the link itself. Its target is not included.")
+                    .help("Scolo measures the link itself. Its target is not included.")
             }
 
             if let reason = item.protectionReason {
@@ -325,7 +325,7 @@ struct StorageExplorerView: View {
     private func errorDescription(_ error: StorageExplorerError) -> String {
         switch error {
         case .unavailable:
-            "MacCleaner cannot access this folder. Check its permissions and try again."
+            "Scolo cannot access this folder. Check its permissions and try again."
         case .notDirectory:
             "Choose a folder or mounted volume."
         }
@@ -340,9 +340,9 @@ struct StorageExplorerView: View {
         case .protectedContents:
             "This item contains protected data."
         case .unreadableContents:
-            "MacCleaner could not read all contents."
+            "Scolo could not read all contents."
         case .system:
-            "MacCleaner protects this system location."
+            "Scolo protects this system location."
         case .library:
             "Library folders belong to the Scanner. Use Scanner to remove caches, logs and app data."
         case .trash:
@@ -352,11 +352,11 @@ struct StorageExplorerView: View {
         case .mediaLibrary:
             "Photos, Music or TV manages this library. Remove items in that app."
         case .volume:
-            "MacCleaner measures this volume separately. Use macOS tools to eject or erase it."
+            "Scolo measures this volume separately. Use macOS tools to eject or erase it."
         case .cloudOnly:
-            "This item contains iCloud files that are not on this Mac. MacCleaner protects them from removal."
+            "This item contains iCloud files that are not on this Mac. Scolo protects them from removal."
         case .unavailable:
-            "MacCleaner cannot verify this item."
+            "Scolo cannot verify this item."
         }
     }
 

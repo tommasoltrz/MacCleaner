@@ -1,5 +1,5 @@
 import AppKit
-import MacCleanerCore
+import ScoloCore
 import SwiftUI
 
 /// Reviews files that match by size, hashes, and a final byte comparison.
@@ -35,7 +35,7 @@ struct FileDuplicatesView: View {
             // The skips are said up front. "Package" means nothing to most people,
             // and Pages, Numbers and Keynote documents are packages — a duplicate
             // scan that is silent about them reads as having checked them.
-            Text("Select one or more folders. MacCleaner verifies file contents and keeps "
+            Text("Select one or more folders. Scolo verifies file contents and keeps "
                  + "one copy in each set. Hidden files, cloud-only files and documents saved "
                  + "as packages, such as Pages and Keynote files, are not compared.")
         } actions: {

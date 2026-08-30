@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The source list.
 ///
@@ -25,7 +25,7 @@ struct SidebarView: View {
         // colour and offers no way to change it (`listItemTint(.monochrome)` tints
         // row *content*, not the selection fill).
         List {
-            Section("MacCleaner") {
+            Section("Scolo") {
                 ForEach(AppModel.View.sidebarCases) { view in
                     Button {
                         select(view)

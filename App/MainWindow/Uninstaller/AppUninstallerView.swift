@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import MacCleanerCore
+import ScoloCore
 
 /// A dedicated, review-first application uninstaller.
 ///
@@ -58,7 +58,7 @@ struct AppUninstallerView: View {
                             Text("Drop an application here")
                                 .font(.system(size: 16, weight: .semibold))
                                 .foregroundStyle(Token.Text.primary)
-                            Text("MacCleaner will find its verified related files for review.")
+                            Text("Scolo will find its verified related files for review.")
                                 .font(.mcSubtitle)
                                 .foregroundStyle(Token.Text.secondary)
                         }
@@ -217,7 +217,7 @@ struct AppUninstallerView: View {
                         .foregroundStyle(Token.Text.primary)
                     Text(
                         plan.isApplicationOnly
-                            ? "MacCleaner cannot identify related files safely. Only the application will move to the Trash."
+                            ? "Scolo cannot identify related files safely. Only the application will move to the Trash."
                             : plan.protectedItems.isEmpty
                             ? "Every verified related file below will move to the Trash."
                             : "Every verified related file below will move to the Trash, including profiles and settings."
@@ -247,7 +247,7 @@ struct AppUninstallerView: View {
                         .foregroundStyle(Token.Text.primary)
                     Text(
                         "Remove the cask through Homebrew so its package receipt stays correct. "
-                        + "MacCleaner will not trash only the app bundle."
+                        + "Scolo will not trash only the app bundle."
                     )
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)

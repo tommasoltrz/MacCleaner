@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The window while a removal runs.
 ///

@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The Scanner categories in one grouped outline, each expanding into a
 /// file table.

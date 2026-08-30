@@ -1,4 +1,4 @@
-name: MacCleaner
+name: Scolo
 
 # The .xcodeproj is generated from this file — never hand-edited. Regenerate with:
 #   xcodegen generate
@@ -10,11 +10,11 @@ options:
   groupSortPosition: top
 
 packages:
-  MacCleanerCore:
+  ScoloCore:
     path: Core
 
 targets:
-  MacCleaner:
+  Scolo:
     type: application
     platform: macOS
     info:
@@ -26,52 +26,52 @@ targets:
         NSHumanReadableCopyright: ""
         # PhotoKit terminates the process if the app fetches the photo library
         # without this description.
-        NSPhotoLibraryUsageDescription: "MacCleaner reads your photo library to find duplicates. Nothing is deleted until you confirm it."
+        NSPhotoLibraryUsageDescription: "Scolo reads your photo library to find duplicates. Nothing is deleted until you confirm it."
         # macOS protects another app's bundle and sandbox data separately. An
         # administrator retry cannot bypass either privacy decision.
-        NSAppDataUsageDescription: "MacCleaner needs access to data from removed apps so it can move files that you select to the Trash."
-        NSAppBundlesUsageDescription: "MacCleaner needs permission to move applications that you select to the Trash."
+        NSAppDataUsageDescription: "Scolo needs access to data from removed apps so it can move files that you select to the Trash."
+        NSAppBundlesUsageDescription: "Scolo needs permission to move applications that you select to the Trash."
         NSServices:
           - NSMenuItem:
-              default: "Review Uninstall with MacCleaner"
+              default: "Review Uninstall with Scolo"
             NSMessage: reviewUninstall
-            NSPortName: MacCleaner
+            NSPortName: Scolo
             NSRequiredContext:
               NSApplicationIdentifier: com.apple.finder
             NSRestricted: true
             NSSendFileTypes:
               - com.apple.application-bundle
-            NSServiceDescription: "Open the selected application in MacCleaner for uninstall review."
+            NSServiceDescription: "Open the selected application in Scolo for uninstall review."
     sources:
       - path: App
     dependencies:
-      - package: MacCleanerCore
-        product: MacCleanerCore
+      - package: ScoloCore
+        product: ScoloCore
     preBuildScripts:
       - name: Require signed build
         basedOnDependencyAnalysis: false
         showEnvVars: false
         script: |
           if [ "${CODE_SIGNING_ALLOWED:-NO}" != "YES" ]; then
-            echo "error: MacCleaner requires code signing because macOS ties privacy grants to its signed identity."
+            echo "error: Scolo requires code signing because macOS ties privacy grants to its signed identity."
             exit 1
           fi
           case "${CODE_SIGN_IDENTITY:-}" in
             ""|"-")
-              echo "error: MacCleaner requires an Apple Development signing identity."
+              echo "error: Scolo requires an Apple Development signing identity."
               exit 1
               ;;
           esac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.MacCleaner
-        PRODUCT_NAME: MacCleaner
+        PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.Scolo
+        PRODUCT_NAME: Scolo
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
 
-        # MacCleaner must traverse the whole disk, read other volumes, and shell out
+        # Scolo must traverse the whole disk, read other volumes, and shell out
         # to diskutil. A sandboxed app cannot do any of that, and Full Disk Access is
         # granted to an unsandboxed bundle identity.
         ENABLE_APP_SANDBOX: NO
@@ -89,10 +89,10 @@ targets:
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 
 schemes:
-  MacCleaner:
+  Scolo:
     build:
       targets:
-        MacCleaner: all
+        Scolo: all
     run:
       config: Debug
     archive:

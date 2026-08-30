@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The clean-up, empty-trash and photo-deletion confirmations.
 ///
@@ -211,7 +211,7 @@ struct ConfirmationSheet: View {
                 : ""
             return "The selected items currently use \(ByteFormatting.string(bytes)). "
                 + "This amount is not a promise of recovered space because files can share storage. "
-                + "MacCleaner will verify each item again."
+                + "Scolo will verify each item again."
                 + cloudWarning
         }
     }
@@ -262,7 +262,7 @@ struct ConfirmationSheet: View {
                         .font(.mcSubtitle)
                         .foregroundStyle(Token.Text.primary)
                     Text(
-                        "Records original locations for MacCleaner’s Put Back. "
+                        "Records original locations for Scolo’s Put Back. "
                         + "It does not change what moves to the Trash."
                     )
                     .font(.mcCaption)

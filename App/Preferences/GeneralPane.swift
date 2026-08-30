@@ -1,6 +1,6 @@
 import Combine
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// Preferences → General: startup, scanning schedule, and the Full Disk Access status.
 struct GeneralPane: View {

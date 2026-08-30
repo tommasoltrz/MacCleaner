@@ -1,7 +1,7 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
-/// Shows a read-only record of MacCleaner removal results.
+/// Shows a read-only record of Scolo removal results.
 struct CleanupHistoryView: View {
     @Bindable var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -37,7 +37,7 @@ struct CleanupHistoryView: View {
                     .foregroundStyle(Token.Text.secondary)
             }
 
-            Text("MacCleaner saves this history when you keep a Put Back receipt.")
+            Text("Scolo saves this history when you keep a Put Back receipt.")
                 .font(.mcSubtitle)
                 .foregroundStyle(Token.Text.quaternary)
         }
@@ -97,7 +97,7 @@ struct CleanupHistoryView: View {
             ContentUnavailableView {
                 Label("Reading cleanup history", systemImage: "clock.arrow.circlepath")
             } description: {
-                Text("MacCleaner is checking which receipts still match items in the Trash.")
+                Text("Scolo is checking which receipts still match items in the Trash.")
             }
             .frame(maxWidth: .infinity)
 
@@ -188,13 +188,13 @@ private struct ResultLabel: View {
         case .inTrash:
             "The Trash path exists, but the receipt cannot prove that it contains the same item."
         case .restored:
-            "MacCleaner put this item back at its original location."
+            "Scolo put this item back at its original location."
         case .removedPermanently:
             "This item did not move to the Trash, so it cannot be put back."
         case .noLongerInTrash:
             "This receipt no longer matches an item in the Trash."
         case .failed:
-            "MacCleaner did not remove this item."
+            "Scolo did not remove this item."
         }
     }
 }

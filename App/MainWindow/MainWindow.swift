@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// The main window: source list, unified toolbar, and a status bar per view.
 ///
@@ -48,7 +48,7 @@ struct MainWindow: View {
             Button("Not Now", role: .cancel) {}
         } message: {
             Text(
-                "MacCleaner could not move files from another app's container. "
+                "Scolo could not move files from another app's container. "
                     + "Allow access to other application data. Then try again."
             )
         }

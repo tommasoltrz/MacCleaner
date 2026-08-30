@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import ServiceManagement
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 // MARK: - Value types
 
@@ -510,7 +510,7 @@ enum FullDiskAccess {
 // MARK: - Other Application Data Access
 
 /// Opens the privacy list for access to protected files and folders.
-/// macOS requests this permission when MacCleaner opens another app's container.
+/// macOS requests this permission when Scolo opens another app's container.
 enum AppDataAccess {
     @MainActor
     static func openSystemSettings() {
@@ -535,7 +535,7 @@ extension SettingsStore {
     /// A throwaway store for `#Preview`, on its own volatile domain so a preview can
     /// never write to the real preferences or touch the real login item.
     static func preview(_ configure: (SettingsStore) -> Void = { _ in }) -> SettingsStore {
-        let suite = "com.tommasolaterza.MacCleaner.preview.\(UUID().uuidString)"
+        let suite = "com.tommasolaterza.Scolo.preview.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite) ?? .standard
         defaults.removePersistentDomain(forName: suite)
         let store = SettingsStore(defaults: defaults, managesLoginItem: false)

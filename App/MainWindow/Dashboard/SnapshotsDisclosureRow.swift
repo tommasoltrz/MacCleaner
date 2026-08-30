@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import MacCleanerCore
+import ScoloCore
 
 /// The Dashboard's APFS Snapshots row.
 ///
@@ -17,7 +17,7 @@ struct SnapshotsDisclosureRow: View {
 
     /// Everything the row needs from a snapshot.
     ///
-    /// `SnapshotInfo`'s memberwise initialiser is internal to MacCleanerCore, so this
+    /// `SnapshotInfo`'s memberwise initialiser is internal to ScoloCore, so this
     /// target cannot build one. Deriving a local value lets the preview exercise both
     /// states without widening Core's API from here.
     fileprivate struct Entry: Identifiable, Hashable {

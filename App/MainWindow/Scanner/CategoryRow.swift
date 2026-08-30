@@ -1,5 +1,5 @@
 import SwiftUI
-import MacCleanerCore
+import ScoloCore
 
 /// One category's collapsed row in the Scanner outline.
 ///
