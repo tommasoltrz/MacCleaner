@@ -134,6 +134,46 @@ struct DestructiveButtonStyle: ButtonStyle {
     }
 }
 
+/// A row in the menu bar popover, highlighted the way a real `NSMenu` item is: the
+/// whole row fills with the system selection blue under the pointer and the label
+/// turns white.
+///
+/// `.buttonStyle(.plain)` gave the popover no hover state at all — the only feedback
+/// was the label fading on mouse-down, which no menu on this platform does. The fill
+/// is painted for a press as well as a hover, since a click that lands without the
+/// pointer having moved (keyboard-driven, or a very fast click) still deserves one.
+///
+/// Disabled is handled here rather than left to the style's default: the fill must not
+/// follow the pointer over "Scan for Junk" while a scan is already running, and a
+/// hover recorded before the button was disabled must not survive into that state.
+struct MenuItemButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        let highlighted = isEnabled && (isHovering || configuration.isPressed)
+        return configuration.label
+            // 13 pt, the size AppKit draws a menu item at — not the app's 12 pt
+            // control label, because this reads as a menu and not as a control.
+            .font(.mcRowTitleRegular)
+            .foregroundStyle(
+                highlighted ? Token.Text.onHighlight
+                    : (isEnabled ? Token.Text.primary : Token.Text.disabled)
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(
+                highlighted ? Token.Fill.menuHighlight : .clear,
+                in: RoundedRectangle(cornerRadius: Token.Radius.control)
+            )
+            // The label alone is a narrow target; a menu row answers anywhere along
+            // its width, so the shape the hover and the click use is the filled one.
+            .contentShape(RoundedRectangle(cornerRadius: Token.Radius.control))
+            .onHover { isHovering = isEnabled && $0 }
+    }
+}
+
 // MARK: - Hover tip
 
 /// The capacity bar's immediate tooltip, as a reusable chip. The native `.help()`

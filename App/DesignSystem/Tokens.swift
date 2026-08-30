@@ -159,6 +159,12 @@ enum Token {
             light: Token.redInk,
             dark: NSColor(srgbRed: 1.000, green: 0.478, blue: 0.439, alpha: 1)   // #FF7A70
         )
+
+        /// A label sitting on a highlighted menu row. `selectedMenuItemTextColor`
+        /// is the one AppKit token that tracks the highlight fill: it is white
+        /// while a row is filled and reverts if the system ever draws that fill
+        /// lighter, which is more than a white literal would do.
+        static let onHighlight = Color(nsColor: .selectedMenuItemTextColor)
     }
 
     static let separator = Color(nsColor: .separatorColor)
@@ -225,6 +231,14 @@ enum Token {
             light: .systemBlue,
             dark: NSColor(displayP3Red: 0.094, green: 0.569, blue: 1.0, alpha: 1)
         )
+
+        /// The fill under the pointer in the menu bar popover — the same blue a
+        /// real `NSMenu` row takes. `selectedContentBackgroundColor` is that
+        /// exact colour and it follows the user's accent choice, so a Mac set to
+        /// Graphite gets grey here rather than a blue the rest of the system
+        /// stopped using. The sidebar's P3 literal is not reused: that one was
+        /// measured to match the App Store's *tint on a pill*, not a menu's fill.
+        static let menuHighlight = Color(nsColor: .selectedContentBackgroundColor)
     }
 
     /// The drop shadow under a floating chip — the capacity bar's tooltip and the
