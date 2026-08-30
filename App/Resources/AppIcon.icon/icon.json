@@ -3,8 +3,8 @@
     {
       "value" : {
         "linear-gradient" : [
-          "display-p3:0.35522,0.56641,0.54736,1.00000",
-          "display-p3:0.23730,0.44409,0.53857,1.00000"
+          "extended-gray:0.75000,1.00000",
+          "extended-gray:0.50000,1.00000"
         ],
         "orientation" : {
           "start" : {
@@ -59,7 +59,7 @@
             },
             {
               "appearance" : "dark",
-              "value" : 0.7
+              "value" : 1
             }
           ]
         },
