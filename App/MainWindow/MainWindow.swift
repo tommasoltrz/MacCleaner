@@ -399,28 +399,42 @@ struct MainWindow: View {
             }
         }
 
-        ToolbarItem(placement: .primaryAction) {
-            // The button supplies the Liquid Glass surface. Hide the toolbar
-            // item's shared background so a second capsule does not appear.
-            Button {
-                model.startScan()
-            } label: {
-                // Plain text, no glyph: the sparkles icon sat on the label's
-                // baseline and dragged the whole line optically off-centre in the
-                // capsule. The App Store's offer button it is modelled on is
-                // text-only too.
-                Text("Scan for Junk")
-                    .fontWeight(.semibold)
-                    .padding(.vertical, 1)
-                    .padding(.horizontal, 8)
+        // Two spellings of one button. On macOS 26 it supplies its own Liquid
+        // Glass capsule, and the toolbar item's shared background has to be
+        // hidden or a second capsule appears behind it. Earlier systems have
+        // neither: `.borderedProminent` is the accent-filled capsule those
+        // releases draw for exactly this button, and there is no shared
+        // background to hide. The branch is at the item, not inside the label,
+        // because `sharedBackgroundVisibility` is a toolbar modifier.
+        if #available(macOS 26, *) {
+            ToolbarItem(placement: .primaryAction) {
+                scanButton.buttonStyle(.glassProminent)
             }
-            .buttonStyle(.glassProminent)
-            // Large, like the App Store's offer button: a filled capsule at
-            // regular size read as an afterthought next to the 52pt bar.
-            .controlSize(.large)
-            .disabled(model.isBusyWithDisk)
-            .help("Scan for reclaimable files")
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .primaryAction) {
+                scanButton.buttonStyle(.borderedProminent)
+            }
         }
-        .sharedBackgroundVisibility(.hidden)
+    }
+
+    private var scanButton: some View {
+        Button {
+            model.startScan()
+        } label: {
+            // Plain text, no glyph: the sparkles icon sat on the label's
+            // baseline and dragged the whole line optically off-centre in the
+            // capsule. The App Store's offer button it is modelled on is
+            // text-only too.
+            Text("Scan for Junk")
+                .fontWeight(.semibold)
+                .padding(.vertical, 1)
+                .padding(.horizontal, 8)
+        }
+        // Large, like the App Store's offer button: a filled capsule at regular
+        // size read as an afterthought next to the 52pt bar.
+        .controlSize(.large)
+        .disabled(model.isBusyWithDisk)
+        .help("Scan for reclaimable files")
     }
 }
