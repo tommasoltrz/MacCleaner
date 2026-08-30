@@ -123,12 +123,47 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// though the Scanner badged them `regenerable` one screen away. On the author's
     /// Mac that was 1.37 GB in Chrome alone.
     public var safeToRemoveBytes: Int64 {
-        if categoryID == .applicationLeftovers {
-            return entries.reduce(0) { $0 + $1.displayBytes }
+        tileRows(safeToRemove: true).reduce(0) { $0 + $1.displayBytes }
+    }
+
+    /// The rows behind one tile — and the definition of what that tile counts, since
+    /// both totals are sums over exactly these.
+    ///
+    /// It lives here, beside the figures, because it used to live in the app while
+    /// the figures lived in Core. The two were written to agree and did, until a
+    /// build took one of them and not the other: the tile then read 10.24 GB over a
+    /// list of 13 rows worth 1.61 GB. Neither number was wrong for the code that
+    /// produced it, which is the whole problem with keeping one claim in two places.
+    ///
+    /// A row that is not safe can still carry children that are. An application is
+    /// the case this exists for: Chrome is not safe to remove and its caches are, so
+    /// the caches come back as rows of their own and the row this returns for "needs
+    /// review" is Chrome *without* them. Trimming rather than repeating is what keeps
+    /// the two lists from claiming the same bytes twice.
+    ///
+    /// The Scanner does not use this. There an application keeps every child it has,
+    /// because that view is about one application rather than about a total.
+    public func tileRows(safeToRemove wantSafe: Bool) -> [FileEntry] {
+        entries.flatMap { entry -> [FileEntry] in
+            if countsAsSafe(entry) { return wantSafe ? [entry] : [] }
+
+            let safeChildren = entry.children.filter(Self.isSafeChild)
+            if wantSafe { return safeChildren }
+            guard !safeChildren.isEmpty else { return [entry] }
+
+            var remainder = entry
+            remainder.children = entry.children.filter { !Self.isSafeChild($0) }
+            // A locked row whose only removable content was those children is worth
+            // nothing here. It counts zero towards the tile, so the list the tile
+            // opens should not show it either.
+            return remainder.displayBytes > 0 ? [remainder] : []
         }
-        return entries.reduce(0) { total, entry in
-            total + (countsAsSafe(entry) ? entry.displayBytes : entry.regenerableChildBytes)
-        }
+    }
+
+    /// A child the parent's own row does not speak for: it regenerates, and nothing
+    /// refuses its removal. A badge never overrides a lock.
+    private static func isSafeChild(_ child: FileEntry) -> Bool {
+        child.isRegenerable && !child.isRemovalLocked
     }
 
     /// Whether the row itself — not merely something inside it — is safe to remove.
@@ -147,12 +182,10 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// this figure and loses its caches to the other one; before, it kept both and
     /// the caches were counted nowhere else.
     public var needsReviewBytes: Int64 {
-        if categoryID == .applicationLeftovers { return 0 }
+        // A category with no rows keeps its own total: that is a scanner reporting an
+        // aggregate it never broke into rows, Docker being the one that does it.
         guard !entries.isEmpty else { return categoryID.isSafe ? 0 : totalBytes }
-        return entries.reduce(0) { total, entry in
-            guard !countsAsSafe(entry) else { return total }
-            return total + max(0, entry.displayBytes - entry.regenerableChildBytes)
-        }
+        return tileRows(safeToRemove: false).reduce(0) { $0 + $1.displayBytes }
     }
 
     public init(
