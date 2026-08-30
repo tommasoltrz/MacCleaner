@@ -29,7 +29,16 @@ public struct StorageBreakdownService: Sendable {
 
     // MARK: - Roots
 
-    /// Home-relative paths whose sizes are read out of the single depth-3 walk.
+    /// How many levels below `$HOME` the single walk records.
+    ///
+    /// Three is all the capacity card needs (`Library/Caches/Homebrew` is the
+    /// deepest figure it reads). Four is what the growth report wants, so a change
+    /// can be named as `Documents/Renewals/build` instead of as `Documents`. The
+    /// extra level was measured on the user's Mac with `scolo-cli breakdown`
+    /// before it was adopted; see the note in `CLAUDE.local.md`.
+    public static let homeWalkDepth = 4
+
+    /// Home-relative paths whose sizes are read out of the single walk.
     private enum HomePath {
         static let documents = ["Documents"]
         static let desktop = ["Desktop"]
@@ -68,18 +77,33 @@ public struct StorageBreakdownService: Sendable {
 
     // MARK: - Computation
 
+    /// The capacity card, and nothing else. Kept as the entry point for every caller
+    /// that only needs the figures on screen.
     public func breakdown(
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> StorageBreakdown {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
+        try await measure(progress: progress).breakdown
+    }
+
+    /// One measurement of the whole disk, with the working figures kept.
+    ///
+    /// ``breakdown(progress:)`` throws away everything the walk learned except the
+    /// twelve segment totals. The growth report needs the directories underneath
+    /// them, and a second traversal to collect those would double the cost of the
+    /// most expensive measurement in the app — about 20 s on the user's Mac. So the
+    /// walk is paid for once and its results are handed out whole.
+    public func measure(
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> StorageMeasurement {
+        let home = URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL
 
         let volume = try await diskInfo.volumeInfo()
         let dataUsed = try await diskInfo.dataVolumeUsedBytes()
         progress?(0.05)
 
-        // One traversal of $HOME at depth 3 supplies every home figure below,
-        // including `Library/Caches/Homebrew`.
-        let homeTree = try await measurer.measureSubtrees(of: home, depth: 3)
+        // One traversal of $HOME supplies every home figure below, including
+        // `Library/Caches/Homebrew`.
+        let homeTree = try await measurer.measureSubtrees(of: home, depth: Self.homeWalkDepth)
         progress?(0.55)
 
         func homeBytes(_ components: [String]) -> Int64 {
@@ -91,22 +115,32 @@ public struct StorageBreakdownService: Sendable {
         let homeTotal = homeTree[home.standardizedFileURL]?.allocatedBytes ?? 0
         let homeUnreadable = homeTree[home.standardizedFileURL]?.unreadableCount ?? 0
 
+        // Machine-wide roots, each kept under its own URL so the growth report can
+        // name the one that changed.
+        var rootMeasurements: [URL: SizeMeasurement] = [:]
+
         // The Data volume's own /System tree, invisible to any walk of `/`.
-        let dataSideSystem = try await measurer.measure(
-            URL(fileURLWithPath: DiskInfoService.dataVolumeMountPoint + "/System")
-        )
+        let dataSideSystemURL = URL(
+            fileURLWithPath: DiskInfoService.dataVolumeMountPoint + "/System"
+        ).standardizedFileURL
+        let dataSideSystem = try await measurer.measure(dataSideSystemURL)
+        rootMeasurements[dataSideSystemURL] = dataSideSystem
         progress?(0.7)
 
         var systemDataBytes: Int64 = 0
         var systemDataUnreadable = 0
         for root in Self.systemDataRoots {
-            let measured = try await measurer.measure(URL(fileURLWithPath: root))
+            let url = URL(fileURLWithPath: root).standardizedFileURL
+            let measured = try await measurer.measure(url)
+            rootMeasurements[url] = measured
             systemDataBytes += measured.allocatedBytes
             systemDataUnreadable += measured.unreadableCount
         }
         progress?(0.9)
 
-        let systemApplications = try await measurer.measure(URL(fileURLWithPath: "/Applications"))
+        let systemApplicationsURL = URL(fileURLWithPath: "/Applications").standardizedFileURL
+        let systemApplications = try await measurer.measure(systemApplicationsURL)
+        rootMeasurements[systemApplicationsURL] = systemApplications
 
         // Non-Data volumes: System, Preboot, Recovery, VM.
         let otherVolumes = max(0, volume.usedBytes - dataUsed)
@@ -153,11 +187,117 @@ public struct StorageBreakdownService: Sendable {
 
         progress?(1.0)
 
-        return StorageBreakdown.make(
+        let breakdown = StorageBreakdown.make(
             capacityBytes: volume.capacityBytes,
             rawSegments: raw,
             unreadableCount: homeUnreadable + systemDataUnreadable
                 + dataSideSystem.unreadableCount + systemApplications.unreadableCount
         )
+
+        return StorageMeasurement(
+            home: home,
+            volume: volume,
+            breakdown: breakdown,
+            rawSegments: raw,
+            homeTree: homeTree,
+            rootMeasurements: rootMeasurements,
+            nodeDepth: Self.homeWalkDepth
+        )
+    }
+
+    // MARK: - Which segment owns a path
+
+    /// The segment that counts the bytes at a home-relative path.
+    ///
+    /// The single source is the `HomePath` table above, read longest match first, so
+    /// `Library/Caches/Homebrew` lands in Package & Build Caches rather than in the
+    /// App Data & Caches entry it sits inside. Anything in home that no table names
+    /// is Other Files in Home, which is exactly how the residual above is computed.
+    ///
+    /// Returns `nil` for a folder that holds several segments at once, and the
+    /// caller must then not pretend that one segment owns it. There are two:
+    ///
+    /// * `$HOME`, the empty path, which holds every home segment.
+    /// * `~/Library`, which holds App Data & Caches, Package & Build Caches,
+    ///   Developer and, in `Mail` or `Mobile Documents`, Other Files in Home.
+    ///
+    /// One nesting stays inside a named segment rather than splitting it:
+    /// `~/Library/Caches` is App Data & Caches, and the Homebrew cache it contains
+    /// is Package & Build Caches. A measured size for `~/Library/Caches` therefore
+    /// includes bytes that the App Data & Caches segment subtracts. The growth
+    /// report reads a node for its path, not for its segment total, and it descends
+    /// into `Homebrew` when `Homebrew` is what changed.
+    public static func segment(
+        forHomeRelativeComponents components: [String]
+    ) -> StorageSegmentID? {
+        guard !components.isEmpty else { return nil }
+        guard components != ["Library"] else { return nil }
+
+        func isUnder(_ root: [String]) -> Bool {
+            components.count >= root.count && Array(components.prefix(root.count)) == root
+        }
+
+        // Longest match first: the Homebrew cache is inside Library/Caches.
+        if isUnder(HomePath.homebrewCache) { return .packageBuildCaches }
+        if HomePath.packageCaches.contains(where: isUnder) { return .packageBuildCaches }
+        if isUnder(HomePath.developer) { return .developer }
+        if HomePath.appData.contains(where: isUnder) { return .appDataCaches }
+        if isUnder(HomePath.documents) || isUnder(HomePath.desktop) { return .documentsDesktop }
+        if isUnder(HomePath.downloads) { return .downloads }
+        if isUnder(HomePath.pictures) { return .photos }
+        if isUnder(HomePath.music) { return .music }
+        if isUnder(HomePath.movies) { return .movies }
+        if isUnder(HomePath.applications) { return .applications }
+        return .otherFilesInHome
+    }
+
+    /// The segment that counts the bytes at a machine-wide root.
+    ///
+    /// Returns `nil` for a path this service does not measure, so a caller cannot
+    /// file bytes under a name that did not produce them.
+    public static func segment(forRoot url: URL) -> StorageSegmentID? {
+        let path = url.standardizedFileURL.path
+        if path == "/Applications" { return .applications }
+        if path == DiskInfoService.dataVolumeMountPoint + "/System" { return .macOSSystem }
+        if systemDataRoots.contains(path) { return .systemData }
+        return nil
+    }
+}
+
+/// Everything one disk measurement produced.
+///
+/// The breakdown is what the capacity card draws. The two measurement tables are
+/// what the growth report reads, and they exist only because they were already in
+/// memory when the walk finished.
+public struct StorageMeasurement: Sendable {
+    /// The home folder this walk started from, standardized.
+    public let home: URL
+    public let volume: VolumeInfo
+    public let breakdown: StorageBreakdown
+    /// Per-segment bytes before ``StorageBreakdown/make(capacityBytes:rawSegments:unreadableCount:mergeThresholdPercent:)``
+    /// folded the small segments into `Other`.
+    public let rawSegments: [StorageSegmentID: Int64]
+    /// Every directory under `$HOME` down to ``nodeDepth``, `$HOME` included.
+    public let homeTree: [URL: SizeMeasurement]
+    /// `/Applications`, the Data volume's own `/System`, and each System Data root.
+    public let rootMeasurements: [URL: SizeMeasurement]
+    public let nodeDepth: Int
+
+    public init(
+        home: URL,
+        volume: VolumeInfo,
+        breakdown: StorageBreakdown,
+        rawSegments: [StorageSegmentID: Int64],
+        homeTree: [URL: SizeMeasurement],
+        rootMeasurements: [URL: SizeMeasurement],
+        nodeDepth: Int
+    ) {
+        self.home = home
+        self.volume = volume
+        self.breakdown = breakdown
+        self.rawSegments = rawSegments
+        self.homeTree = homeTree
+        self.rootMeasurements = rootMeasurements
+        self.nodeDepth = nodeDepth
     }
 }

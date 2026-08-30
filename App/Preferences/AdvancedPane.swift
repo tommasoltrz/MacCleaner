@@ -11,6 +11,9 @@ struct AdvancedPane: View {
     /// coordinator. With no handler the button is disabled rather than inert — a
     /// control that looks live and does nothing is worse than one that admits it.
     var onRebuildIndex: (() -> Void)?
+    /// Removes the dated measurements the Dashboard subtracts. A different file
+    /// from the breakdown cache, and a different button.
+    var onClearMeasurementHistory: (() -> Void)?
     /// Called after the store has been reset, for state the store does not own
     /// (selections, cached measurements).
     var onResetSettings: (() -> Void)?
@@ -92,6 +95,18 @@ struct AdvancedPane: View {
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(onRebuildIndex == nil)
             }
+            PrefDivider()
+            PrefRow(
+                title: "Clear measurement history",
+                // Says what goes and what the cost is. The Dashboard's growth card
+                // has nothing to subtract until two measurements exist again.
+                description: "Removes the stored measurements that the Dashboard "
+                    + "compares. The next two measurements start a new history."
+            ) {
+                Button("Clear") { onClearMeasurementHistory?() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(onClearMeasurementHistory == nil)
+            }
         }
     }
 
@@ -160,6 +175,7 @@ enum RemovalLog {
     AdvancedPane(
         settings: .preview(),
         onRebuildIndex: {},
+        onClearMeasurementHistory: {},
         onResetSettings: {}
     )
     .background(Color(nsColor: .windowBackgroundColor))

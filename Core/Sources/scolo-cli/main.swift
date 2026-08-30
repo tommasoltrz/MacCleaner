@@ -14,6 +14,10 @@ import ScoloCore
 //     swift run scolo-cli snapshots
 //     swift run scolo-cli measure <path>
 //     swift run scolo-cli apps
+//
+// `snapshot` and `growth` write to and read from the same measurement history the
+// app keeps. A snapshot taken here is tagged `cli`, so it is easy to see — and to
+// delete — in `~/Library/Application Support/Scolo/storage-history/`.
 
 @main
 struct CLI {
@@ -27,6 +31,10 @@ struct CLI {
                 try await snapshots()
             case "breakdown":
                 try await breakdown()
+            case "snapshot":
+                try await snapshot()
+            case "growth":
+                try growth(baseline: arguments.dropFirst().first)
             case "scan":
                 try await scan()
             case "apps":
@@ -38,7 +46,8 @@ struct CLI {
                 try await measure(path: arguments[1])
             default:
                 print("scolo-cli — ScoloCore engine harness")
-                print("commands: volume | snapshots | breakdown | scan | apps | measure <path>")
+                print("commands: volume | snapshots | breakdown | snapshot"
+                      + " | growth [previous|7d|cleanup] | scan | apps | measure <path>")
             }
         } catch {
             FileHandle.standardError.write(Data("error: \(error)\n".utf8))
@@ -194,6 +203,94 @@ struct CLI {
         print("  drift          \(drift) bytes  \(drift == 0 ? "(exact)" : "(MISMATCH)")")
         print("  unreadable     \(result.unreadableCount) entries")
         print("  elapsed        \(String(format: "%.1fs", elapsed))")
+    }
+
+    /// Measures the disk and stores the result in the app's measurement history.
+    static func snapshot() async throws {
+        let started = Date()
+        let measurement = try await StorageBreakdownService().measure()
+        let elapsed = Date().timeIntervalSince(started)
+
+        let total = measurement.breakdown.segments.reduce(Int64(0)) { $0 + $1.bytes }
+        let drift = measurement.breakdown.capacityBytes - total
+
+        guard let snapshot = SnapshotCapture.snapshot(from: measurement, trigger: .cli) else {
+            print("  NOT STORED    the segments do not sum to capacity (drift \(drift) bytes)")
+            return
+        }
+        let store = StorageSnapshotStore()
+        try store.save(snapshot)
+
+        print("stored \(store.fileURL(for: snapshot).lastPathComponent)")
+        print("  used           \(ByteFormatting.string(snapshot.usedBytes))")
+        print("  nodes          \(snapshot.nodes.count) folders at or above "
+              + "\(ByteFormatting.string(snapshot.contract.minimumNodeBytes)) "
+              + "(depth \(snapshot.contract.nodeDepth))")
+        print("  drift          \(drift) bytes  \(drift == 0 ? "(exact)" : "(MISMATCH)")")
+        print("  elapsed        \(String(format: "%.1fs", elapsed))")
+        print("  history        \(store.load().count) measurements in \(store.directory.path)")
+    }
+
+    /// Prints what changed since a chosen baseline.
+    static func growth(baseline: String?) throws {
+        let kind: GrowthBaseline = switch baseline ?? "previous" {
+        case "previous": .previousMeasurement
+        case "7d":       .sevenDays
+        case "cleanup":  .lastCleanup
+        default:         throw CLIError.usage("growth takes previous, 7d or cleanup")
+        }
+
+        let store = StorageSnapshotStore()
+        let history = store.loadWithDiagnostics()
+        print("history: \(history.snapshots.count) measurements"
+              + (history.unreadableCount > 0 ? ", \(history.unreadableCount) unreadable" : ""))
+
+        switch StorageGrowth.comparison(kind, in: history.snapshots) {
+        case .insufficientHistory:
+            print("  no baseline for \"\(kind.displayName)\". Take another snapshot.")
+        case .notComparable(let reason):
+            print("  not comparable: \(reason)")
+        case .report(let report):
+            print("  baseline       \(stamp(report.baseline))")
+            print("  latest         \(stamp(report.latest))")
+            print("")
+            print("  used space     \(ByteFormatting.signedString(report.usedDeltaBytes))")
+            print("")
+            for growthClass in GrowthClass.allCases {
+                let delta = report.classDeltas[growthClass] ?? 0
+                guard delta != 0 else { continue }
+                let name = growthClass.displayName.padding(toLength: 20, withPad: " ", startingAt: 0)
+                print("  \(name) \(ByteFormatting.signedString(delta))")
+            }
+            print("")
+            if report.attributions.isEmpty {
+                print("  no folder changed by enough to name.")
+            }
+            for attribution in report.attributions {
+                let delta = ByteFormatting.signedString(attribution.deltaBytes)
+                    .padding(toLength: 11, withPad: " ", startingAt: 0)
+                let name = attribution.segment.displayName
+                    .padding(toLength: 24, withPad: " ", startingAt: 0)
+                print("  \(delta) \(name) \(FileEntry.abbreviate(attribution.path))"
+                      + "  [\(describe(attribution.kind))]")
+            }
+        }
+    }
+
+    private static func stamp(_ snapshot: StorageSnapshot) -> String {
+        snapshot.measuredAt.formatted(date: .abbreviated, time: .standard)
+            + "  (\(snapshot.trigger.rawValue))"
+    }
+
+    private static func describe(_ kind: GrowthAttribution.Kind) -> String {
+        switch kind {
+        case .grew:                "grew"
+        case .shrank:              "shrank"
+        case .appeared:            "new"
+        case .disappeared:         "gone"
+        case .movedIn(let from):   "moved from \(FileEntry.abbreviate(from))"
+        case .movedOut(let to):    "moved to \(FileEntry.abbreviate(to))"
+        }
     }
 
     static func snapshots() async throws {

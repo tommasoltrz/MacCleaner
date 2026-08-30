@@ -38,6 +38,18 @@ struct DashboardView: View {
                     measuringPlaceholder
                 }
 
+                // Directly under the capacity card, because it answers the question
+                // that card provokes. It carries no measuring state: the report is
+                // dated history, and it stays on screen while the next walk runs.
+                if let growth = model.growth {
+                    GrowthCard(
+                        presentation: GrowthCard.Presentation(growth),
+                        baseline: model.growthBaseline,
+                        onSelectBaseline: { model.growthBaseline = $0 },
+                        onReveal: { model.revealGrowth($0) }
+                    )
+                }
+
                 StatTiles(
                     results: model.scanResults,
                     lastScanAt: model.lastScanFinishedAt,

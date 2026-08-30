@@ -74,6 +74,15 @@ public enum StorageSegmentID: String, Sendable, CaseIterable, Codable {
     }
 }
 
+/// Lets a `[StorageSegmentID: Int64]` table encode as a JSON object.
+///
+/// Without this conformance the standard library writes a dictionary with a
+/// non-`String` key as a flat array of alternating keys and values. It round-trips
+/// correctly either way, but a stored measurement is a record the user can open and
+/// read, and `{"downloads": 21548...}` is that record; `["downloads", 21548...]` is
+/// a puzzle.
+extension StorageSegmentID: CodingKeyRepresentable {}
+
 public struct StorageSegment: Sendable, Equatable, Identifiable, Codable {
     public let id: StorageSegmentID
     public var bytes: Int64
@@ -98,6 +107,17 @@ public struct StorageBreakdown: Sendable, Equatable, Codable {
 
     public var usedBytes: Int64 { capacityBytes - freeBytes }
     public var freeBytes: Int64 { segments.first { $0.id == .free }?.bytes ?? 0 }
+
+    /// Whether every byte of capacity lands in exactly one segment.
+    ///
+    /// The capacity card's one contract, stated as a value the code can test. The
+    /// CLI harness prints the same figure as `drift`, and drift must be 0 bytes.
+    /// A measurement that fails this is refused as a growth baseline: a comparison
+    /// against a breakdown that does not add up subtracts two different accounts of
+    /// the disk and calls the difference growth.
+    public var isConsistent: Bool {
+        capacityBytes > 0 && segments.reduce(Int64(0)) { $0 + $1.bytes } == capacityBytes
+    }
 
     /// The Dashboard legend. Every measured segment stays visible so the listed
     /// figures add up to the disk capacity.

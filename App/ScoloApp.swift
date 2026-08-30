@@ -44,7 +44,8 @@ struct ScoloApp: App {
                 onRebuildIndex: {
                     ScoloCore.BreakdownCache.clear()
                     Task { await model.measureStorage() }
-                }
+                },
+                onClearMeasurementHistory: { model.clearMeasurementHistory() }
             )
         }
         // Without this AppKit lets the Settings window be dragged wider than any of

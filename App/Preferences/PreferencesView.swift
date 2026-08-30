@@ -23,6 +23,7 @@ struct PreferencesView: View {
     /// Supplied by the caller because both outlive the window: rebuilding walks the
     /// disk, and a reset has to clear scan state the store knows nothing about.
     var onRebuildIndex: (() -> Void)?
+    var onClearMeasurementHistory: (() -> Void)?
     var onResetSettings: (() -> Void)?
 
     var body: some View {
@@ -39,6 +40,7 @@ struct PreferencesView: View {
             AdvancedPane(
                 settings: settings,
                 onRebuildIndex: onRebuildIndex,
+                onClearMeasurementHistory: onClearMeasurementHistory,
                 onResetSettings: onResetSettings
             )
             .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
