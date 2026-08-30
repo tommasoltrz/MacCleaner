@@ -10,3 +10,6 @@ dist/
 build/
 CLAUDE.local.md
 BACKLOG.local.md
+
+# Design sources and concept renders — kept locally, not in the repo
+design/
