@@ -12,28 +12,35 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let volume = model.volume {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(ByteFormatting.string(volume.freeBytes)) free")
-                        .font(.mcRowTitle)
-                    Text("of \(ByteFormatting.string(volume.capacityBytes)) on \(volume.name)")
+        // Two paddings, not one. The rows are inset 6 pt so their highlight runs
+        // close to the popover's edges the way a menu's does, and everything that
+        // is not a row is inset a further 6 pt so its text still lines up with the
+        // row labels at 12 pt from the edge.
+        VStack(alignment: .leading, spacing: 6) {
+            Group {
+                if let volume = model.volume {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(ByteFormatting.string(volume.freeBytes)) free")
+                            .font(.mcRowTitle)
+                        Text("of \(ByteFormatting.string(volume.capacityBytes)) on \(volume.name)")
+                            .font(.mcSubtitle)
+                            .foregroundStyle(Token.Text.secondary)
+                    }
+
+                    ProgressView(
+                        value: Double(volume.usedBytes),
+                        total: Double(max(volume.capacityBytes, 1))
+                    )
+                    .progressViewStyle(.linear)
+                } else {
+                    Text("Measuring…")
                         .font(.mcSubtitle)
                         .foregroundStyle(Token.Text.secondary)
                 }
 
-                ProgressView(
-                    value: Double(volume.usedBytes),
-                    total: Double(max(volume.capacityBytes, 1))
-                )
-                .progressViewStyle(.linear)
-            } else {
-                Text("Measuring…")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.secondary)
+                Divider()
             }
-
-            Divider()
+            .padding(.horizontal, 6)
 
             Button("Scan for Junk") {
                 NSApp.activate(ignoringOtherApps: true)
@@ -53,12 +60,13 @@ struct MenuBarView: View {
             }
 
             Divider()
+                .padding(.horizontal, 6)
 
             Button("Quit Scolo") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }
-        .buttonStyle(.plain)
-        .padding(12)
+        .buttonStyle(MenuItemButtonStyle())
+        .padding(6)
         .frame(width: 240)
     }
 }
