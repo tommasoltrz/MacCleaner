@@ -75,10 +75,6 @@ struct MainWindow: View {
                 TrashView(model: model)
             case .duplicates:
                 DuplicatesView(model: model)
-            case .safeToRemove:
-                FilteredEntriesView(model: model, filter: .safeToRemove)
-            case .needsReview:
-                FilteredEntriesView(model: model, filter: .needsReview)
             }
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
@@ -197,13 +193,13 @@ struct MainWindow: View {
             .buttonStyle(SecondaryButtonStyle())
             .disabled(model.isDashboardLoading)
 
-        case .scanner, .safeToRemove, .needsReview:
-            // The tile drill-downs promise a sweep — "safe to remove" especially —
-            // and a sweep should not mean ticking every row by hand. It sits beside
-            // Deselect All rather than up in the header, where the two halves of
-            // one decision were a window apart. The Scanner is a browsing view with
-            // per-category controls, so it keeps Deselect All alone.
-            if model.view == .safeToRemove || model.view == .needsReview {
+        case .scanner:
+            // A filtered list promises a sweep — "safe to remove" especially — and a
+            // sweep should not mean ticking every row by hand. It sits beside
+            // Deselect All rather than up in the header, where the two halves of one
+            // decision were a window apart. The unfiltered outline is for browsing
+            // and has per-category controls, so it keeps Deselect All alone.
+            if model.scanFilter != .all {
                 Button("Select All") { model.selectAllInCurrentView() }
                     .buttonStyle(SecondaryButtonStyle())
                     .disabled(!model.canSelectAllInCurrentView || model.isCleaningUp)

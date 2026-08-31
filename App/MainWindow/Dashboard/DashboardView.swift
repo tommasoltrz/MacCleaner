@@ -41,8 +41,11 @@ struct DashboardView: View {
                 StatTiles(
                     results: model.scanResults,
                     lastScanAt: model.lastScanFinishedAt,
-                    onSafeTap: { model.view = .safeToRemove },
-                    onReviewTap: { model.view = .needsReview },
+                    // The tiles are a summary of the scan; the scan's own page is
+                    // where its rows live, so a tile opens the Scanner on the list
+                    // it counted rather than a page of its own.
+                    onSafeTap: { model.showScanner(filtered: .safeToRemove) },
+                    onReviewTap: { model.showScanner(filtered: .needsReview) },
                     onScan: { model.startScan() }
                 )
 

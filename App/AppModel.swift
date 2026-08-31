@@ -88,14 +88,11 @@ final class AppModel {
 
     enum View: String, CaseIterable, Identifiable {
         case dashboard, scanner, storageExplorer, uninstaller, history, trash, duplicates
-        // Reached from the Dashboard tiles, not the sidebar. Back returns.
-        case safeToRemove, needsReview
         var id: String { rawValue }
 
-        /// The sidebar's rows. The tile views stay out: they are drill-downs from
-        /// the Dashboard, and listing them as siblings would make four views six.
-        /// Destructive workflows sit at the end: review an application's complete
-        /// uninstall first, then the Trash where removed items ultimately land.
+        /// The sidebar's rows. Destructive workflows sit at the end: review an
+        /// application's complete uninstall first, then the Trash where removed
+        /// items ultimately land.
         static var sidebarCases: [View] {
             [.dashboard, .scanner, .storageExplorer, .duplicates, .uninstaller, .history, .trash]
         }
@@ -109,8 +106,6 @@ final class AppModel {
             case .history:      "History"
             case .trash:        "Trash"
             case .duplicates:   "Duplicates"
-            case .safeToRemove: "Safe to Remove"
-            case .needsReview:  "Needs Review"
             }
         }
 
@@ -124,8 +119,43 @@ final class AppModel {
             case .history:      "clock.arrow.circlepath"
             case .trash:        "trash"
             case .duplicates:   "square.on.square"
-            case .safeToRemove: "checkmark.shield"
-            case .needsReview:  "questionmark.folder"
+            }
+        }
+    }
+
+    /// Which part of the scan the Scanner is showing.
+    ///
+    /// Safe to Remove and Needs Review used to be views of their own, reached from
+    /// the Dashboard tiles and from nowhere else. A scan lands on the Scanner, so
+    /// the scan's conclusion — what regenerates, what wants a decision — has to be
+    /// readable there; asking the user to go back to the Dashboard for it was
+    /// asking them to leave the page the scan had just put them on.
+    ///
+    /// The filter narrows the list and nothing else. The composition bar above it
+    /// keeps describing the whole scan, whichever lens is chosen.
+    enum ScanFilter: String, CaseIterable, Identifiable {
+        case all, safeToRemove, needsReview
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .all:          "All"
+            case .safeToRemove: "Safe to Remove"
+            case .needsReview:  "Needs Review"
+            }
+        }
+
+        /// What this lens holds, in one line. `all` has none: the header and the
+        /// composition bar above it already describe the whole scan.
+        var explanation: String? {
+            switch self {
+            case .all:
+                nil
+            case .safeToRemove:
+                "Caches and package files regenerate on demand. Application leftovers "
+                    + "have no installed owner."
+            case .needsReview:
+                "Large files and unused apps. Look before you remove."
             }
         }
     }
@@ -157,6 +187,7 @@ final class AppModel {
         }
     }
     var duplicateKind: DuplicateKind = .files
+    var scanFilter: ScanFilter = .all
     private var history: [View] = []
     private var forwardStack: [View] = []
 
@@ -585,11 +616,27 @@ final class AppModel {
             .sorted { $0.displayBytes > $1.displayBytes }
     }
 
-    /// Rows in the current drill-down whose checkbox actually works. A locked entry
-    /// — a running app, user data, a manual-removal aggregate — must never be swept
-    /// into a total that would then fail at cleanup.
+    /// Opens the Scanner on one of its filtered lists.
+    ///
+    /// The order matters: the filter is set before the view, so the Scanner draws
+    /// the requested list on its first frame instead of showing the whole outline
+    /// for a frame and then replacing it.
+    func showScanner(filtered filter: ScanFilter) {
+        scanFilter = filter
+        view = .scanner
+    }
+
+    /// Rows in the filtered list whose checkbox actually works. A locked entry — a
+    /// running app, user data, a manual-removal aggregate — must never be swept into
+    /// a total that would then fail at cleanup.
+    ///
+    /// Empty under `.all`: that list is grouped by category with its own per-category
+    /// controls, and a sweep across every category at once is not something the
+    /// Scanner offers.
     private var selectableInCurrentView: [FileEntry] {
-        switch view {
+        switch scanFilter {
+        case .all:
+            []
         case .safeToRemove:
             tileEntries(safeToRemove: true).filter {
                 !$0.isRemovalLocked && $0.kind != .appBundle
@@ -598,7 +645,6 @@ final class AppModel {
             tileEntries(safeToRemove: false).filter {
                 !$0.isRemovalLocked && $0.kind != .appBundle
             }
-        default:            []
         }
     }
 
@@ -614,7 +660,7 @@ final class AppModel {
     /// seeding happens once per scan and never fights the user afterwards.
     @ObservationIgnored private var safeSelectionSeededAt: Date?
 
-    /// Opens "Safe to Remove" with everything already ticked.
+    /// Ticks everything in the Safe to Remove list the moment it is shown.
     ///
     /// This list contains regenerable data and verified application leftovers.
     /// Locked rows stay clear of the selection, and Clean Up still asks for
