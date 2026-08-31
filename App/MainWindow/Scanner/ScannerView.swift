@@ -20,19 +20,18 @@ struct ScannerView: View {
                     header
                     if results.totalBytes > 0 {
                         ScanCompositionSummary(results: results)
+                        // Under the bar, never above it: the bar describes the whole
+                        // scan and goes on doing so while the list below it narrows.
+                        filterPicker
                     }
-                    GroupedBox {
-                        VStack(spacing: 0) {
-                            ForEach(Array(results.categories.enumerated()), id: \.element.id) { index, category in
-                                if index > 0 {
-                                    Divider().foregroundStyle(Token.Fill.boxBorder)
-                                }
-                                categorySection(category)
-                            }
-                        }
-                        // Without this the first and last rows' hover fill paints
-                        // into the box's rounded corners and squares them off.
-                        .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+                    // A scan that found nothing has nothing to filter, and the
+                    // outline is the only one of the three that still has something
+                    // to say — a category's own message, including why it is empty.
+                    switch results.totalBytes > 0 ? model.scanFilter : .all {
+                    case .all:
+                        categoryOutline(results)
+                    case .safeToRemove, .needsReview:
+                        FilteredEntryList(model: model, filter: model.scanFilter)
                     }
                 } else {
                     emptyState
@@ -74,7 +73,39 @@ struct ScannerView: View {
         return "\(count) \(noun) selected · \(ByteFormatting.string(model.selectedBytes))"
     }
 
+    // MARK: - Filter
+
+    /// Segmented, and sized to its labels rather than the page: this narrows a list,
+    /// it does not switch between three pages.
+    private var filterPicker: some View {
+        Picker("Show", selection: $model.scanFilter) {
+            ForEach(AppModel.ScanFilter.allCases) { filter in
+                Text(filter.title).tag(filter)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .padding(.horizontal, 2)
+    }
+
     // MARK: - Sections
+
+    private func categoryOutline(_ results: ScanResults) -> some View {
+        GroupedBox {
+            VStack(spacing: 0) {
+                ForEach(Array(results.categories.enumerated()), id: \.element.id) { index, category in
+                    if index > 0 {
+                        Divider().foregroundStyle(Token.Fill.boxBorder)
+                    }
+                    categorySection(category)
+                }
+            }
+            // Without this the first and last rows' hover fill paints into the
+            // box's rounded corners and squares them off.
+            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+        }
+    }
 
     @ViewBuilder
     private func categorySection(_ category: ScanCategoryResult) -> some View {
