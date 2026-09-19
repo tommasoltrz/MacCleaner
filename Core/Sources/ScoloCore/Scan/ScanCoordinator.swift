@@ -178,6 +178,7 @@ public actor ScanCoordinator {
         // generic row contains a leftover path, remove the full row. Keeping that
         // parent would also remove the protected child when cleanup removes it.
         results = removingApplicationLeftoverOverlaps(from: results)
+        results = removingInstalledApplicationOverlaps(from: results)
 
         // Present in the design's fixed order, not completion order.
         let order = CategoryID.allCases
@@ -219,6 +220,56 @@ public actor ScanCoordinator {
                 entry.children.removeAll(where: overlapsLeftover)
                 return entry
             }
+            copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }
+            if copy.entries.isEmpty, copy.availability == .available {
+                copy.availability = .empty
+            }
+            return copy
+        }
+    }
+
+    /// An installed application's row owns the caches listed under it.
+    ///
+    /// `~/Library/Caches/<bundle id>` is a child of its application's row and also
+    /// an immediate child of `~/Library/Caches`, which System Caches lists whole.
+    /// Both categories offered it, and both halves count towards Safe to remove: on
+    /// this Mac on 19 Sep 2026 Spotify's 199.3 MB cache and Surfshark's were each
+    /// promised twice. `scolo-cli scan` said "categories are disjoint" throughout,
+    /// because it compared rows and never looked at children.
+    ///
+    /// The application keeps the path and the generic row goes, for two reasons.
+    /// Children are what is removed alongside the application, so the uninstaller's
+    /// list would otherwise lose a folder that is plainly the application's. And the
+    /// application's row knows its running owner by bundle path, which is ground
+    /// truth; System Caches can only guess an owner from a folder name.
+    ///
+    /// Only a regenerable, unlocked child claims anything. A container or support
+    /// folder is user data and locked, and a generic row inside one — Mail Downloads
+    /// inside Mail's container — is the removable part of it, not a duplicate.
+    static func removingInstalledApplicationOverlaps(
+        from results: [ScanCategoryResult]
+    ) -> [ScanCategoryResult] {
+        let claimed = results
+            .first(where: { $0.categoryID == .applications })?
+            .entries
+            .flatMap(\.children)
+            .filter { $0.isRegenerable && !$0.isRemovalLocked }
+            .map { $0.url.standardizedFileURL.path } ?? []
+        guard !claimed.isEmpty else { return results }
+
+        func isClaimed(_ entry: FileEntry) -> Bool {
+            let path = entry.url.standardizedFileURL.path
+            return claimed.contains { path == $0 || path.hasPrefix($0 + "/") }
+        }
+
+        return results.map { result in
+            guard result.categoryID != .applications,
+                  result.categoryID != .applicationLeftovers,
+                  result.entries.contains(where: isClaimed)
+            else { return result }
+
+            var copy = result
+            copy.entries.removeAll(where: isClaimed)
             copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }
             if copy.entries.isEmpty, copy.availability == .available {
                 copy.availability = .empty

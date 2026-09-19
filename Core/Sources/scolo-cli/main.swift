@@ -175,10 +175,14 @@ struct CLI {
 
         // Every byte must be offered by exactly one category. Overlapping roots would
         // make "Safe to remove" promise space the disk cannot give back twice.
+        //
+        // Children count too. An application's row carries its caches as children,
+        // and the tiles sum a row's regenerable children, so a path that is a row in
+        // one category and a child in another is promised twice as surely as two rows.
         var owner: [String: CategoryID] = [:]
         var collisions: [(String, CategoryID, CategoryID)] = []
         for category in results.categories {
-            for entry in category.entries {
+            for entry in category.entries.flatMap({ [$0] + $0.children }) {
                 if let existing = owner[entry.id], existing != category.categoryID {
                     collisions.append((entry.id, existing, category.categoryID))
                 } else {
