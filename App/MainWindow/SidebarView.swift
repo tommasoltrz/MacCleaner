@@ -82,17 +82,11 @@ struct SidebarView: View {
                     .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
                 }
             }
-
-            Section("Locations") {
-                Label {
-                    Text(model.volume?.name ?? "Macintosh HD")
-                } icon: {
-                    Image(systemName: "internaldrive")
-                        .foregroundStyle(Token.Text.secondary)
-                }
-                // Labels the scope of every scan rather than navigating anywhere.
-                .foregroundStyle(Token.Text.secondary)
-            }
+            // No "Locations" section. It held one row, the startup volume, which
+            // went nowhere: a label for the scope of every scan, dressed as a place
+            // in a source list, where a row is a promise that pressing it does
+            // something — and that a second disk could be picked, which no scan
+            // offers. The footer below still names the volume beside its free space.
         }
         .listStyle(.sidebar)
         // Anything that moves the app without going through a row — the Dashboard's
