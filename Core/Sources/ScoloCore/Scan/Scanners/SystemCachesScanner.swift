@@ -162,6 +162,9 @@ public struct SystemCachesScanner: CategoryScanner {
                     // demand. This is what earns the category its green `safe` badge
                     // and puts it in the Dashboard's "Safe to remove" total.
                     isRegenerable: true,
+                    // Still regenerable, no longer *safe* while its owner runs —
+                    // see `FileEntry.inUseBy`.
+                    inUseBy: context.runningOwner(ofCacheNamed: url.lastPathComponent),
                     childCount: Self.childCount(of: url)
                 ))
             }

@@ -24,6 +24,9 @@ public struct ScanContext: Sendable {
     /// (NSWorkspace is AppKit, which Core deliberately does not import). Unlike any
     /// date heuristic this is ground truth: a running app is in use, full stop.
     public var runningApplicationPaths: Set<String>
+    /// The same ground truth with names attached, so a cache can say *whose* it is.
+    /// Every bundle path here is also in `runningApplicationPaths`.
+    public var runningApplications: [FileEntry.RunningOwner]
     /// Application owners that Launch Services currently resolves.
     public var registeredApplicationBundleIdentifiers: Set<String>
     /// The candidate scan those owners were resolved from. Handed through so the
@@ -38,6 +41,7 @@ public struct ScanContext: Sendable {
         excludedPatterns: [String] = [],
         protectRecentDays: Int = 30,
         runningApplicationPaths: Set<String> = [],
+        runningApplications: [FileEntry.RunningOwner] = [],
         registeredApplicationBundleIdentifiers: Set<String> = [],
         applicationLeftoverCandidates: OrphanedAppLeftoverPlanner.CandidateScan? = nil
     ) {
@@ -51,8 +55,46 @@ public struct ScanContext: Sendable {
         self.excludedPatterns = excludedPatterns
         self.protectRecentDays = protectRecentDays
         self.runningApplicationPaths = runningApplicationPaths
+            .union(runningApplications.map(\.bundlePath))
+        self.runningApplications = runningApplications
         self.registeredApplicationBundleIdentifiers = registeredApplicationBundleIdentifiers
         self.applicationLeftoverCandidates = applicationLeftoverCandidates
+    }
+
+    /// The running application at this bundle path, if there is one.
+    public func runningOwner(atBundlePath path: String) -> FileEntry.RunningOwner? {
+        runningApplications.first { $0.bundlePath == path }
+    }
+
+    /// The running application with this bundle identifier, if there is one.
+    public func runningOwner(bundleIdentifier: String) -> FileEntry.RunningOwner? {
+        runningApplications.first {
+            $0.bundleIdentifier?.caseInsensitiveCompare(bundleIdentifier) == .orderedSame
+        }
+    }
+
+    /// The running application a folder in `~/Library/Caches` or `~/Library/Logs`
+    /// belongs to, judged by the folder's name.
+    ///
+    /// Three shapes were seen on this Mac: the bundle identifier
+    /// (`com.apple.dt.Xcode`), the identifier with a helper suffix
+    /// (`com.spotify.client.helper`), and the app's own name (`Firefox`). Vendor
+    /// folders (`Google`, which holds Chrome's) match nothing by name, so the
+    /// identifier's vendor component is tried last: `com.google.Chrome` owns
+    /// `Google`. That last rule can over-claim — a second Google app would be blamed
+    /// on a running Chrome — and the cost of over-claiming is a row in Needs Review
+    /// instead of Safe to Remove, which is the direction to be wrong in.
+    public func runningOwner(ofCacheNamed folderName: String) -> FileEntry.RunningOwner? {
+        let name = folderName.lowercased()
+        return runningApplications.first { owner in
+            if owner.name.lowercased() == name { return true }
+            guard let identifier = owner.bundleIdentifier?.lowercased() else { return false }
+            if name == identifier || name.hasPrefix(identifier + ".") { return true }
+            let parts = identifier.split(separator: ".")
+            // Never for Apple: a dozen `com.apple.*` processes are always running
+            // and none of them is the owner of a folder called `Apple`.
+            return parts.count >= 3 && parts[1] != "apple" && String(parts[1]) == name
+        }
     }
 
     /// Whether an item was used inside the protection window. The answer becomes a

@@ -285,6 +285,7 @@ final class AppModel {
         case removingStorageItems(itemCount: Int, totalBytes: Int64)
         case reviewingStorageItems(itemCount: Int)
         case uninstalling(applicationName: String, applicationOnly: Bool, waitingToQuit: Bool)
+        case waitingForApplicationsToQuit(names: [String])
 
         var title: String {
             switch self {
@@ -306,6 +307,8 @@ final class AppModel {
                 return "Reviewing \(count) \(items)"
             case .uninstalling(let name, _, let waiting):
                 return waiting ? "Waiting for \(name) to quit" : "Uninstalling \(name)"
+            case .waitingForApplicationsToQuit(let names):
+                return "Waiting for \(ListFormatter.localizedString(byJoining: names)) to quit"
             }
         }
 
@@ -322,6 +325,9 @@ final class AppModel {
                 // in full again, which is what makes a set of large videos slow.
                 return "\(ByteFormatting.string(bytes)). Each copy and its keeper are "
                     + "verified byte for byte before it goes, so large files take a moment."
+            case .waitingForApplicationsToQuit:
+                return "Each application is asked to quit, never forced — answer any "
+                    + "save prompt it shows. Nothing is removed until they are gone."
             case .reviewingStorageItems:
                 return "Scolo is updating each size and checking each item before confirmation."
             case .uninstalling(_, let applicationOnly, let waiting):
@@ -929,6 +935,10 @@ final class AppModel {
         let applicationLeftoverPlan: OrphanedAppLeftoverPlan?
         let orphanedApplicationBundleIdentifiers: Set<String>
         let orphanedApplicationItemPaths: Set<String>
+        /// Applications that own something in this plan and were open when the
+        /// sheet was — checked against NSWorkspace at capture, not read off the
+        /// scan, so an app the user has since quit is not named.
+        var runningOwners: [FileEntry.RunningOwner] = []
 
         /// What this plan would actually free, filled in after the sheet is already
         /// on screen. The plan itself is fixed at capture; this is a reading of the
@@ -1010,11 +1020,19 @@ final class AppModel {
         )
         guard !plan.entries.isEmpty || !plan.orphanedApplicationBundleIdentifiers.isEmpty
         else { return }
-        pendingCleanUp = plan
+        var captured = plan
+        captured.runningOwners = Self.stillRunning(
+            entries.flatMap {
+                CleanupService.removalTargets(for: $0, removeProtectedAppData: false)
+            }.compactMap(\.inUseBy)
+        )
+        pendingCleanUp = captured
 
         // A global "don't ask" preference never suppresses the warning for data the
-        // user had to unlock explicitly.
-        if settings?.confirmBeforeCleanup ?? true || plan.protectedDataCount > 0 {
+        // user had to unlock explicitly — nor the one about open applications,
+        // since the sheet is the only place that offers to quit them.
+        if settings?.confirmBeforeCleanup ?? true || plan.protectedDataCount > 0
+            || !captured.runningOwners.isEmpty {
             activeSheet = .cleanUp
             measureCleanUpSaving(for: plan)
         } else {
@@ -1055,6 +1073,87 @@ final class AppModel {
         activeSheet = nil
     }
 
+    // MARK: - Open applications
+
+    /// Every open application the user could be asked to quit, as Core's
+    /// `RunningOwner`.
+    ///
+    /// Ordinary Dock applications only. The first real scan named "Siri" as an
+    /// owner — a background agent — and by the same reading Finder, or Scolo's own
+    /// cache folder, would put Finder or Scolo on the list "Quit and Clean" works
+    /// through. An owner is something the user opened and can close.
+    static func currentRunningOwners() -> [FileEntry.RunningOwner] {
+        NSWorkspace.shared.runningApplications.compactMap { application in
+            guard application.activationPolicy == .regular,
+                  application.bundleIdentifier != Bundle.main.bundleIdentifier,
+                  application.bundleIdentifier != "com.apple.finder"
+            else { return nil }
+            guard let url = application.bundleURL else { return nil }
+            return FileEntry.RunningOwner(
+                name: application.localizedName
+                    ?? url.deletingPathExtension().lastPathComponent,
+                bundleIdentifier: application.bundleIdentifier,
+                bundlePath: url.path
+            )
+        }
+    }
+
+    /// The live processes behind one owner: the application itself and every helper
+    /// embedded in its bundle, the same net the uninstaller casts.
+    private static func processes(of owner: FileEntry.RunningOwner) -> [NSRunningApplication] {
+        let path = URL(fileURLWithPath: owner.bundlePath).standardizedFileURL.path
+        return NSWorkspace.shared.runningApplications.filter { application in
+            if let identifier = owner.bundleIdentifier,
+               application.bundleIdentifier == identifier { return true }
+            guard let url = application.bundleURL?.standardizedFileURL else { return false }
+            return url.path == path || url.path.hasPrefix(path + "/")
+        }
+    }
+
+    /// The owners among these that are open right now, once each.
+    private static func stillRunning(
+        _ owners: [FileEntry.RunningOwner]
+    ) -> [FileEntry.RunningOwner] {
+        var seen: Set<FileEntry.RunningOwner> = []
+        return owners.filter { seen.insert($0).inserted && !processes(of: $0).isEmpty }
+    }
+
+    /// Asks each owner to quit and waits. Returns the ones that stayed.
+    ///
+    /// `terminate()`, never `forceTerminate()`: a browser with forty tabs or an
+    /// Xcode with unsaved files may put up a prompt, and that prompt is the user's
+    /// to answer. Hence 30 s and not the uninstaller's 3 — measured against nothing;
+    /// it is a guess at how long a person takes to press Save.
+    private func quit(_ owners: [FileEntry.RunningOwner]) async -> [FileEntry.RunningOwner] {
+        activity = .waitingForApplicationsToQuit(names: owners.map(\.name))
+        for owner in owners {
+            for process in Self.processes(of: owner) { process.terminate() }
+        }
+        for _ in 0..<300 where !Self.stillRunning(owners).isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return Self.stillRunning(owners)
+    }
+
+    /// The owners are gone, so the rows they held are ordinary caches again: the
+    /// ones this clean-up leaves behind go back to Safe to Remove without a rescan.
+    private func clearInUse(of owners: [FileEntry.RunningOwner]) {
+        guard var results = scanResults else { return }
+        let gone = Set(owners)
+        func cleared(_ entry: FileEntry) -> FileEntry {
+            var entry = entry
+            if let owner = entry.inUseBy, gone.contains(owner) { entry.inUseBy = nil }
+            entry.children = entry.children.map(cleared)
+            return entry
+        }
+        results.categories = results.categories.map { category in
+            var copy = category
+            copy.entries = category.entries.map(cleared)
+            return copy
+        }
+        scanResults = results
+    }
+
     // MARK: - Removal
 
     private let cleanupService = CleanupService()
@@ -1064,9 +1163,32 @@ final class AppModel {
     /// Freed bytes come from `CleanupOutcome`, measured immediately before each
     /// removal — never from the selection total, which would report what we *hoped*
     /// to free rather than what actually went.
-    func performCleanUp() async {
+    ///
+    /// - Parameter quittingOwners: ask the plan's open applications to quit first.
+    ///   If any of them is still there when the wait ends, **nothing is removed**:
+    ///   the user asked for a clean-up without a live owner, and quietly doing the
+    ///   other kind is how Chrome lost its dictionaries.
+    func performCleanUp(quittingOwners: Bool = false) async {
         // The captured plan, never the live settings — see `CleanupPlan`.
         guard let plan = pendingCleanUp, activity == nil else { return }
+
+        if quittingOwners, !plan.runningOwners.isEmpty {
+            cleanUpSavingTask?.cancel()
+            // The sheet goes first or the overlay that says what is happening
+            // would sit underneath it.
+            activeSheet = nil
+            let stragglers = await quit(plan.runningOwners)
+            guard stragglers.isEmpty else {
+                activity = nil
+                pendingCleanUp = nil
+                let names = ListFormatter.localizedString(byJoining: stragglers.map(\.name))
+                statusMessage = "\(names) did not quit, so nothing was removed. "
+                    + "Quit it yourself and try Clean Up again."
+                return
+            }
+            clearInUse(of: plan.runningOwners)
+        }
+
         activity = .cleaningUp(
             itemCount: plan.itemCount,
             totalBytes: plan.totalBytes,
@@ -1551,6 +1673,9 @@ final class AppModel {
                 let running = Set(
                     NSWorkspace.shared.runningApplications.compactMap { $0.bundleURL?.path }
                 )
+                // The same truth with names attached, so a cache can say whose it
+                // is — see `FileEntry.inUseBy`.
+                let runningOwners = Self.currentRunningOwners()
                 // The preferences' whole reason to exist flows in here: exclusions,
                 // the recency shield, the symlink toggle and disabled categories
                 // were all collected and then ignored until this call passed them.
@@ -1583,6 +1708,7 @@ final class AppModel {
                     excludedPatterns: settings?.excludedPatterns ?? [],
                     protectRecentDays: settings?.protectRecentDays.rawValue ?? 30,
                     runningApplicationPaths: running,
+                    runningApplications: runningOwners,
                     registeredApplicationBundleIdentifiers: registeredIdentifiers,
                     applicationLeftoverCandidates: leftoverCandidates
                 )

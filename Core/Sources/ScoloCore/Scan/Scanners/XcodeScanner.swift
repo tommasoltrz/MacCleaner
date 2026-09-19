@@ -245,6 +245,7 @@ public struct XcodeScanner: CategoryScanner {
                         allocatedBytes: measurement.allocatedBytes,
                         lastOpened: lastOpenedDate(for: output.url),
                         isRegenerable: true,
+                        inUseBy: Self.runningOwner(of: output.url, context: context),
                         childCount: (try? fileManager.contentsOfDirectory(
                             atPath: output.url.path
                         ))?.count
@@ -339,8 +340,23 @@ public struct XcodeScanner: CategoryScanner {
             lastOpened: lastOpened,
             // From the root that emitted this row — see `Root.regenerable`.
             isRegenerable: isRegenerable,
+            inUseBy: Self.runningOwner(of: url, context: context),
             childCount: (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
         )
+    }
+
+    /// The running tool that has this tree open — see `FileEntry.inUseBy`.
+    ///
+    /// Removing DerivedData under an idle Xcode is routine; under a build it fails
+    /// the build, and a module cache taken from a live Xcode can leave "module not
+    /// found" errors that only a relaunch clears. Nothing here can tell idle from
+    /// building, so an open Xcode withdraws "safe" from everything it writes.
+    /// Simulator data answers to a booted Simulator first, and to Xcode, which
+    /// boots simulators of its own for previews and tests.
+    static func runningOwner(of url: URL, context: ScanContext) -> FileEntry.RunningOwner? {
+        let xcode = context.runningOwner(bundleIdentifier: "com.apple.dt.Xcode")
+        guard url.path.contains("/CoreSimulator") else { return xcode }
+        return context.runningOwner(bundleIdentifier: "com.apple.iphonesimulator") ?? xcode
     }
 
     private func isDirectory(_ url: URL) -> Bool {
