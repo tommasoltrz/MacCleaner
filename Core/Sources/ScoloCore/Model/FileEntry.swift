@@ -227,8 +227,24 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// children rather than rows and their parent is never safe.
     public var regenerableChildBytes: Int64 {
         children
-            .filter { $0.isRegenerable && !$0.isRemovalLocked && $0.inUseBy == nil }
+            .filter(\.regeneratesSafely)
             .reduce(0) { $0 + $1.allocatedBytes }
+    }
+
+    /// Whether this item may be *called* safe on the strength of regenerating.
+    ///
+    /// It regenerates, nothing refuses its removal, and no running application has
+    /// it open. A badge never overrides a lock, and a cache whose owner is running
+    /// is not safe *yet* — see `inUseBy`.
+    ///
+    /// One definition, because it had three. The tile arithmetic and the Safe to
+    /// Remove list each spelled it out, and the Scanner's child row spelled out a
+    /// shorter one: it painted `regenerable` green on `isRegenerable` alone. So on
+    /// 19 Sep 2026 every cache under a running Chrome wore the colour that means
+    /// safe while the tile, correctly, refused to count one of them. The figure and
+    /// the badge now ask the same question.
+    public var regeneratesSafely: Bool {
+        isRegenerable && !isRemovalLocked && inUseBy == nil
     }
 
     /// The size shown beside a top-level Scanner row. Applications show only their

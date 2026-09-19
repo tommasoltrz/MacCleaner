@@ -102,6 +102,34 @@ struct TileArithmeticTests {
         #expect(Self.tileMatchesItsList(category))
     }
 
+    /// The Scanner paints `regenerable` green from `regeneratesSafely`. On
+    /// 19 Sep 2026 it painted it from `isRegenerable` alone, and every cache under a
+    /// running Chrome was green while this tile counted none of them.
+    @Test("what is painted safe is exactly what the tile counts safe")
+    func greenBadgeAndTileAreOneClaim() {
+        var held = Self.child("Held Cache", bytes: 200, regenerable: true)
+        held.inUseBy = FileEntry.RunningOwner(
+            name: "Fixture", bundleIdentifier: "com.example.fixture",
+            bundlePath: "/Applications/Fixture.app"
+        )
+        let free = Self.child("Free Cache", bytes: 300, regenerable: true)
+        let locked = Self.child("Locked Cache", bytes: 400, regenerable: true, protection: .userData)
+        let data = Self.child("Support", bytes: 500, regenerable: false, protection: .userData)
+        let app = Self.application(
+            bytes: 1_000, children: [held, free, locked, data], protection: .running
+        )
+        let category = ScanCategoryResult(categoryID: .applications, entries: [app])
+
+        let green = app.children.filter(\.regeneratesSafely)
+        #expect(green.map(\.displayName) == ["Free Cache"])
+        // Still regenerable, all three — it is the *colour* that is withdrawn.
+        #expect(app.children.filter(\.isRegenerable).count == 3)
+        #expect(category.safeToRemoveBytes == green.reduce(0) { $0 + $1.allocatedBytes })
+        #expect(category.tileRows(safeToRemove: true).map(\.url) == green.map(\.url))
+        #expect(Self.isPartition(category))
+        #expect(Self.tileMatchesItsList(category))
+    }
+
     @Test("a safe category's regenerable row still counts whole")
     func safeCategoryUnchanged() {
         let derived = FileEntry(
