@@ -141,6 +141,60 @@ struct DisjointCategoriesTests {
         #expect(caches.totalBytes == 4_096)
     }
 
+    /// Spotify's 199.3 MB cache was promised twice on 19 Sep 2026: once as a row of
+    /// System Caches, once as a child of Spotify's own row.
+    @Test("an installed application's cache is offered by its row, not by System Caches too")
+    func installedApplicationsOwnTheirCaches() throws {
+        let caches = URL(fileURLWithPath: "/tmp/scolo-owned/Library/Caches", isDirectory: true)
+        let appCache = caches.appendingPathComponent("com.vendor.app", isDirectory: true)
+        let unowned = caches.appendingPathComponent("com.apple.akd", isDirectory: true)
+        let container = URL(fileURLWithPath: "/tmp/scolo-owned/Library/Containers/com.vendor.app")
+        let insideContainer = container.appendingPathComponent("Data/Downloads")
+
+        let app = FileEntry(
+            url: URL(fileURLWithPath: "/tmp/scolo-owned/Applications/App.app"),
+            kind: .appBundle,
+            allocatedBytes: 10_000,
+            children: [
+                FileEntry(url: appCache, kind: .cache, allocatedBytes: 2_048, isRegenerable: true),
+                FileEntry(url: container, kind: .folder, allocatedBytes: 9_000,
+                          protectionReason: .userData)
+            ]
+        )
+        let results = [
+            ScanCategoryResult(categoryID: .applications, totalBytes: 21_048, entries: [app]),
+            ScanCategoryResult(
+                categoryID: .systemCaches,
+                totalBytes: 6_144,
+                entries: [
+                    FileEntry(url: appCache, kind: .cache, allocatedBytes: 2_048, isRegenerable: true),
+                    FileEntry(url: unowned, kind: .cache, allocatedBytes: 4_096, isRegenerable: true)
+                ]
+            ),
+            ScanCategoryResult(
+                categoryID: .hiddenSystemData,
+                totalBytes: 1_024,
+                entries: [FileEntry(url: insideContainer, kind: .cache, allocatedBytes: 1_024,
+                                    isRegenerable: true)]
+            )
+        ]
+
+        let filtered = ScanCoordinator.removingInstalledApplicationOverlaps(from: results)
+        let system = try #require(filtered.first { $0.categoryID == .systemCaches })
+        let hidden = try #require(filtered.first { $0.categoryID == .hiddenSystemData })
+        let applications = try #require(filtered.first { $0.categoryID == .applications })
+
+        #expect(system.entries.map(\.url) == [unowned])
+        #expect(system.totalBytes == 4_096)
+        #expect(applications == results[0], "the application's row is never the one edited")
+        // A locked container claims nothing: the removable part inside it stays offered.
+        #expect(hidden.entries.map(\.url) == [insideContainer])
+
+        let safe = ScanResults(categories: filtered, startedAt: Date(), finishedAt: Date())
+            .safeToRemoveBytes
+        #expect(safe == 2_048 + 4_096, "each cache is promised once")
+    }
+
     @Test("only low-risk categories are safe to remove")
     func safeCategoriesUseVerifiedLowRiskRules() {
         // Cache files regenerate. Application leftovers have no installed owner.
