@@ -14,11 +14,20 @@ struct AppUninstallerView: View {
 
     @State private var isDropTargeted = false
     @State private var searchText = ""
-    @State private var sortOrder: SortOrder = .largest
+    /// By name, which is the order the list arrives in, so the page opens still.
+    /// It opened on `largest`: alphabetical while the bundles were measured, then
+    /// every card moving at once when the last size came in — a reshuffle nobody
+    /// had asked for, on a page the user had only just opened. Sorting by size is
+    /// now something the user chooses, and the one move follows their choice.
+    ///
+    /// There is no "Unsorted" option, though one was asked for: the list has no
+    /// order of its own to show — `AppUninstallPlanner.installedApplications` sorts
+    /// by name — so the label would sit beside `Name` and mean the same thing.
+    @State private var sortOrder: SortOrder = .name
 
     private enum SortOrder: String, CaseIterable {
-        case largest = "Largest"
         case name = "Name"
+        case largest = "Largest"
     }
 
     var body: some View {
@@ -54,8 +63,8 @@ struct AppUninstallerView: View {
     /// its corner opens that application's review. A tick is a choice of *which*
     /// applications, never consent to what goes with them: several ticked
     /// applications are each planned and listed in a batch review before the sheet.
-    /// Dropping an `.app` still works, for one inside a vendor folder. The page's
-    /// actions live in the window's status bar, where every other view keeps them.
+    /// Dropping an `.app` still works, for one inside a vendor folder. The page has
+    /// no footer: its actions sit in this header, beside the cards they act on.
     private var emptyState: some View {
         VStack(spacing: 0) {
             libraryHeader
@@ -129,10 +138,23 @@ struct AppUninstallerView: View {
 
     private var libraryHeader: some View {
         HStack(spacing: 10) {
-            Text(librarySummary)
-                .font(.mcCaption)
-                .foregroundStyle(Token.Text.secondary)
-                .help("Sizes are the application itself. Its related files are found when you open it.")
+            // A selection takes over the summary's place: the count the user is
+            // building matters more than the total they are not acting on.
+            if model.selectedApplicationIDs.isEmpty {
+                Text(librarySummary)
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+                    .lineLimit(1)
+                    .help("Sizes are the application itself. Its related files are found when you open it.")
+            } else {
+                Text("\(model.selectedApplicationIDs.count) selected")
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+                    .lineLimit(1)
+                Button("Deselect All", action: model.clearApplicationSelection)
+                    .buttonStyle(SecondaryButtonStyle())
+                    .fixedSize()
+            }
 
             Spacer()
 
@@ -142,14 +164,34 @@ struct AppUninstallerView: View {
             .labelsHidden()
             .fixedSize()
 
+            // The one thing in this header that may narrow. At a fixed 180 pt it
+            // won the space and the button beside it was cut to "Unins…" — a
+            // truncated label on the destructive control is the wrong one to lose.
             TextField("Search", text: $searchText)
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 180)
+                .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
 
+            if !model.selectedApplicationIDs.isEmpty {
+                // The ellipsis is the promise: related files are found and shown
+                // before anything is asked.
+                Button("Uninstall \(model.selectedApplicationIDs.count)…",
+                       action: model.reviewSelectedApplications)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(Token.color(.red))
+                    .disabled(model.activity != nil)
+                    .fixedSize()
+            }
         }
+        // Fixed, so the first tick does not push the grid down by the difference
+        // between a line of caption text and a button.
+        .frame(height: Self.headerControlHeight)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
     }
+
+    /// Tall enough for the header's tallest control, a regular bordered button.
+    private static let headerControlHeight: CGFloat = 24
 
     /// The total appears only once every card has its figure; a sum of the bundles
     /// measured so far would read as the whole and grow under the user's eyes.
@@ -166,9 +208,9 @@ struct AppUninstallerView: View {
         let matching = query.isEmpty ? applications : applications.filter {
             $0.name.localizedCaseInsensitiveContains(query)
         }
-        // By name until every size is in. Sorting on partial figures reshuffled the
-        // grid once per application measured — the "flicker" of a first visit. Now
-        // the cards fill in where they stand and move once, together.
+        // `Largest` waits for every size. Sorting on partial figures reshuffled
+        // the grid once per application measured; chosen early, the cards fill in
+        // where they stand and move once, together.
         guard sortOrder == .largest, model.installedApplicationsMeasured else { return matching }
         // An application that could not be measured compares as -1 and keeps its
         // alphabetical place at the end.
@@ -230,6 +272,18 @@ struct AppUninstallerView: View {
                         .font(.mcCaption)
                         .foregroundStyle(Token.Text.secondary)
                 }
+
+                // The review's button, in its place and disabled, so the figures do
+                // not slide left by its width when the plan lands. Nothing can be
+                // uninstalled before there is a plan, which is what disabled says.
+                // An application-only or Homebrew plan carries a longer label and
+                // will still shift; the ordinary one does not.
+                Button("Uninstall") {}
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(Token.color(.red))
+                    .disabled(true)
+                    .fixedSize()
             }
             HairlineDivider()
 
@@ -339,6 +393,27 @@ struct AppUninstallerView: View {
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)
             }
+
+            if let package = plan.managedPackage {
+                Button("Copy Homebrew Uninstall Command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(package.uninstallCommand, forType: .string)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .fixedSize()
+                .help(package.uninstallCommand)
+            } else {
+                // The size is in the figures beside it, so the label does not
+                // repeat it.
+                Button(plan.isApplicationOnly ? "Uninstall Application" : "Uninstall",
+                       action: model.requestAppUninstall)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .tint(Token.color(.red))
+                    .disabled(model.activity != nil)
+                    .fixedSize()
+            }
         }
     }
 
@@ -357,6 +432,8 @@ struct AppUninstallerView: View {
                 Text(name)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Text(identifier)
                     .font(.mcMonoSmall)
                     .foregroundStyle(identifierIsWarning
@@ -364,9 +441,11 @@ struct AppUninstallerView: View {
                     .lineLimit(1)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            figures()
+            // The figure and the action keep their width; the name beside them is
+            // what truncates when the window is narrow.
+            figures().fixedSize()
 
             Button(action: model.resetAppUninstall) {
                 Image(systemName: "xmark.circle.fill")
@@ -572,6 +651,9 @@ struct AppUninstallerView: View {
 
     private func batchReviewState(_ review: AppModel.BatchUninstallReview) -> some View {
         VStack(spacing: 0) {
+            batchReviewHeader(review)
+            HairlineDivider()
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if !review.plans.isEmpty {
@@ -593,6 +675,31 @@ struct AppUninstallerView: View {
             }
 
         }
+    }
+
+    private func batchReviewHeader(_ review: AppModel.BatchUninstallReview) -> some View {
+        HStack(spacing: 10) {
+            Text("\(review.plans.count) applications · \(review.itemCount) items")
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+
+            Spacer()
+
+            Button("Back", action: model.resetAppUninstall)
+                .buttonStyle(SecondaryButtonStyle())
+                .fixedSize()
+            Button("Uninstall · \(ByteFormatting.string(review.totalBytes))",
+                   action: model.requestBatchUninstall)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(review.plans.isEmpty || model.activity != nil)
+                .fixedSize()
+        }
+        .frame(height: Self.headerControlHeight)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private func batchPlanRow(_ plan: AppUninstallPlan) -> some View {

@@ -80,8 +80,15 @@ struct MainWindow: View {
         .frame(minWidth: Token.Size.minimumContentWidth)
         .background(Token.pageBackground)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            StatusBarView(message: model.currentStatusMessage) {
-                statusBarTrailing
+            // The Uninstaller has no footer. Its actions sit in the page's own
+            // header, beside the list they act on; a red button at the far corner
+            // of the window was a long way from the cards it uninstalls. What the
+            // bar's message said there is said on the page: errors inline, progress
+            // by the activity overlay, the result by the done state.
+            if model.view != .uninstaller {
+                StatusBarView(message: model.currentStatusMessage) {
+                    statusBarTrailing
+                }
             }
         }
         // A real sheet, so macOS supplies the titlebar attachment, the entrance
@@ -188,61 +195,6 @@ struct MainWindow: View {
                     onCancel: { model.cancelBatchUninstall() }
                 )
             }
-        }
-    }
-
-    /// The Uninstaller's actions, in the slot every other view uses. Which ones
-    /// depends on the page it is showing: a review, a batch review, or the grid.
-    @ViewBuilder
-    private var uninstallerStatusBarTrailing: some View {
-        if model.isPlanningAppUninstall || model.appUninstallOutcome != nil
-            || model.batchUninstallOutcome != nil {
-            EmptyView()
-        } else if let review = model.batchUninstallReview {
-            Text("\(review.plans.count) applications · \(review.itemCount) items")
-                .foregroundStyle(Token.Text.secondary)
-            Button("Back", action: model.resetAppUninstall)
-                .buttonStyle(SecondaryButtonStyle())
-            Button("Uninstall · \(ByteFormatting.string(review.totalBytes))",
-                   action: model.requestBatchUninstall)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-                .disabled(review.plans.isEmpty)
-        } else if let plan = model.appUninstallPlan {
-            Text(plan.items.count == 1 ? "1 item to remove" : "\(plan.items.count) items to remove")
-                .foregroundStyle(Token.Text.secondary)
-            if let package = plan.managedPackage {
-                Button("Copy Homebrew Uninstall Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(package.uninstallCommand, forType: .string)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .help(package.uninstallCommand)
-            } else {
-                Button(
-                    (plan.isApplicationOnly ? "Uninstall Application" : "Uninstall")
-                        + " · \(ByteFormatting.string(plan.totalBytes))",
-                    action: model.requestAppUninstall
-                )
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-            }
-        } else if !model.selectedApplicationIDs.isEmpty {
-            Text("\(model.selectedApplicationIDs.count) selected")
-                .foregroundStyle(Token.Text.secondary)
-            Button("Deselect All", action: model.clearApplicationSelection)
-                .buttonStyle(SecondaryButtonStyle())
-            // The ellipsis is the promise: related files are found and shown
-            // before anything is asked.
-            Button("Uninstall \(model.selectedApplicationIDs.count)…",
-                   action: model.reviewSelectedApplications)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-                .disabled(model.activity != nil)
         }
     }
 
@@ -380,7 +332,8 @@ struct MainWindow: View {
             )
 
         case .uninstaller:
-            uninstallerStatusBarTrailing
+            // No status bar on this view — see the `safeAreaInset` above.
+            EmptyView()
 
         case .history:
             EmptyView()
