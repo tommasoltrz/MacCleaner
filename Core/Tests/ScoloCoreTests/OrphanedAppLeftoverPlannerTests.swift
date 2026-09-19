@@ -157,7 +157,7 @@ struct OrphanedAppLeftoverPlannerTests {
             .deletingLastPathComponent()
         let scanner = ApplicationLeftoversScanner(planner: sandbox.planner())
 
-        let result = try await scanner.scan(context: ScanContext(protectRecentDays: 0))
+        let result = try await scanner.scan(context: ScanContext())
         let entry = try #require(result.entries.first)
 
         #expect(result.categoryID == .applicationLeftovers)
@@ -182,7 +182,7 @@ struct OrphanedAppLeftoverPlannerTests {
         }
         let scanner = ApplicationLeftoversScanner(planner: planner)
 
-        let result = try await scanner.scan(context: ScanContext(protectRecentDays: 0))
+        let result = try await scanner.scan(context: ScanContext())
 
         #expect(result.entries.isEmpty)
         #expect(result.unreadableCount == 1)
@@ -207,7 +207,7 @@ struct OrphanedAppLeftoverPlannerTests {
         }
         let scanner = ApplicationLeftoversScanner(planner: planner)
 
-        let result = try await scanner.scan(context: ScanContext(protectRecentDays: 0))
+        let result = try await scanner.scan(context: ScanContext())
 
         #expect(result.entries.isEmpty)
         #expect(result.unreadableCount == 1)
@@ -261,8 +261,7 @@ struct OrphanedAppLeftoverPlannerTests {
         ).deletingLastPathComponent()
         let context = ScanContext(
             excludedPaths: [cache.path, state.path],
-            excludedPatterns: ["*.keychain-db"],
-            protectRecentDays: 0
+            excludedPatterns: ["*.keychain-db"]
         )
 
         let plan = try await sandbox.planner().plan(context: context)

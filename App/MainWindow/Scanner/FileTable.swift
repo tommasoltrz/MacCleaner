@@ -415,10 +415,6 @@ private struct FileRow: View {
         case .running:
             return "This app is running. Quit it to remove it. Its support files "
                 + "below can still be removed individually."
-        case .recentUse:
-            // Information, not a lock: the checkbox works.
-            return "Used inside your protection window (Preferences › Exclusions). "
-                + "You can still remove it."
         case .userData:
             return hasUserDataOverride
                 ? "Protected user data selected for removal. It will always move to the Trash."
@@ -437,7 +433,6 @@ private struct FileRow: View {
     private static func badgeText(for reason: FileEntry.ProtectionReason) -> String {
         switch reason {
         case .running:   "running"
-        case .recentUse: "recently used"
         case .userData:  "user data"
         }
     }

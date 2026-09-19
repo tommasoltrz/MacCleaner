@@ -66,19 +66,14 @@ struct ApplicationsScanTests {
         }
     }
 
-    /// Recency is off by default here. A fixture is written milliseconds before it is
-    /// scanned, so every planted app is "used today" and would carry a `.recentUse`
-    /// badge — true, and noise in every test but the one that asserts it.
     private func context(
         excludedPaths: [String] = [],
         excludedPatterns: [String] = [],
-        protectRecentDays: Int = 0,
         running: Set<String> = []
     ) -> ScanContext {
         ScanContext(
             excludedPaths: excludedPaths,
             excludedPatterns: excludedPatterns,
-            protectRecentDays: protectRecentDays,
             runningApplicationPaths: running
         )
     }
@@ -277,18 +272,20 @@ struct ApplicationsScanTests {
         #expect(row.protectionReason == .running)
     }
 
-    @Test("a recently used application is badged, never hidden")
-    func recentApplicationIsBadged() async throws {
+    /// There was a "recently used" badge until 19 Sep 2026 — see
+    /// `FileEntry.ProtectionReason`. The date it read could not carry the claim.
+    @Test("an application used a moment ago is listed with its date and no label")
+    func recentApplicationIsNeitherHiddenNorLabelled() async throws {
         let sandbox = try Sandbox()
         try sandbox.app("Fresh", bundleID: "com.example.fresh")
 
-        // The fixture was written a moment ago, so any window at all contains it.
-        let result = try await sandbox.scanner()
-            .scan(context: context(protectRecentDays: 30))
+        // The fixture was written a moment ago: as recent as anything can be.
+        let result = try await sandbox.scanner().scan(context: context())
 
         let row = try #require(result.entries.first)
-        #expect(row.protectionReason == .recentUse)
-        #expect(row.allocatedBytes > 0, "recency is a badge, not a filter")
+        #expect(row.protectionReason == nil)
+        #expect(row.lastOpened != nil, "the date is still there for the user to weigh")
+        #expect(row.allocatedBytes > 0)
     }
 
     // MARK: - Reporting what could not be read

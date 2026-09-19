@@ -15,7 +15,6 @@ struct ExclusionsPane: View {
         /// gaps add the difference themselves.
         static let gap: CGFloat = 9
         static let introExtraGap: CGFloat = 5      // 9 + 5 = the design's 14
-        static let protectExtraGap: CGFloat = 9    // 9 + 9 = the design's 18
         static let rowHeight: CGFloat = 34
         /// Five rows, which is what the design's well shows without scrolling.
         static let listHeight: CGFloat = 170
@@ -33,7 +32,6 @@ struct ExclusionsPane: View {
 
             rulesList
             listControls
-            protectRow.padding(.top, Metrics.protectExtraGap)
         }
         .fileImporter(
             isPresented: $isImportingFolders,
@@ -136,27 +134,6 @@ struct ExclusionsPane: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-    }
-
-    // MARK: - Recency window
-
-    private var protectRow: some View {
-        GroupedBox {
-            PrefPickerRow(
-                title: "Mark files used in the last",
-                description: "Recently used items stay listed with a “used recently” "
-                    + "badge. They are never selected for you. You decide.",
-                selection: protectBinding,
-                label: \.displayName
-            )
-        }
-    }
-
-    private var protectBinding: Binding<ProtectWindow> {
-        Binding(
-            get: { settings.protectRecentDays },
-            set: { settings.protectRecentDays = $0 }
-        )
     }
 }
 

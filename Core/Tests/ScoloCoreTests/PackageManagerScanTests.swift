@@ -37,7 +37,7 @@ struct PackageManagerScanTests {
         try sandbox.file(".gradle/caches/modules-2/thing.jar")
 
         let result = try await PackageManagerScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
 
         // Largest first, which is the order the list is drawn in.
         #expect(result.entries.map(\.displayName) == ["Homebrew cache", "Gradle cache"])
@@ -50,10 +50,10 @@ struct PackageManagerScanTests {
         let sandbox = try Sandbox()
         try sandbox.file("Library/Caches/Homebrew/downloads/bottle.tar.gz")
 
-        // The fixture is minutes old, so a shield that applied here would hide it —
-        // and it is exactly the busy caches that are worth the most.
+        // The fixture is minutes old, so a date filter would hide it — and it is
+        // exactly the busy caches that are worth the most.
         let result = try await PackageManagerScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 30))
+            .scan(context: ScanContext())
 
         let row = try #require(result.entries.first)
         #expect(row.displayName == "Homebrew cache")
@@ -69,8 +69,7 @@ struct PackageManagerScanTests {
         let result = try await PackageManagerScanner(home: sandbox.home).scan(
             context: ScanContext(
                 excludedPaths: [excluded.deletingLastPathComponent()
-                    .deletingLastPathComponent().path],
-                protectRecentDays: 0
+                    .deletingLastPathComponent().path]
             )
         )
 
@@ -84,7 +83,7 @@ struct PackageManagerScanTests {
         try sandbox.file(".gradle/caches/modules-2/thing.jar")
 
         let result = try await PackageManagerScanner(home: sandbox.home).scan(
-            context: ScanContext(excludedPatterns: ["*.keychain-db"], protectRecentDays: 0)
+            context: ScanContext(excludedPatterns: ["*.keychain-db"])
         )
 
         #expect(result.entries.map(\.displayName) == ["Gradle cache"])
@@ -95,7 +94,7 @@ struct PackageManagerScanTests {
         let sandbox = try Sandbox()
 
         let result = try await PackageManagerScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
 
         // No daemon to be missing here, so there is nothing to tell the user to fix.
         #expect(result.availability == .empty)

@@ -79,8 +79,8 @@ public struct ApplicationsScanner: CategoryScanner {
 
                 let appURL = directory.appendingPathComponent(name)
                 // Explicit rules are absolute: an app on the exclusion list is not
-                // walked, not listed, not counted. Recency is handled separately
-                // below — it *protects* rather than hides.
+                // walked, not listed, not counted. A running app is handled
+                // separately below — that *protects* rather than hides.
                 guard !context.isExcluded(appURL) else { continue }
 
                 let bundleID = Bundle(url: appURL)?.bundleIdentifier
@@ -174,19 +174,16 @@ public struct ApplicationsScanner: CategoryScanner {
                     .max()
 
                 // Protection, not exclusion. A running app is in use as a matter of
-                // fact (the set comes from NSWorkspace via the app layer); recent
-                // activity is the user's Preferences window doing its job. Either
-                // way the row still appears — the useful fact that a daily app has
-                // grown gigabytes survives — with its own checkbox locked.
+                // fact (the set comes from NSWorkspace via the app layer). The row
+                // still appears — the useful fact that a daily app has grown
+                // gigabytes survives — with its own checkbox locked. `lastActivity`
+                // is shown as a date and sorts the list; it locks and labels nothing.
                 let reason: FileEntry.ProtectionReason? =
-                    context.runningApplicationPaths.contains(appURL.path) ? .running
-                    : context.isRecencyProtected(lastActivity) ? .recentUse
-                    : nil
+                    context.runningApplicationPaths.contains(appURL.path) ? .running : nil
 
                 // A preference, container or support folder is user data whether
-                // the app ran today or four years ago. Recency controls the parent
-                // app row; it must never decide whether deleting a child alone gets
-                // a destructive warning.
+                // the app ran today or four years ago. No date decides whether
+                // deleting a child alone gets a destructive warning.
                 for index in children.indices where !children[index].isRegenerable {
                     children[index].protectionReason = .userData
                 }

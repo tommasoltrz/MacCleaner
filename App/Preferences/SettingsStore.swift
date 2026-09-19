@@ -32,7 +32,6 @@ enum ScanSchedule: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// How recently a file must have been opened to be left alone.
 /// The iCloud plan, which macOS exposes no API for.
 ///
 /// `brctl quota` reports the free space exactly but never the size of the plan it is
@@ -70,16 +69,6 @@ enum ICloudPlan: String, CaseIterable, Identifiable, Sendable {
         case .tb12:      return 12288 * gib
         }
     }
-}
-
-enum ProtectWindow: Int, CaseIterable, Identifiable, Sendable {
-    case week = 7
-    case month = 30
-    case quarter = 90
-
-    var id: Int { rawValue }
-
-    var displayName: String { "\(rawValue) days" }
 }
 
 /// One thing every scan skips: a folder and its whole subtree, or a filename glob.
@@ -150,7 +139,6 @@ final class SettingsStore {
         static let warnBelowGB = 20
         static let trashFirst = true
         static let confirmBeforeCleanup = true
-        static let protectRecentDays = ProtectWindow.month
 
         /// Two categories ship off, per the design.
         ///
@@ -201,7 +189,6 @@ final class SettingsStore {
         static let categoryEnabled = "settings.categoryEnabled"
         static let trashFirst = "settings.trashFirst"
         static let confirmBeforeCleanup = "settings.confirmBeforeCleanup"
-        static let protectRecentDays = "settings.protectRecentDays"
         static let exclusions = "settings.exclusions"
     }
 
@@ -277,10 +264,6 @@ final class SettingsStore {
     }
 
     // MARK: Exclusions
-
-    var protectRecentDays: ProtectWindow {
-        didSet { defaults.set(protectRecentDays.rawValue, forKey: Key.protectRecentDays) }
-    }
 
     private(set) var exclusions: [ExclusionRule] {
         didSet {
@@ -380,8 +363,6 @@ final class SettingsStore {
 
         self.trashFirst = bool(Key.trashFirst, or: Defaults.trashFirst)
         self.confirmBeforeCleanup = bool(Key.confirmBeforeCleanup, or: Defaults.confirmBeforeCleanup)
-        self.protectRecentDays = (defaults.object(forKey: Key.protectRecentDays) as? Int)
-            .flatMap(ProtectWindow.init(rawValue:)) ?? Defaults.protectRecentDays
 
         let storedExclusions = defaults.data(forKey: Key.exclusions)
             .flatMap { try? JSONDecoder().decode([ExclusionRule].self, from: $0) }
@@ -416,7 +397,6 @@ final class SettingsStore {
         )
         trashFirst = Defaults.trashFirst
         confirmBeforeCleanup = Defaults.confirmBeforeCleanup
-        protectRecentDays = Defaults.protectRecentDays
         exclusions = Defaults.exclusions
     }
 

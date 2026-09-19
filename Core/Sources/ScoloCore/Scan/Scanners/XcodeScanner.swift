@@ -218,8 +218,7 @@ public struct XcodeScanner: CategoryScanner {
         // Documents & Files, because this is the category that can say "safe":
         // every root the detector accepts is rebuilt by the next build. The
         // Documents scanner carves the same bytes out of its project rows, so the
-        // space is offered once. Recency does not apply, for the same reason it
-        // does not apply to caches: build output is touched by every build.
+        // space is offered once.
         for projectRoot in projectRoots {
             guard fileManager.fileExists(atPath: projectRoot.path),
                   !context.isWithinExclusion(projectRoot)
@@ -264,8 +263,7 @@ public struct XcodeScanner: CategoryScanner {
 
         guard !entries.isEmpty else {
             // Ordinary outcome, not an edge case: a machine with Xcode installed but
-            // nothing built, or one where every candidate is younger than
-            // `protectRecentDays`, measures 0 B and the row renders disabled with no
+            // nothing built measures 0 B and the row renders disabled with no
             // disclosure triangle. Not `.unavailable` — that reason string is
             // user-facing repair copy, and a cleaner has no business telling someone
             // to install Xcode.
@@ -325,10 +323,10 @@ public struct XcodeScanner: CategoryScanner {
         guard measurement.allocatedBytes > 0 else { return nil }
 
         let lastOpened = lastOpenedDate(for: url)
-        // Folder and pattern exclusions apply; the recency shield does not. Build
-        // products are rewritten on every build, so "touched recently" describes
-        // every DerivedData worth showing. The same leak hid Chrome's caches from
-        // the System Caches category.
+        // Folder and pattern exclusions apply, and no date does. Build products
+        // are rewritten on every build, so "touched recently" describes every
+        // DerivedData worth showing; a recency filter once hid them, and hid
+        // Chrome's caches from the System Caches category the same way.
         guard !context.isExcluded(url) else { return nil }
         // See `SizeMeasurement.containsProtectedPattern`.
         guard !measurement.containsProtectedPattern else { return nil }

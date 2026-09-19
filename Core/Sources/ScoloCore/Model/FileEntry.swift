@@ -69,19 +69,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     ///
     /// Protection is shown, never silent: hiding these rows hid the useful fact
     /// that a daily app had grown gigabytes. The reason is carried so the UI can
-    /// say the true thing. "In use" on an app that was merely opened last week
-    /// reads as a lie.
+    /// say the true thing.
+    ///
+    /// There was a third reason, `recentUse`, until 19 Sep 2026: a badge for
+    /// anything used inside a window the user set in Preferences. It locked nothing
+    /// and decided nothing, and its date could not carry even that much. An
+    /// application's date is the newest of its bundle and its caches, and a cache is
+    /// rewritten by an updater or a helper whether or not anybody opened the app;
+    /// `kMDItemLastUsedDate` moves only for a Launch Services open. WhatsApp and
+    /// Spotify both wore "recently used" beside a date column reading "last week".
+    /// The date stays, as a column the user can weigh. The claim built on it went.
     public enum ProtectionReason: String, Sendable, Equatable {
         /// The app has a live process right now. Ground truth from NSWorkspace.
         case running
-        /// Activity inside the user's protection window (Preferences › Exclusions).
-        ///
-        /// A badge and a tooltip, nothing more: the checkbox works, the row is
-        /// never pre-selected and never counted as safe. This is the one reason
-        /// that does not lock, because a date is not a judgement — the user knows
-        /// whether the folder they built yesterday matters. See
-        /// `ScanContext.protectRecentDays`.
-        case recentUse
         /// Profiles, logins, history, documents. Locked by default; an interactive
         /// caller may authorize this exact row after a destructive warning.
         case userData
@@ -144,8 +144,6 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// Only two reasons lock by default: a running app (Finder refuses the same
     /// trash operation, and it would fail), and user data (which needs an explicit
     /// row-specific or app-uninstall authorization).
-    /// Recent use is information, not a veto. The user, not a date heuristic,
-    /// decides whether last week's download stays.
     public var isRemovalLocked: Bool {
         protectionReason == .running || protectionReason == .userData
             || manualRemoval != nil

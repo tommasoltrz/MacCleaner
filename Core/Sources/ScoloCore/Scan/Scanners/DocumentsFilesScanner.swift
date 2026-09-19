@@ -71,10 +71,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
     /// `~/Pictures/Photos Library.photoslibrary` *is* the user's photographs, and
     /// the Music and TV folders are what those apps manage. Removing one from here
     /// is not cleanup, it is data loss with a friendly checkbox — and each app has
-    /// its own way to reclaim space (Optimize Mac Storage, remove downloads). The
-    /// recency badge used to keep these out by accident, since a library is touched
-    /// constantly; now that recency is information rather than a filter, the rule
-    /// has to be explicit. The list itself is `AppleMediaLibrary`, shared with the
+    /// its own way to reclaim space (Optimize Mac Storage, remove downloads). A
+    /// recency filter used to keep these out by accident, since a library is touched
+    /// constantly; the filter is gone, so the rule has to be explicit. The list itself is `AppleMediaLibrary`, shared with the
     /// Storage Explorer so the two cannot disagree about what a library is.
     static func isMediaLibrary(_ url: URL, home: URL) -> Bool {
         AppleMediaLibrary.contains(url, home: home)
@@ -127,8 +126,7 @@ public struct DocumentsFilesScanner: CategoryScanner {
             presentRoots += 1
 
             // Excluding a whole root should make the scan faster, not merely quieter,
-            // so the check happens before anything is walked. No `lastOpened` here:
-            // recency protects individual items, never an entire folder.
+            // so the check happens before anything is walked.
             guard !context.isWithinExclusion(root) else { continue }
 
             guard let listing = Self.listing(of: root) else {
@@ -141,9 +139,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
             for candidate in listing.candidates {
                 try Task.checkCancellation()
 
-                // Recency is a badge, not a filter — see `ScanContext.protectRecentDays`.
-                // This loop used to `continue` on a recent item, which hid the
-                // largest folder on the disk because it had been built that morning.
+                // A date filters nothing. This loop used to `continue` on a recent
+                // item, which hid the largest folder on the disk because it had been
+                // built that morning.
                 let lastOpened = lastOpenedDate(for: candidate.url)
                 guard !context.isExcluded(candidate.url) else { continue }
                 guard !Self.isMediaLibrary(candidate.url, home: home) else { continue }
@@ -187,7 +185,6 @@ public struct DocumentsFilesScanner: CategoryScanner {
                     for: candidate,
                     bytes: measured.bytes,
                     lastOpened: lastOpened,
-                    isRecent: context.isRecencyProtected(lastOpened),
                     childCount: measured.childCount,
                     children: dependencyChildren
                 ))
@@ -332,7 +329,6 @@ public struct DocumentsFilesScanner: CategoryScanner {
         for candidate: Candidate,
         bytes: Int64,
         lastOpened: Date?,
-        isRecent: Bool,
         childCount: Int?,
         children: [FileEntry]
     ) -> FileEntry {
@@ -343,7 +339,6 @@ public struct DocumentsFilesScanner: CategoryScanner {
             allocatedBytes: bytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
-            protectionReason: isRecent ? .recentUse : nil,
             childCount: childCount,
             children: children
         )

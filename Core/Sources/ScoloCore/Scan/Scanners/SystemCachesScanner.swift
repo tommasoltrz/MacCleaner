@@ -140,13 +140,12 @@ public struct SystemCachesScanner: CategoryScanner {
                 guard measurement.allocatedBytes >= Self.minimumEntryBytes else { continue }
 
                 let lastOpened = lastOpenedDate(for: url)
-                // Folder and pattern exclusions apply; the recency shield deliberately
-                // does not. A cache is written every time its app runs, so "touched
-                // in the last 30 days" describes every cache worth showing — the
-                // shield would hide exactly the largest ones (Chrome's, an active
-                // IDE's) and leave only the stale caches of abandoned apps. The cost
-                // of removal here is regeneration, not loss, which is what the
-                // category's `safe` badge already tells the user.
+                // Folder and pattern exclusions apply, and no date does. A cache is
+                // written every time its app runs, so "touched in the last 30 days"
+                // describes every cache worth showing — a recency filter hid exactly
+                // the largest ones (Chrome's, an active IDE's) and left only the stale
+                // caches of abandoned apps. The cost of removal here is regeneration,
+                // not loss, which is what the category's `safe` badge tells the user.
                 guard !context.isExcluded(url) else { continue }
                 // Detected by the measurer during the walk above: a tree holding a
                 // protected bundle or keychain is never offered, because removing

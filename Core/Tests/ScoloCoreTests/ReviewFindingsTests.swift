@@ -139,7 +139,7 @@ struct ReviewFindingsTests {
             projectRoots: [],
             systemSimulatorRoot: developer.appendingPathComponent("no-simulators")
         ).scan(
-            context: ScanContext(excludedPatterns: ["*.keychain-db"], protectRecentDays: 0)
+            context: ScanContext(excludedPatterns: ["*.keychain-db"])
         )
         #expect(!result.entries.contains { $0.url.lastPathComponent == "Guarded-abc" },
                 "the project holds a keychain: cleaning the row would take it")
@@ -186,7 +186,7 @@ struct ReviewFindingsTests {
             developerRoot: developer,
             projectRoots: [],
             systemSimulatorRoot: developer.appendingPathComponent("no-simulators")
-        ).scan(context: ScanContext(protectRecentDays: 0))
+        ).scan(context: ScanContext())
 
         let archiveRow = try #require(result.entries.first { $0.url.path.contains("Archives") })
         let derivedRow = try #require(result.entries.first { $0.url.path.contains("DerivedData") })

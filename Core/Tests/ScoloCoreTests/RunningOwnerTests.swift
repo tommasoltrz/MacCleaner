@@ -100,9 +100,7 @@ struct RunningOwnerTests {
             applicationDirectories: [sandbox.home.appendingPathComponent("Applications")],
             home: sandbox.home
         )
-        let result = try await scanner.scan(context: ScanContext(
-            protectRecentDays: 0,
-            runningApplications: [Self.owner("Live", "com.example.live", path: live.path)]
+        let result = try await scanner.scan(context: ScanContext(runningApplications: [Self.owner("Live", "com.example.live", path: live.path)]
         ))
 
         let liveRow = result.entries.first { $0.displayName == "Live" }
@@ -136,9 +134,7 @@ struct RunningOwnerTests {
             logsRoot: try sandbox.directory("Library/Logs")
         )
 
-        let result = try await scanner.scan(context: ScanContext(
-            protectRecentDays: 0,
-            runningApplications: [Self.owner("Live", "com.example.live")]
+        let result = try await scanner.scan(context: ScanContext(runningApplications: [Self.owner("Live", "com.example.live")]
         ))
 
         let foundLive = result.entries.first { $0.url.lastPathComponent == "com.example.live" }
@@ -151,7 +147,7 @@ struct RunningOwnerTests {
         #expect(result.needsReviewBytes == live.allocatedBytes)
 
         // Quit the owner, scan again, and the same folder is safe.
-        let after = try await scanner.scan(context: ScanContext(protectRecentDays: 0))
+        let after = try await scanner.scan(context: ScanContext())
         #expect(after.needsReviewBytes == 0)
         #expect(after.safeToRemoveBytes == live.allocatedBytes + idle.allocatedBytes)
     }
@@ -168,13 +164,11 @@ struct RunningOwnerTests {
             systemSimulatorRoot: sandbox.home.appendingPathComponent("no-simulators")
         )
 
-        let idle = try await scanner.scan(context: ScanContext(protectRecentDays: 0))
+        let idle = try await scanner.scan(context: ScanContext())
         #expect(!idle.entries.isEmpty)
         #expect(idle.entries.allSatisfy { $0.inUseBy == nil })
 
-        let simulatorOnly = try await scanner.scan(context: ScanContext(
-            protectRecentDays: 0,
-            runningApplications: [Self.owner("Simulator", "com.apple.iphonesimulator")]
+        let simulatorOnly = try await scanner.scan(context: ScanContext(runningApplications: [Self.owner("Simulator", "com.apple.iphonesimulator")]
         ))
         for entry in simulatorOnly.entries {
             let isSimulatorData = entry.url.path.contains("/CoreSimulator")
@@ -182,9 +176,7 @@ struct RunningOwnerTests {
         }
         #expect(simulatorOnly.entries.contains { $0.inUseBy != nil })
 
-        let xcode = try await scanner.scan(context: ScanContext(
-            protectRecentDays: 0,
-            runningApplications: [Self.owner("Xcode", "com.apple.dt.Xcode")]
+        let xcode = try await scanner.scan(context: ScanContext(runningApplications: [Self.owner("Xcode", "com.apple.dt.Xcode")]
         ))
         #expect(xcode.entries.allSatisfy { $0.inUseBy?.name == "Xcode" })
         #expect(xcode.safeToRemoveBytes == 0)
