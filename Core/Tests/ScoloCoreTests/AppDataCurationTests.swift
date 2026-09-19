@@ -269,8 +269,8 @@ struct AppDataCurationTests {
         #expect(data.entries.isEmpty)
     }
 
-    @Test("a service worker's caches are offered; its registration is not")
-    func serviceWorkerCachesAreSplitFromTheRegistration() async throws {
+    @Test("no part of a service worker is offered, caches included")
+    func serviceWorkerStorageIsWithheldWhole() async throws {
         let sandbox = try Sandbox()
         let folder = Self.support("Google/Chrome")
         try sandbox.writeFile(
@@ -279,11 +279,12 @@ struct AppDataCurationTests {
         try sandbox.writeFile(
             "\(folder)/Default/Service Worker/ScriptCache/y", bytes: Self.oneMB
         )
-        try sandbox.writeFile("\(folder)/Default/Shared Dictionary/db", bytes: Self.oneMB)
-        // The registration itself, and the user's logins beside it.
+        // The registration, which addresses the script bodies in `ScriptCache` by
+        // resource id — take either half and the worker cannot load.
         try sandbox.writeFile(
             "\(folder)/Default/Service Worker/Database/000003.log", bytes: 2 * Self.oneMB
         )
+        try sandbox.writeFile("\(folder)/Default/Code Cache/index", bytes: Self.oneMB)
         try sandbox.writeFile("\(folder)/Default/Cookies", bytes: Self.oneMB)
 
         let curation = try #require(ApplicationsScanner.curation(
@@ -292,26 +293,26 @@ struct AppDataCurationTests {
         let data = try await Self.curated(curation, home: sandbox.root)
 
         let offered = Set(data.entries.map(\.url.lastPathComponent))
-        #expect(offered.contains("CacheStorage"))
-        #expect(offered.contains("ScriptCache"))
-        #expect(offered.contains("Shared Dictionary"))
-        #expect(!offered.contains("Database"),
-                "the registration is what makes an installed web app work")
+        #expect(offered.contains("Code Cache"))
+        for part in ["CacheStorage", "ScriptCache", "Database"] {
+            #expect(!offered.contains(part),
+                    "removing \(part) alone leaves a registration Chrome cannot honour")
+        }
 
-        // Database and Cookies, and nothing that regenerates.
+        // The whole `Service Worker` folder plus Cookies: 5 MB locked, and only
+        // the code cache offered.
         let locked = try #require(Self.remainder(data))
-        #expect(locked.allocatedBytes >= 3 * Int64(Self.oneMB))
-        #expect(locked.allocatedBytes < 4 * Int64(Self.oneMB))
+        #expect(locked.allocatedBytes >= 5 * Int64(Self.oneMB))
+        #expect(locked.allocatedBytes < 6 * Int64(Self.oneMB))
     }
 
-    @Test("an Electron app's script cache and dictionaries are offered too")
-    func electronAppsGetTheSameTwoCaches() async throws {
+    @Test("an Electron app keeps its service worker for the same reason Chrome does")
+    func electronAppsWithholdTheirServiceWorker() async throws {
         let sandbox = try Sandbox()
         let folder = Self.support("Fixture")
         // The marker that makes this an Electron layout at all.
         try sandbox.writeFile("\(folder)/Code Cache/index", bytes: Self.oneMB)
         try sandbox.writeFile("\(folder)/Service Worker/ScriptCache/y", bytes: Self.oneMB)
-        try sandbox.writeFile("\(folder)/Shared Dictionary/db", bytes: Self.oneMB)
         try sandbox.writeFile("\(folder)/Local Storage/leveldb/CURRENT", bytes: Self.oneMB)
 
         let curation = try #require(ApplicationsScanner.curation(
@@ -320,11 +321,46 @@ struct AppDataCurationTests {
         let data = try await Self.curated(curation, home: sandbox.root)
 
         let offered = Set(data.entries.map(\.url.lastPathComponent))
-        #expect(offered.isSuperset(of: ["Code Cache", "ScriptCache", "Shared Dictionary"]))
+        #expect(offered.contains("Code Cache"))
+        #expect(!offered.contains("ScriptCache"),
+                "Electron ships the same Chromium, and breaks the same way")
 
-        // Local Storage is the user's, and stays locked.
+        // Local Storage and the service worker are the user's, and stay locked.
         let locked = try #require(Self.remainder(data))
-        #expect(locked.allocatedBytes >= Int64(Self.oneMB))
+        #expect(locked.allocatedBytes >= 2 * Int64(Self.oneMB))
+    }
+
+    /// The page that came back `net::ERR_DICTIONARY_LOAD_FAILED`.
+    ///
+    /// The folder is self-contained on disk, and that was the wrong test. A
+    /// running Chromium holds the dictionary index in memory, so it goes on
+    /// advertising dictionaries whose bodies were just removed; the server
+    /// answers with a response only that dictionary can decode, and the page
+    /// fails to load until the app is relaunched.
+    @Test("compression dictionaries are not offered, in Chrome or in Electron apps")
+    func sharedDictionariesAreWithheld() async throws {
+        let sandbox = try Sandbox()
+        let chrome = Self.support("Google/Chrome")
+        try sandbox.writeFile("\(chrome)/Default/Shared Dictionary/db", bytes: Self.oneMB)
+        try sandbox.writeFile("\(chrome)/Profile 1/Shared Dictionary/cache/index",
+                              bytes: Self.oneMB)
+        try sandbox.writeFile("\(chrome)/Default/Code Cache/index", bytes: Self.oneMB)
+
+        let electron = Self.support("Fixture")
+        try sandbox.writeFile("\(electron)/Code Cache/index", bytes: Self.oneMB)
+        try sandbox.writeFile("\(electron)/Shared Dictionary/db", bytes: Self.oneMB)
+
+        for (bundleID, name) in [("com.google.Chrome", "Google Chrome"),
+                                 ("com.example.fixture", "Fixture")] {
+            let curation = try #require(ApplicationsScanner.curation(
+                bundleID: bundleID, baseName: name, home: sandbox.root
+            ))
+            let data = try await Self.curated(curation, home: sandbox.root)
+            let offered = Set(data.entries.map(\.url.lastPathComponent))
+            #expect(offered.contains("Code Cache"))
+            #expect(!offered.contains("Shared Dictionary"),
+                    "\(name) would go on advertising dictionaries it no longer has")
+        }
     }
 
     // MARK: - Glob expansion
@@ -335,7 +371,7 @@ struct AppDataCurationTests {
         let folder = Self.support("Google/Chrome")
         try sandbox.writeFile("\(folder)/Default/Code Cache/index", bytes: Self.oneMB)
         try sandbox.writeFile("\(folder)/Profile 1/GPUCache/data", bytes: Self.oneMB)
-        try sandbox.writeFile("\(folder)/Profile 2/Service Worker/CacheStorage/x", bytes: Self.oneMB)
+        try sandbox.writeFile("\(folder)/Profile 2/Code Cache/index", bytes: Self.oneMB)
         try sandbox.writeFile("\(folder)/Default/History", bytes: 3 * Self.oneMB)
 
         let curation = try #require(ApplicationsScanner.curation(
@@ -345,7 +381,7 @@ struct AppDataCurationTests {
 
         let paths = Set(data.entries.map(\.url.path))
         for profileCache in ["Default/Code Cache", "Profile 1/GPUCache",
-                             "Profile 2/Service Worker/CacheStorage"] {
+                             "Profile 2/Code Cache"] {
             #expect(paths.contains(
                 sandbox.root.appendingPathComponent("\(folder)/\(profileCache)").path
             ))
