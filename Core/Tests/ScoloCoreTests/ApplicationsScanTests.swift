@@ -182,6 +182,86 @@ struct ApplicationsScanTests {
         #expect(row.children.allSatisfy { $0.url.path.contains("/Caches/") })
     }
 
+    // MARK: - Sandboxed applications
+
+    @Test("a sandboxed app's cache is carved out of its container, which stays locked")
+    func containerCacheIsOfferedApartFromTheContainer() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.app("Boxed", bundleID: "com.example.boxed")
+        let container = "Library/Containers/com.example.boxed/Data"
+        try sandbox.file("\(container)/Library/Caches/com.example.boxed/cache.bin",
+                         bytes: 3 * 1024 * 1024)
+        try sandbox.file("\(container)/Library/Caches/com.apple.metal/functions.data")
+        try sandbox.file("\(container)/Documents/thesis.txt", bytes: 2 * 1024 * 1024)
+
+        let result = try await sandbox.scanner().scan(context: context())
+
+        let row = try #require(result.entries.first)
+        let caches = row.children.filter(\.isRegenerable)
+        #expect(Set(caches.map(\.url.lastPathComponent)) == ["com.example.boxed", "com.apple.metal"])
+        #expect(caches.allSatisfy { !$0.isRemovalLocked })
+        // The folder the sandbox hands out is never itself on the list.
+        #expect(!row.children.contains { $0.url.lastPathComponent == "Caches" })
+
+        let foundRemainder = row.children.first { !$0.isRegenerable }
+        let remainder = try #require(foundRemainder)
+        #expect(remainder.displayName == "Boxed container")
+        #expect(remainder.protectionReason == .userData)
+        #expect(remainder.url.lastPathComponent == "com.example.boxed")
+
+        // Arithmetic, not an estimate: the two halves are the container, once.
+        let whole = try await AllocatedSizeMeasurer()
+            .measure(sandbox.home.appendingPathComponent("Library/Containers/com.example.boxed"))
+        #expect(row.children.reduce(0) { $0 + $1.allocatedBytes } == whole.allocatedBytes)
+        #expect(result.safeToRemoveBytes == caches.reduce(0) { $0 + $1.allocatedBytes })
+    }
+
+    @Test("a container with no cache folder stays one locked row")
+    func containerWithoutCacheIsNotSplit() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.app("Plain", bundleID: "com.example.plain")
+        try sandbox.file("Library/Containers/com.example.plain/Data/Documents/notes.txt")
+
+        let result = try await sandbox.scanner().scan(context: context())
+
+        let row = try #require(result.entries.first)
+        #expect(row.children.map(\.url.lastPathComponent) == ["com.example.plain"])
+        #expect(row.children.first?.protectionReason == .userData)
+        #expect(result.safeToRemoveBytes == 0)
+    }
+
+    @Test("a container holding a protected pattern is left out, caches included")
+    func protectedContainerIsNotSplit() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.app("Vault", bundleID: "com.example.vault")
+        let container = "Library/Containers/com.example.vault/Data/Library"
+        try sandbox.file("\(container)/Caches/com.example.vault/cache.bin")
+        try sandbox.file("\(container)/Keychains/login.keychain-db", bytes: 1024)
+
+        let result = try await sandbox.scanner()
+            .scan(context: context(excludedPatterns: ["*.keychain-db"]))
+
+        // The application stays, as it does for any protected leftover. Nothing of
+        // the container is listed, so nothing of it can be removed through this row.
+        let row = try #require(result.entries.first)
+        #expect(row.displayName == "Vault")
+        #expect(row.children.isEmpty)
+    }
+
+    @Test("a running sandboxed app's container cache is not called safe")
+    func runningSandboxedAppHoldsItsContainerCache() async throws {
+        let sandbox = try Sandbox()
+        let app = try sandbox.app("Live", bundleID: "com.example.live")
+        try sandbox.file("Library/Containers/com.example.live/Data/Library/Caches/blobs/a.bin")
+
+        let result = try await sandbox.scanner().scan(context: context(running: [app.path]))
+
+        let foundCache = result.entries.first?.children.first { $0.isRegenerable }
+        let cache = try #require(foundCache)
+        #expect(cache.inUseBy?.name == "Live")
+        #expect(result.safeToRemoveBytes == 0)
+    }
+
     // MARK: - Protection, which locks a row rather than hiding it
 
     @Test("a running application is listed with its checkbox locked")
