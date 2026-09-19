@@ -282,23 +282,42 @@ public struct ApplicationsScanner: CategoryScanner {
                 // Per-profile caches. The caches inside a profile regenerate, the
                 // databases beside them are the user's life.
                 //
-                // `Service Worker` holds three things and only two of them are
-                // cache: `CacheStorage` (what a site stored for offline use),
-                // `ScriptCache` (the compiled worker scripts, re-fetched on the
-                // next registration) and `Database`, which is the registration
-                // itself and stays. `Shared Dictionary` is the compression
-                // dictionaries the browser downloaded, and costs a re-download.
-                // Measured across this Mac's eight Chrome profiles: ScriptCache
-                // 72.8 MB, Shared Dictionary 52.2 MB, both of which used to sit
-                // in the locked remainder as though they were the user's data.
-                "Default/Service Worker/CacheStorage",
-                "Default/Service Worker/ScriptCache",
-                "Default/Shared Dictionary",
+                // Nothing under `Service Worker` is offered — not `CacheStorage`,
+                // not `ScriptCache`, not `Database`. It reads like three folders
+                // and behaves like one: `Database` holds the registration, and the
+                // registration addresses script bodies in `ScriptCache` by resource
+                // id. An installed worker's script is served from there and is
+                // *not* re-fetched on the next visit, so taking the caches while
+                // the registration survives leaves Chrome pointing at resources
+                // that are gone.
+                //
+                // Scolo took 721.5 MB of `CacheStorage` and 72.8 MB of `ScriptCache`
+                // out of this Mac's Chrome profiles on 30 Aug 2026 and left
+                // `Database` behind; the wreckage was a `CacheStorage` bucket with
+                // no `index.txt` beside Instagram's and YouTube's, which still had
+                // theirs. `www.reddit.com` went black at the same time and this
+                // was blamed for it — wrongly, as far as anyone has shown:
+                // clearing the site's data changed nothing. The fault that was
+                // later caught by name is the dictionary one below.
+                //
+                // Chrome's own "Clear browsing data" removes the three together.
+                // Scolo removes none of them: a site's offline data belongs in the
+                // locked remainder next to the cookies that go with it.
+                //
+                // `Shared Dictionary` is withheld too, and it was the one that
+                // could be seen failing. It was offered because it is
+                // self-contained on disk — index and dictionaries in one folder —
+                // and that was the wrong test: a running Chrome holds the index in
+                // memory. Remove the folder under it and Chrome goes on sending
+                // `Available-Dictionary` for bodies that are gone; the server
+                // answers with a response only that dictionary can decode, and
+                // the document fails with `net::ERR_DICTIONARY_LOAD_FAILED`.
+                // Seen on 19 Sep 2026: `www.reddit.com` blank after a Safe to
+                // Remove sweep, unmoved by "Clear site data", cured by
+                // relaunching Chrome. 52.2 MB across eight profiles is not worth
+                // a site that will not load.
                 "Default/Code Cache",
                 "Default/GPUCache",
-                "Profile */Service Worker/CacheStorage",
-                "Profile */Service Worker/ScriptCache",
-                "Profile */Shared Dictionary",
                 "Profile */Code Cache",
                 "Profile */GPUCache"
             ],
@@ -339,8 +358,7 @@ public struct ApplicationsScanner: CategoryScanner {
         "com.openai.codex": AppDataCuration(
             root: "Library/Application Support/Codex",
             regenerable: electronRegenerable + [
-                "Default/Cache", "Default/Code Cache", "Default/GPUCache",
-                "Default/Service Worker/CacheStorage"
+                "Default/Cache", "Default/Code Cache", "Default/GPUCache"
             ],
             remainderName: "ChatGPT profiles and settings"
         ),
@@ -364,7 +382,7 @@ public struct ApplicationsScanner: CategoryScanner {
             root: "Library/Application Support/Ferdium",
             regenerable: electronRegenerable + [
                 "Partitions/*/Cache", "Partitions/*/Code Cache",
-                "Partitions/*/GPUCache", "Partitions/*/Service Worker/CacheStorage"
+                "Partitions/*/GPUCache"
             ],
             remainderName: "Ferdium accounts and settings"
         ),
@@ -388,24 +406,28 @@ public struct ApplicationsScanner: CategoryScanner {
 
     /// The regenerable set shared by every Electron app.
     ///
-    /// All of it is Chromium scratch space: compiled script, GPU shaders, the
-    /// service-worker response cache, crash dumps waiting to upload. Deleting any
-    /// of it costs one slower launch.
+    /// All of it is Chromium scratch space: compiled script, GPU shaders, crash
+    /// dumps waiting to upload. Deleting any of it costs one slower launch.
     ///
     /// `Session Storage` is not in this list even though it looks like one more
     /// cache. It holds live per-window state, not a cache, and removing it loses
     /// what the user had open. `blob_storage`, `Partitions` and `Local State` are
     /// left out for the same reason.
+    ///
+    /// Neither is `Service Worker`, in any of its three parts, for the reason
+    /// spelled out against Chrome above: the registration in `Database` addresses
+    /// script bodies in `ScriptCache`, so removing one under the other leaves a
+    /// worker that cannot load. Electron ships the same Chromium and the same
+    /// fault — the 30 Aug 2026 sweep took 184.5 MB out of Ferdium's per-service
+    /// partitions and 4.3 MB out of VS Code the same way it broke Chrome's.
+    ///
+    /// Nor `Shared Dictionary`: a running renderer keeps the dictionary index in
+    /// memory and goes on advertising dictionaries whose bodies were removed, so
+    /// pages fail with `ERR_DICTIONARY_LOAD_FAILED` until the app is relaunched.
     static let electronRegenerable = [
         "Cache", "Code Cache", "GPUCache",
         "DawnWebGPUCache", "DawnGraphiteCache", "DawnCache",
-        // `ScriptCache` sits beside `CacheStorage` and is a cache in the same
-        // sense — compiled worker scripts, re-fetched on the next registration.
-        // `Service Worker/Database` is the registration itself and is not listed.
-        // Both of these, and `Shared Dictionary`, were seen in Electron apps on
-        // this Mac (VS Code, Cursor, Ferdium) before being listed here.
-        "Service Worker/CacheStorage", "Service Worker/ScriptCache",
-        "Shared Dictionary", "Crashpad", "component_crx_cache"
+        "Crashpad", "component_crx_cache"
     ]
 
     /// Name for the locked entry an Electron app gets for everything else.
