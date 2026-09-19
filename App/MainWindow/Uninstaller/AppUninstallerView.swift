@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import ScoloCore
 
 /// A dedicated, review-first application uninstaller.
 ///
-/// The empty state accepts an installed `.app`; Core then attributes only exact
+/// The page opens on the installed applications; choosing one (or dropping an
+/// `.app`) starts its review. Core then attributes only exact
 /// bundle-owned or explicitly curated paths. The inventory is read-only: a dedicated
 /// uninstall always includes every verified related file, and the final confirmation
 /// warns about included user data.
@@ -13,13 +13,26 @@ struct AppUninstallerView: View {
     @Bindable var model: AppModel
 
     @State private var isDropTargeted = false
+    @State private var searchText = ""
+    @State private var sortOrder: SortOrder = .largest
+
+    private enum SortOrder: String, CaseIterable {
+        case largest = "Largest"
+        case name = "Name"
+    }
 
     var body: some View {
         Group {
-            if model.isPlanningAppUninstall {
+            if model.isPlanningAppUninstall, let url = model.appUninstallPlanningURL {
+                planningState(url)
+            } else if model.isPlanningAppUninstall {
                 busyState
+            } else if let outcome = model.batchUninstallOutcome {
+                batchDoneState(outcome)
             } else if let outcome = model.appUninstallOutcome {
                 doneState(outcome)
+            } else if let review = model.batchUninstallReview {
+                batchReviewState(review)
             } else if let plan = model.appUninstallPlan {
                 resultsState(plan)
             } else {
@@ -35,64 +48,141 @@ struct AppUninstallerView: View {
         } isTargeted: { isDropTargeted = $0 }
     }
 
-    // MARK: Empty state
+    // MARK: Installed applications
 
+    /// The page opens on what is installed. Clicking a card ticks it; the chevron in
+    /// its corner opens that application's review. A tick is a choice of *which*
+    /// applications, never consent to what goes with them: several ticked
+    /// applications are each planned and listed in a batch review before the sheet.
+    /// Dropping an `.app` still works, for one inside a vendor folder. The page's
+    /// actions live in the window's status bar, where every other view keeps them.
     private var emptyState: some View {
-        ScrollView {
-            VStack(spacing: 18) {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(
-                        isDropTargeted ? Token.color(.accent) : Token.Fill.controlBorder,
-                        style: StrokeStyle(lineWidth: 2, dash: [9, 7])
-                    )
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(isDropTargeted ? Token.color(.accent).opacity(0.07) : Token.Fill.box)
-                    )
-                    .frame(width: 390, height: 210)
-                    .overlay {
-                        VStack(spacing: 12) {
-                            Image(systemName: "trash.square")
-                                .font(.system(size: 44, weight: .light))
-                                .foregroundStyle(isDropTargeted ? Token.color(.accent) : Token.Text.secondary)
-                            Text("Drop an application here")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(Token.Text.primary)
-                            Text("Scolo will find its verified related files for review.")
-                                .font(.mcSubtitle)
-                                .foregroundStyle(Token.Text.secondary)
+        VStack(spacing: 0) {
+            libraryHeader
+            HairlineDivider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let error = model.appUninstallError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(.mcSubtitle)
+                            .foregroundStyle(Token.textColor(.orange))
+                    }
+
+                    if let applications = model.installedApplications {
+                        let shown = visibleApplications(applications)
+                        if shown.isEmpty {
+                            ContentUnavailableView {
+                                Label(
+                                    applications.isEmpty ? "No Applications" : "No Results",
+                                    systemImage: "xmark.app"
+                                )
+                            } description: {
+                                Text(applications.isEmpty
+                                    ? "Nothing removable was found in /Applications or ~/Applications."
+                                    : "No application matches “\(searchText)”.")
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 320)
+                        } else {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)],
+                                spacing: 10
+                            ) {
+                                ForEach(shown) { application in
+                                    ApplicationCard(
+                                        application: application,
+                                        bytes: model.installedApplicationBytes[application.id],
+                                        isSelected: model.selectedApplicationIDs
+                                            .contains(application.id),
+                                        toggle: { model.toggleApplicationSelection(application) },
+                                        open: { model.planAppUninstall(application.url) }
+                                    )
+                                }
+                            }
+                            // One move, when the order changes: the measured sort
+                            // arriving, a new sort order, a search narrowing.
+                            .animation(.smooth(duration: 0.4), value: shown.map(\.id))
                         }
                     }
-                    .animation(.easeOut(duration: 0.15), value: isDropTargeted)
-
-                Button("Choose Application…", action: chooseApplication)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-
-                if let error = model.appUninstallError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .font(.mcSubtitle)
-                        .foregroundStyle(Token.textColor(.orange))
-                        .multilineTextAlignment(.center)
-                        .frame(width: 440)
-                } else {
-                    Text("Only apps installed in /Applications or ~/Applications are accepted.")
-                        .font(.mcCaption)
-                        .foregroundStyle(Token.Text.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+            .overlay {
+                if isDropTargeted {
+                    RoundedRectangle(cornerRadius: Token.Radius.card, style: .continuous)
+                        .strokeBorder(
+                            Token.color(.accent),
+                            style: StrokeStyle(lineWidth: 2, dash: [9, 7])
+                        )
+                        .background(
+                            Token.color(.accent).opacity(0.07),
+                            in: RoundedRectangle(cornerRadius: Token.Radius.card, style: .continuous)
+                        )
+                        .padding(8)
+                        .allowsHitTesting(false)
                 }
             }
-            // Match Scanner's empty-state rhythm: a bounded block near the top of
-            // scrolling content, rather than centring against the whole window.
-            .frame(maxWidth: .infinity, minHeight: 320)
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
-            .padding(.bottom, 22)
         }
+        .onAppear { model.loadInstalledApplications() }
+    }
+
+    private var libraryHeader: some View {
+        HStack(spacing: 10) {
+            Text(librarySummary)
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .help("Sizes are the application itself. Its related files are found when you open it.")
+
+            Spacer()
+
+            Picker("Sort", selection: $sortOrder) {
+                ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+
+            TextField("Search", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 180)
+
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    /// The total appears only once every card has its figure; a sum of the bundles
+    /// measured so far would read as the whole and grow under the user's eyes.
+    private var librarySummary: String {
+        guard let applications = model.installedApplications else { return "Reading applications…" }
+        let count = applications.count == 1 ? "1 application" : "\(applications.count) applications"
+        let sizes = applications.compactMap { model.installedApplicationBytes[$0.id] }
+        guard sizes.count == applications.count else { return "\(count) · measuring…" }
+        return "\(count) · \(ByteFormatting.string(sizes.reduce(0, +)))"
+    }
+
+    private func visibleApplications(_ applications: [InstalledApplication]) -> [InstalledApplication] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        let matching = query.isEmpty ? applications : applications.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+        }
+        // By name until every size is in. Sorting on partial figures reshuffled the
+        // grid once per application measured — the "flicker" of a first visit. Now
+        // the cards fill in where they stand and move once, together.
+        guard sortOrder == .largest, model.installedApplicationsMeasured else { return matching }
+        // An application that could not be measured compares as -1 and keeps its
+        // alphabetical place at the end.
+        let bytes = model.installedApplicationBytes
+        return matching.enumerated().sorted { lhs, rhs in
+            let l = bytes[lhs.element.id] ?? -1, r = bytes[rhs.element.id] ?? -1
+            return l == r ? lhs.offset < rhs.offset : l > r
+        }.map(\.element)
     }
 
     // MARK: Busy state
 
-    /// Planning only. The uninstall itself is a removal, and removals are shown by
+    /// Several applications being planned — there is no one header to show. The
+    /// uninstall itself is a removal, and removals are shown by
     /// the window-wide `ActivityOverlay`; a second spinner here said the same thing.
     private var busyState: some View {
         VStack(spacing: 14) {
@@ -101,9 +191,84 @@ struct AppUninstallerView: View {
             Text("Finding related files…")
                 .font(.mcBody)
                 .foregroundStyle(Token.Text.secondary)
+            if let detail = model.appUninstallPlanningDetail {
+                Text(detail)
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.tertiary)
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Planning one application
+
+    /// The review's own frame, at once: the header is known from the bundle the
+    /// moment the chevron is pressed, and the close button cancels the planning.
+    /// Only what has to be found — sizes and related files — is bone.
+    private func planningState(_ url: URL) -> some View {
+        var name = url.deletingPathExtension().lastPathComponent
+        if name.isEmpty { name = url.lastPathComponent }
+        return VStack(spacing: 0) {
+            reviewHeader(
+                url: url, name: name,
+                identifier: Bundle(url: url)?.bundleIdentifier ?? " ",
+                identifierIsWarning: false
+            ) {
+                // The bundle's size is already on the card, so it is shown and named
+                // for what it is. The review's figure is a different one — the
+                // application plus everything found — and replaces it, with its own
+                // caption, when the plan lands.
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let bytes = model.installedApplicationBytes[url.path] {
+                        Text(ByteFormatting.string(bytes))
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    } else {
+                        SkeletonBone(width: 64, height: 12).skeletonPulse().frame(height: 18)
+                    }
+                    Text("Application · finding related files…")
+                        .font(.mcCaption)
+                        .foregroundStyle(Token.Text.secondary)
+                }
+            }
+            HairlineDivider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    GroupedBox { skeletonRow(nameWidth: 130, pathWidth: 250).frame(height: 58) }
+                    GroupedBox {
+                        VStack(spacing: 0) {
+                            ForEach(0..<6, id: \.self) { index in
+                                if index > 0 { HairlineDivider() }
+                                skeletonRow(
+                                    nameWidth: [150, 110, 170, 95, 140, 120][index],
+                                    pathWidth: [280, 240, 310, 220, 260, 300][index]
+                                )
+                                .frame(height: 42)
+                            }
+                        }
+                    }
+                }
+                .skeletonPulse()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+            .scrollDisabled(true)
+            .accessibilityLabel("Finding related files")
+        }
+    }
+
+    private func skeletonRow(nameWidth: CGFloat, pathWidth: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            SkeletonBone(width: 20, height: 20)
+            VStack(alignment: .leading, spacing: 6) {
+                SkeletonBone(width: nameWidth, height: 10)
+                SkeletonBone(width: pathWidth, height: 8)
+            }
+            Spacer()
+            SkeletonBone(width: 54, height: 10)
+        }
+        .padding(.horizontal, 13)
     }
 
     // MARK: Results
@@ -156,30 +321,15 @@ struct AppUninstallerView: View {
                 .padding(.vertical, 14)
             }
 
-            HairlineDivider()
-            footer(plan)
         }
     }
 
     private func planHeader(_ plan: AppUninstallPlan) -> some View {
-        HStack(spacing: 13) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: plan.applicationURL.path))
-                .resizable()
-                .frame(width: 44, height: 44)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(plan.applicationName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Token.Text.primary)
-                Text(plan.bundleIdentifier ?? "Bundle identifier unavailable")
-                    .font(.mcMonoSmall)
-                    .foregroundStyle(plan.isApplicationOnly
-                        ? Token.textColor(.orange) : Token.Text.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
+        reviewHeader(
+            url: plan.applicationURL, name: plan.applicationName,
+            identifier: plan.bundleIdentifier ?? "Bundle identifier unavailable",
+            identifierIsWarning: plan.isApplicationOnly
+        ) {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(ByteFormatting.string(plan.totalBytes))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
@@ -189,6 +339,34 @@ struct AppUninstallerView: View {
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)
             }
+        }
+    }
+
+    /// One header for the review and for its loading state, so nothing moves when
+    /// the plan arrives.
+    private func reviewHeader<Figures: View>(
+        url: URL, name: String, identifier: String, identifierIsWarning: Bool,
+        @ViewBuilder figures: () -> Figures
+    ) -> some View {
+        HStack(spacing: 13) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                .resizable()
+                .frame(width: 44, height: 44)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Token.Text.primary)
+                Text(identifier)
+                    .font(.mcMonoSmall)
+                    .foregroundStyle(identifierIsWarning
+                        ? Token.textColor(.orange) : Token.Text.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            figures()
 
             Button(action: model.resetAppUninstall) {
                 Image(systemName: "xmark.circle.fill")
@@ -196,7 +374,7 @@ struct AppUninstallerView: View {
                     .foregroundStyle(Token.Text.secondary)
             }
             .buttonStyle(.plain)
-            .help("Choose another application")
+            .help("Back to all applications")
         }
         .padding(16)
     }
@@ -346,49 +524,6 @@ struct AppUninstallerView: View {
         .hoverHighlight()
     }
 
-    private func footer(_ plan: AppUninstallPlan) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(plan.items.count == 1
-                    ? "1 item to remove" : "\(plan.items.count) items to remove")
-                    .font(.mcControlLabel)
-                    .foregroundStyle(Token.Text.primary)
-                Text(ByteFormatting.string(plan.totalBytes))
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-            }
-
-            Spacer()
-
-            Button("Choose Another…", action: chooseApplication)
-                .buttonStyle(SecondaryButtonStyle())
-
-            if let package = plan.managedPackage {
-                Button("Copy Homebrew Uninstall Command") {
-                    copyHomebrewCommand(package)
-                }
-                .buttonStyle(.borderedProminent)
-                .help(package.uninstallCommand)
-            } else {
-                Button(uninstallButtonTitle(plan), action: model.requestAppUninstall)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Token.color(.red))
-                    .controlSize(.regular)
-            }
-        }
-        .padding(16)
-    }
-
-    private func uninstallButtonTitle(_ plan: AppUninstallPlan) -> String {
-        let action = plan.isApplicationOnly ? "Uninstall Application" : "Uninstall"
-        return "\(action) · \(ByteFormatting.string(plan.totalBytes))"
-    }
-
-    private func copyHomebrewCommand(_ package: AppUninstallPlan.ManagedPackage) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(package.uninstallCommand, forType: .string)
-    }
-
     // MARK: Done state
 
     private func doneState(_ outcome: CleanupOutcome) -> some View {
@@ -433,23 +568,140 @@ struct AppUninstallerView: View {
         .padding(28)
     }
 
-    // MARK: Helpers
+    // MARK: Several applications
 
-    private func chooseApplication() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose an Application to Uninstall"
-        panel.prompt = "Review Application"
-        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-        panel.allowedContentTypes = [.applicationBundle]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.resolvesAliases = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { @MainActor in model.planAppUninstall(url) }
+    private func batchReviewState(_ review: AppModel.BatchUninstallReview) -> some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !review.plans.isEmpty {
+                        GroupedBox {
+                            VStack(spacing: 0) {
+                                ForEach(Array(review.plans.enumerated()), id: \.element.applicationURL) { index, plan in
+                                    if index > 0 { HairlineDivider() }
+                                    batchPlanRow(plan)
+                                }
+                            }
+                        }
+                    }
+                    if !review.setAside.isEmpty {
+                        setAsideBox(review.setAside, title: "Not part of this uninstall")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+            }
+
         }
     }
+
+    private func batchPlanRow(_ plan: AppUninstallPlan) -> some View {
+        HStack(spacing: 10) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: plan.applicationURL.path))
+                .resizable()
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(plan.applicationName)
+                        .font(.mcBody.weight(.medium))
+                        .foregroundStyle(Token.Text.primary)
+                        .lineLimit(1)
+                    if !plan.protectedItems.isEmpty {
+                        Badge(text: "includes user data").fixedSize()
+                    }
+                }
+                Text(plan.isApplicationOnly
+                    ? "Application only — related files cannot be identified safely"
+                    : "Application and \(plan.items.count - 1) related "
+                        + (plan.items.count == 2 ? "item" : "items"))
+                    .font(.mcCaption)
+                    .foregroundStyle(plan.isApplicationOnly
+                        ? Token.textColor(.orange) : Token.Text.tertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Text(ByteFormatting.string(plan.totalBytes))
+                .font(.mcRowValue)
+                .foregroundStyle(Token.Text.secondary)
+                .fixedSize()
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 48)
+    }
+
+    private func setAsideBox(
+        _ applications: [AppModel.SetAsideApplication], title: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).mcEyebrowStyle()
+            GroupedBox {
+                VStack(spacing: 0) {
+                    ForEach(Array(applications.enumerated()), id: \.offset) { index, application in
+                        if index > 0 { HairlineDivider() }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(application.name)
+                                .font(.mcBody.weight(.medium))
+                                .foregroundStyle(Token.Text.primary)
+                            Text(application.reason)
+                                .font(.mcCaption)
+                                .foregroundStyle(Token.textColor(.orange))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+        }
+    }
+
+    private func batchDoneState(_ outcome: AppModel.BatchUninstallOutcome) -> some View {
+        let clean = outcome.setAside.isEmpty && outcome.survivorCount == 0
+        let count = outcome.uninstalled.count
+        return ScrollView {
+            VStack(spacing: 15) {
+                Image(systemName: clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 54))
+                    .foregroundStyle(clean ? Token.color(.green) : Token.color(.orange))
+                Text(count == 0
+                    ? "No applications were uninstalled"
+                    : "\(count) \(count == 1 ? "application" : "applications") uninstalled")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Token.Text.primary)
+                if count > 0 {
+                    Text("\(ListFormatter.localizedString(byJoining: outcome.uninstalled)). "
+                        + "Moved \(ByteFormatting.string(outcome.removedBytes)) to the Trash.")
+                        .font(.mcBody)
+                        .foregroundStyle(Token.Text.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 460)
+                }
+                if outcome.survivorCount > 0 {
+                    Text("\(outcome.survivorCount) related "
+                        + (outcome.survivorCount == 1 ? "item remains" : "items remain")
+                        + " on disk.")
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.textColor(.orange))
+                }
+                if !outcome.setAside.isEmpty {
+                    setAsideBox(outcome.setAside, title: "Still installed")
+                        .frame(maxWidth: 460)
+                }
+                Button("Done", action: model.resetAppUninstall)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.top, 4)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(28)
+        }
+    }
+
+    // MARK: Helpers
 
     private func categoryTitle(_ category: AppUninstallPlan.Item.Category) -> String {
         switch category {
@@ -462,6 +714,111 @@ struct AppUninstallerView: View {
         case .state: "Saved State"
         case .helpers: "Helpers & Launch Items"
         }
+    }
+}
+
+/// Application icons by path. `NSWorkspace.icon(forFile:)` is synchronous and a
+/// card's body runs again whenever any figure lands, so an uncached grid asked for
+/// every icon once per application measured.
+@MainActor
+private enum ApplicationIcons {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func icon(for url: URL) -> NSImage {
+        if let cached = cache.object(forKey: url.path as NSString) { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        cache.setObject(icon, forKey: url.path as NSString)
+        return icon
+    }
+}
+
+/// One installed application. The card toggles its tick; the chevron opens the
+/// review. The chevron is a sibling laid over the card, not a button inside the
+/// card's label — a button nested in a button's label does not get its own clicks.
+private struct ApplicationCard: View {
+    let application: InstalledApplication
+    let bytes: Int64?
+    let isSelected: Bool
+    let toggle: () -> Void
+    let open: () -> Void
+
+    @State private var isChevronHovered = false
+
+    var body: some View {
+        Button(action: toggle) {
+            VStack(spacing: 6) {
+                Image(nsImage: ApplicationIcons.icon(for: application.url))
+                    .resizable()
+                    .frame(width: 48, height: 48)
+                    .padding(.bottom, 2)
+                Text(application.name)
+                    .font(.mcBody.weight(.medium))
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                ZStack {
+                    if let bytes {
+                        Text(ByteFormatting.string(bytes))
+                            .font(.mcCaption)
+                            .foregroundStyle(Token.Text.secondary)
+                            .transition(.opacity)
+                    } else {
+                        SkeletonBone(width: 52, height: 9)
+                            .skeletonPulse()
+                            .transition(.opacity)
+                    }
+                }
+                .frame(height: 14)
+                .animation(.easeOut(duration: 0.25), value: bytes == nil)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, minHeight: 126)
+            // Before the box fill: the highlight is a background, and a background
+            // added after the fill would sit underneath it and never show.
+            .hoverHighlight(radius: Token.Radius.card)
+            .background(
+                isSelected ? Token.color(.accent).opacity(0.10) : Token.Fill.box, in: shape
+            )
+            .overlay(shape.strokeBorder(
+                isSelected ? Token.color(.accent) : Token.Fill.boxBorder,
+                lineWidth: isSelected ? 1.5 : Token.hairline
+            ))
+            .overlay(alignment: .topLeading) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isSelected ? Token.color(.accent) : Token.Text.disabled)
+                    .padding(8)
+            }
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(bytes.map { "\(application.name), \(ByteFormatting.string($0))" }
+            ?? application.name)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint("Selects this application for uninstall")
+        .overlay(alignment: .topTrailing) {
+            Button(action: open) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isChevronHovered ? Token.Text.primary : Token.Text.tertiary)
+                    .frame(width: 24, height: 24)
+                    .background(
+                        isChevronHovered ? Token.Fill.control : .clear,
+                        in: RoundedRectangle(cornerRadius: Token.Radius.control)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isChevronHovered = $0 }
+            .padding(5)
+            .help("Review \(application.name) and its related files")
+            .accessibilityLabel("Review \(application.name)")
+        }
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Token.Radius.card, style: .continuous)
     }
 }
 

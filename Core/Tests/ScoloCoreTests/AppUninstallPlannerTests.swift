@@ -351,4 +351,36 @@ struct AppUninstallPlannerTests {
             _ = try await sandbox.planner().plan(applicationURL: link)
         }
     }
+
+    @Test("the installed list offers exactly what a plan would accept")
+    func installedApplicationsMatchThePlanner() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.application("Zed", identifier: "com.vendor.zed")
+        try sandbox.application("alpha", identifier: "com.vendor.alpha",
+                                under: sandbox.userApplications)
+        try sandbox.application("No Identifier", identifier: nil)
+        try sandbox.application("System", identifier: "com.apple.systemtool")
+        try sandbox.application("Scolo", identifier: "com.tommasolaterza.Scolo")
+        let excluded = try sandbox.application("Excluded", identifier: "com.vendor.excluded")
+        let real = try sandbox.application("Real", identifier: "com.vendor.real")
+        try FileManager.default.createSymbolicLink(
+            at: sandbox.applications.appendingPathComponent("Linked.app"),
+            withDestinationURL: real
+        )
+        // A vendor folder is not an application, and what it holds is not listed.
+        try sandbox.application(
+            "Nested", identifier: "com.vendor.nested",
+            under: sandbox.applications.appendingPathComponent("Vendor", isDirectory: true)
+        )
+
+        let context = ScanContext(excludedPaths: [excluded.path])
+        let listed = sandbox.planner().installedApplications(context: context)
+
+        #expect(listed.map(\.name) == ["alpha", "No Identifier", "Real", "Zed"])
+        #expect(listed.first { $0.name == "No Identifier" }?.bundleIdentifier == nil)
+        // Every card must open a review: nothing listed may be refused by the plan.
+        for application in listed {
+            _ = try await sandbox.planner().plan(applicationURL: application.url, context: context)
+        }
+    }
 }
