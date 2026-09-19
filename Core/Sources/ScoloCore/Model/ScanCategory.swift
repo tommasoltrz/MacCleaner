@@ -160,11 +160,10 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
         }
     }
 
-    /// A child the parent's own row does not speak for: it regenerates, and nothing
-    /// refuses its removal. A badge never overrides a lock — and a cache whose
-    /// owner is running is not safe *yet*; see `FileEntry.inUseBy`.
+    /// A child the parent's own row does not speak for — see
+    /// `FileEntry.regeneratesSafely`, which the Scanner's badge reads too.
     private static func isSafeChild(_ child: FileEntry) -> Bool {
-        child.isRegenerable && !child.isRemovalLocked && child.inUseBy == nil
+        child.regeneratesSafely
     }
 
     /// Whether the row itself — not merely something inside it — is safe to remove.

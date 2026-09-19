@@ -566,7 +566,14 @@ private struct ChildRow: View {
                 if entry.protectionReason == .userData {
                     Badge(text: "user data").fixedSize()
                 } else if entry.isRegenerable {
-                    Badge(text: "regenerable", style: .safe).fixedSize()
+                    // Green says *safe*, so it asks Core's question, the one the
+                    // tile asks — see `FileEntry.regeneratesSafely`. A cache under
+                    // its running owner still regenerates, so the word stays and
+                    // the colour goes. The owner is not named on each child: the
+                    // parent row a line above already reads "running", and eight
+                    // copies of "Google Chrome is open" said nothing the first had not.
+                    Badge(text: "regenerable", style: entry.regeneratesSafely ? .safe : .neutral)
+                        .fixedSize()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -607,6 +614,11 @@ private struct ChildRow: View {
         }
         if entry.isRemovalLocked {
             return "Protected while the app is running."
+        }
+        if let owner = entry.inUseBy {
+            // Information, not a lock: the checkbox works.
+            return "\(owner.name) is open and may be using these files, so they are "
+                + "not counted as safe. Quit it first, or let Clean Up quit it for you."
         }
         return "Remove only this item. Keep its parent."
     }
