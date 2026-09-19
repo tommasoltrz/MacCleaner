@@ -406,6 +406,11 @@ private struct FileRow: View {
             return "This app cannot delete this item. Click the terminal badge for "
                 + "the command that does."
         }
+        if let owner = entry.inUseBy, entry.protectionReason == nil {
+            // Information, not a lock: the checkbox works.
+            return "\(owner.name) is open and may be using these files, so they are "
+                + "not counted as safe. Quit it first, or let Clean Up quit it for you."
+        }
         switch entry.protectionReason {
         case .running:
             return "This app is running. Quit it to remove it. Its support files "
@@ -462,6 +467,10 @@ private struct FileRow: View {
                     // and says the true thing: "in use" on an app that was merely
                     // opened last week reads as a lie.
                     Badge(text: Self.badgeText(for: reason)).fixedSize()
+                } else if let owner = entry.inUseBy {
+                    // Names the owner: "in use" alone sends the user hunting for
+                    // which of their open apps is meant.
+                    Badge(text: "\(owner.name) is open").fixedSize()
                 }
             }
 

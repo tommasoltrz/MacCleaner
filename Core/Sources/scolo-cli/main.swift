@@ -123,7 +123,25 @@ struct CLI {
                 return urls.contains { FileManager.default.fileExists(atPath: $0.path) }
             }
         )
+        // What is open, with names — a cache under a live owner is not counted
+        // safe, and the harness has to agree with the app about that figure.
+        let owners = await MainActor.run {
+            // Dock applications only, as in the app: an owner is something the
+            // user opened and can quit, not an agent like Siri, and never Finder.
+            NSWorkspace.shared.runningApplications.filter {
+                $0.activationPolicy == .regular && $0.bundleIdentifier != "com.apple.finder"
+            }.compactMap { application in
+                application.bundleURL.map {
+                    FileEntry.RunningOwner(
+                        name: application.localizedName ?? $0.lastPathComponent,
+                        bundleIdentifier: application.bundleIdentifier,
+                        bundlePath: $0.path
+                    )
+                }
+            }
+        }
         let context = ScanContext(
+            runningApplications: owners,
             registeredApplicationBundleIdentifiers: registered,
             applicationLeftoverCandidates: candidates
         )
@@ -167,6 +185,24 @@ struct CLI {
                     owner[entry.id] = category.categoryID
                 }
             }
+        }
+
+        // Rows held by an open application: listed, removable, not called safe.
+        let held = results.categories.flatMap { category in
+            category.entries.flatMap { [$0] + $0.children }
+        }.filter { $0.inUseBy != nil && !$0.isRemovalLocked }
+        var heldByOwner: [String: (count: Int, bytes: Int64)] = [:]
+        for entry in held {
+            let name = entry.inUseBy?.name ?? ""
+            heldByOwner[name, default: (0, 0)].count += 1
+            heldByOwner[name, default: (0, 0)].bytes += entry.allocatedBytes
+        }
+        print("")
+        print("  in use by an open application (not counted safe):")
+        if heldByOwner.isEmpty { print("      none") }
+        for (name, figure) in heldByOwner.sorted(by: { $0.value.bytes > $1.value.bytes }) {
+            print("      \(ByteFormatting.string(figure.bytes).padding(toLength: 11, withPad: " ", startingAt: 0)) "
+                  + "\(name)  · \(figure.count) rows")
         }
 
         print("")

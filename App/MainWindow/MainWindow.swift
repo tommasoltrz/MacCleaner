@@ -112,7 +112,11 @@ struct MainWindow: View {
                         }
                     ),
                     keepReceipt: $model.keepReceipt,
+                    runningOwnerNames: model.pendingCleanUp?.runningOwners.map(\.name) ?? [],
                     onConfirm: { Task { await model.performCleanUp() } },
+                    onQuitAndConfirm: {
+                        Task { await model.performCleanUp(quittingOwners: true) }
+                    },
                     onCancel: { model.cancelCleanUp() }
                 )
             case .deletePhotos:

@@ -58,7 +58,18 @@ struct ConfirmationSheet: View {
     /// Whether to keep a removal-log receipt. Ignored by the erase variant, which
     /// cannot be undone by definition.
     @Binding var keepReceipt: Bool
+    /// Applications that are open right now and own something in this clean-up.
+    ///
+    /// Non-empty turns the sheet's one decision into two: quit them first, or go
+    /// ahead under them. Removing a cache from under its owner frees the same
+    /// bytes, and the owner may misbehave until it is relaunched — Chrome did, on
+    /// 19 Sep 2026; see `FileEntry.inUseBy`. The sheet says so and offers to do the
+    /// quitting, and leaves the choice where it belongs.
+    var runningOwnerNames: [String] = []
     let onConfirm: () -> Void
+    /// Quit `runningOwnerNames`, then run the same plan. Required for the
+    /// quit-first button to appear at all.
+    var onQuitAndConfirm: (() -> Void)? = nil
     let onCancel: () -> Void
 
     var body: some View {
@@ -79,6 +90,19 @@ struct ConfirmationSheet: View {
                 }
             }
 
+            if let runningOwnersNote {
+                Label {
+                    Text(runningOwnersNote)
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(Token.textColor(.orange))
+                }
+                .padding(.top, 14)
+            }
+
             if showsReceipt {
                 receiptRow.padding(.top, 16)
             }
@@ -88,13 +112,23 @@ struct ConfirmationSheet: View {
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
 
-                Button(confirmLabel, action: onConfirm)
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    // The design's own note: the prototype reused one label for both
-                    // variants and it was wrong for the destructive one. Erasing is
-                    // not "moving", and it gets the destructive tint.
-                    .tint(isDestructive ? Token.color(.red) : Color.accentColor)
+                if let onQuitAndConfirm, !runningOwnerNames.isEmpty {
+                    // Return goes to the quit-first button: the default action of a
+                    // sheet should be the one that cannot leave an app half-working.
+                    Button(confirmLabel, action: onConfirm)
+                    Button("Quit and Clean", action: onQuitAndConfirm)
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                        .tint(isDestructive ? Token.color(.red) : Color.accentColor)
+                } else {
+                    Button(confirmLabel, action: onConfirm)
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                        // The design's own note: the prototype reused one label for
+                        // both variants and it was wrong for the destructive one.
+                        // Erasing is not "moving", and it gets the destructive tint.
+                        .tint(isDestructive ? Token.color(.red) : Color.accentColor)
+                }
             }
             .padding(.top, 18)
         }
@@ -105,6 +139,22 @@ struct ConfirmationSheet: View {
     }
 
     // MARK: - Variant copy
+
+    /// What the sheet says about open applications, or nothing.
+    ///
+    /// It claims only what is known: the files are in use and the app *may*
+    /// misbehave. Whether it will depends on what that process holds in memory,
+    /// which nothing outside it can see.
+    private var runningOwnersNote: String? {
+        guard !runningOwnerNames.isEmpty else { return nil }
+        let names = ListFormatter.localizedString(byJoining: runningOwnerNames)
+        let plural = runningOwnerNames.count > 1
+        return "\(names) \(plural ? "are" : "is") open and using some of these files. "
+            + "Removing them now frees the same space, but \(plural ? "those apps" : "it") "
+            + "may misbehave until relaunched. \u{201C}Quit and Clean\u{201D} asks "
+            + "\(plural ? "them" : "it") to quit first; nothing is removed unless "
+            + "\(plural ? "they do" : "it does")."
+    }
 
     /// Only the Trash keeps a receipt; a deleted photo is recovered in Photos'
     /// own Recently Deleted, which this app has no hand in — and a wholly
@@ -341,6 +391,18 @@ struct ConfirmationSheet: View {
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
+    )
+}
+
+#Preview("Clean up — owners open") {
+    ConfirmationSheet(
+        variant: .cleanUp(
+            itemCount: 6, totalBytes: 14_210_000_000,
+            permanentCount: 0, protectedDataCount: 0, saving: nil
+        ),
+        keepReceipt: .constant(true),
+        runningOwnerNames: ["Google Chrome", "Xcode"],
+        onConfirm: {}, onQuitAndConfirm: {}, onCancel: {}
     )
 }
 

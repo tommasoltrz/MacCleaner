@@ -161,14 +161,21 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     }
 
     /// A child the parent's own row does not speak for: it regenerates, and nothing
-    /// refuses its removal. A badge never overrides a lock.
+    /// refuses its removal. A badge never overrides a lock — and a cache whose
+    /// owner is running is not safe *yet*; see `FileEntry.inUseBy`.
     private static func isSafeChild(_ child: FileEntry) -> Bool {
-        child.isRegenerable && !child.isRemovalLocked
+        child.isRegenerable && !child.isRemovalLocked && child.inUseBy == nil
     }
 
     /// Whether the row itself — not merely something inside it — is safe to remove.
+    ///
+    /// A row held open by a running application is not: it lands in Needs Review,
+    /// which is also what keeps it out of the pre-ticked selection, since that is
+    /// seeded from the safe list. See `FileEntry.inUseBy`.
     private func countsAsSafe(_ entry: FileEntry) -> Bool {
-        categoryID == .applicationLeftovers || (categoryID.isSafe && entry.isRegenerable)
+        guard entry.inUseBy == nil else { return false }
+        return categoryID == .applicationLeftovers
+            || (categoryID.isSafe && entry.isRegenerable)
     }
 
     /// Everything else: each category without a safe badge, plus each

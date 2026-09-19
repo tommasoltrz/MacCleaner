@@ -107,6 +107,31 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     public var manualRemoval: ManualRemoval?
 
+    /// The running application that has this row's files open.
+    ///
+    /// Not a lock and not a `ProtectionReason`: the checkbox works and removal is
+    /// allowed. It withdraws one claim only — *safe*. "Regenerable" had been judged
+    /// by what is on disk, and a running process also holds state in memory. On
+    /// 19 Sep 2026 Chrome's `Shared Dictionary` went from under a live Chrome, which
+    /// kept advertising dictionaries it no longer had; `www.reddit.com` failed with
+    /// `ERR_DICTIONARY_LOAD_FAILED` until Chrome was relaunched. That folder is no
+    /// longer offered at all, but the rule it broke is general: nothing here knows
+    /// what another process keeps in RAM, so a cache under a live owner is never
+    /// counted safe and never ticked for the user. Quit the owner and it is both.
+    public struct RunningOwner: Sendable, Equatable, Hashable {
+        public let name: String
+        public let bundleIdentifier: String?
+        public let bundlePath: String
+
+        public init(name: String, bundleIdentifier: String?, bundlePath: String) {
+            self.name = name
+            self.bundleIdentifier = bundleIdentifier
+            self.bundlePath = bundlePath
+        }
+    }
+
+    public var inUseBy: RunningOwner?
+
     /// A specialized cleanup action for this row.
     public var removalAction: RemovalAction?
 
@@ -141,6 +166,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         isRegenerable: Bool = false,
         protectionReason: ProtectionReason? = nil,
         manualRemoval: ManualRemoval? = nil,
+        inUseBy: RunningOwner? = nil,
         removalAction: RemovalAction? = nil,
         childCount: Int? = nil,
         children: [FileEntry] = []
@@ -155,6 +181,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         self.isRegenerable = isRegenerable
         self.protectionReason = protectionReason
         self.manualRemoval = manualRemoval
+        self.inUseBy = inUseBy
         self.removalAction = removalAction
         self.childCount = childCount
         self.children = children
@@ -202,7 +229,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// children rather than rows and their parent is never safe.
     public var regenerableChildBytes: Int64 {
         children
-            .filter { $0.isRegenerable && !$0.isRemovalLocked }
+            .filter { $0.isRegenerable && !$0.isRemovalLocked && $0.inUseBy == nil }
             .reduce(0) { $0 + $1.allocatedBytes }
     }
 

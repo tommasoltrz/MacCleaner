@@ -171,6 +171,19 @@ public struct ApplicationsScanner: CategoryScanner {
                     children[index].protectionReason = .userData
                 }
 
+                // A running app's caches stay listed and removable, but are not
+                // called safe while it runs — see `FileEntry.inUseBy`.
+                if reason == .running {
+                    let owner = context.runningOwner(atBundlePath: appURL.path)
+                        ?? FileEntry.RunningOwner(
+                            name: baseName, bundleIdentifier: bundleID,
+                            bundlePath: appURL.path
+                        )
+                    for index in children.indices where children[index].isRegenerable {
+                        children[index].inUseBy = owner
+                    }
+                }
+
                 entries.append(FileEntry(
                     url: appURL,
                     // Finder hides the `.app` extension, so the row should too.
