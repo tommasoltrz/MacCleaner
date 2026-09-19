@@ -91,7 +91,12 @@ public struct ApplicationsScanner: CategoryScanner {
                 // remainder. The plain leftover row for the same folder is dropped,
                 // because listing both would offer the same bytes twice.
                 let curation = Self.curation(bundleID: bundleID, baseName: baseName, home: home)
-                let curatedRoot = curation.map {
+                // A sandboxed app's container gets the same split, by the sandbox's
+                // own layout rather than by a table — see `containerCuration`.
+                let containerCuration = Self.containerCuration(
+                    bundleID: bundleID, baseName: baseName, home: home
+                )
+                let curatedRoots = [curation, containerCuration].compactMap { $0 }.map {
                     home.appendingPathComponent($0.root).standardizedFileURL.path
                 }
 
@@ -99,8 +104,8 @@ public struct ApplicationsScanner: CategoryScanner {
                 for candidate in Self.leftoverCandidates(
                     baseName: baseName, bundleID: bundleID, library: library
                 ) {
-                    if let curatedRoot,
-                       Self.overlaps(candidate.url.standardizedFileURL.path, curatedRoot) {
+                    let candidatePath = candidate.url.standardizedFileURL.path
+                    if curatedRoots.contains(where: { Self.overlaps(candidatePath, $0) }) {
                         continue
                     }
                     // A leftover can be excluded on its own — an explicit exclusion
@@ -136,6 +141,21 @@ public struct ApplicationsScanner: CategoryScanner {
                 // the app matter: the bundle itself can ship a keychain, and so can
                 // its support folder — and removing the app row takes both.
                 guard !supportIsProtected else { continue }
+
+                // A container that holds protected content is left off the list and
+                // the application stays, which is what the plain leftover rule did
+                // for it before the split existed. Nothing can remove the container
+                // through this row: a child that is not listed is not removed.
+                // `curatedChildren` hands back no entries for such a folder, so
+                // `holdsProtectedContent` is deliberately not consulted here — it is
+                // what withdraws the whole application, and that is the other rule.
+                if let containerCuration,
+                   let curated = try await Self.curatedChildren(
+                       containerCuration, home: home, context: context
+                   ) {
+                    unreadableCount += curated.unreadableCount
+                    children.append(contentsOf: curated.entries)
+                }
 
                 let bundleSize = try await context.measurer.measure(appURL)
                 guard bundleSize.allocatedBytes > 0 else { continue }
@@ -484,6 +504,45 @@ public struct ApplicationsScanner: CategoryScanner {
         }
         return nil
     }
+
+    // MARK: - The sandbox rule
+
+    /// The split for a sandboxed app's container, if it has one with a cache in it.
+    ///
+    /// A sandboxed app cannot write to `~/Library/Caches`. Its `NSCachesDirectory`
+    /// is `~/Library/Containers/<bundle id>/Data/Library/Caches`, so everything
+    /// System Caches offers for an ordinary app sat, for a sandboxed one, inside the
+    /// container — one locked `userData` row, cache and documents alike. This is not
+    /// a name being trusted: the sandbox fixes the layout, and the path is where the
+    /// system itself sends a request for the caches directory.
+    ///
+    /// The cache's *children* are offered, never `Caches` itself. The container's
+    /// skeleton is laid down when the container is created, and nothing observed
+    /// says it is laid down again for an app that finds the folder gone. Removing
+    /// what is in it asks for no such promise.
+    ///
+    /// Not measured here: the shell has no Full Disk Access and `du` answers zero
+    /// for a container it may not read. The figures have to come from the app.
+    static func containerCuration(
+        bundleID: String?, baseName: String, home: URL
+    ) -> AppDataCuration? {
+        // An empty identifier would name `Containers` itself.
+        guard let bundleID, !bundleID.isEmpty else { return nil }
+        let root = "Library/Containers/\(bundleID)"
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: home.appendingPathComponent("\(root)/\(containerCachePath)").path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else { return nil }
+        return AppDataCuration(
+            root: root,
+            regenerable: ["\(containerCachePath)/*"],
+            remainderName: "\(baseName) container"
+        )
+    }
+
+    /// Where the sandbox puts `NSCachesDirectory`, relative to the container.
+    static let containerCachePath = "Data/Library/Caches"
 
     // MARK: - Applying a curation
 
