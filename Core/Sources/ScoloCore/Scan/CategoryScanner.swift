@@ -9,17 +9,6 @@ public struct ScanContext: Sendable {
     public var excludedPaths: [String]
     /// Glob rules such as `*.sparsebundle`.
     public var excludedPatterns: [String]
-    /// Preferences › Exclusions › "Protect files opened in the last N days".
-    ///
-    /// **Recency is information, not a decision.** A recently used item is listed
-    /// with the `recentUse` badge and its checkbox works; it is never hidden, never
-    /// pre-selected, and never counted as safe. The Documents scanner used to treat
-    /// this as an exclusion and *skip* recent items — which hid an 11 GB build
-    /// folder precisely because the user had built something that morning. The
-    /// user decides what to do with a folder they touched yesterday, not a date.
-    /// Consult `isRecencyProtected(_:)` when building an entry; `isExcluded` does
-    /// not know about dates at all.
-    public var protectRecentDays: Int
     /// Bundle paths of applications currently running, supplied by the app layer
     /// (NSWorkspace is AppKit, which Core deliberately does not import). Unlike any
     /// date heuristic this is ground truth: a running app is in use, full stop.
@@ -39,7 +28,6 @@ public struct ScanContext: Sendable {
         measurer: AllocatedSizeMeasurer = AllocatedSizeMeasurer(),
         excludedPaths: [String] = [],
         excludedPatterns: [String] = [],
-        protectRecentDays: Int = 30,
         runningApplicationPaths: Set<String> = [],
         runningApplications: [FileEntry.RunningOwner] = [],
         registeredApplicationBundleIdentifiers: Set<String> = [],
@@ -53,7 +41,6 @@ public struct ScanContext: Sendable {
         self.measurer = measurer
         self.excludedPaths = excludedPaths
         self.excludedPatterns = excludedPatterns
-        self.protectRecentDays = protectRecentDays
         self.runningApplicationPaths = runningApplicationPaths
             .union(runningApplications.map(\.bundlePath))
         self.runningApplications = runningApplications
@@ -97,17 +84,10 @@ public struct ScanContext: Sendable {
         }
     }
 
-    /// Whether an item was used inside the protection window. The answer becomes a
-    /// `FileEntry.ProtectionReason.recentUse` badge on the row — see
-    /// `protectRecentDays` for why it is never anything more.
-    public func isRecencyProtected(_ lastOpened: Date?) -> Bool {
-        guard let lastOpened, protectRecentDays > 0 else { return false }
-        return lastOpened > Date().addingTimeInterval(-Double(protectRecentDays) * 86_400)
-    }
-
     /// True when a path is excluded, inside an excluded folder — **or contains
-    /// one**. Every scanner must consult this before emitting an entry. Recency is
-    /// not part of this answer: see `protectRecentDays`.
+    /// one**. Every scanner must consult this before emitting an entry. A date is
+    /// no part of this answer: nothing here hides, locks or badges a row for having
+    /// been used lately — see `FileEntry.ProtectionReason`.
     ///
     /// The ancestor rule matters as much as the descendant one: with
     /// `~/Documents/Project/Secrets` excluded, a row for `~/Documents/Project` would
@@ -155,8 +135,7 @@ public struct ScanContext: Sendable {
 ///
 /// Implementations must:
 /// * measure **only** through `context.measurer` — never shell out to `du`;
-/// * consult `context.isExcluded(_:)` before emitting an entry, and set the
-///   `recentUse` badge from `context.isRecencyProtected(_:)` rather than hiding;
+/// * consult `context.isExcluded(_:)` before emitting an entry;
 /// * report `.unavailable(reason:)` with copy that tells the user how to fix it,
 ///   rather than failing silently;
 /// * propagate `CancellationError` so the toolbar's stop button works.
@@ -221,7 +200,6 @@ public extension CategoryScanner {
             allocatedBytes: measured.allocatedBytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
-            protectionReason: context.isRecencyProtected(lastOpened) ? .recentUse : nil,
             childCount: childCount
         )
     }

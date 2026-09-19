@@ -767,8 +767,7 @@ final class AppModel {
             // symlink would measure bytes that unlinking the candidate cannot free.
             measurer: AllocatedSizeMeasurer(followSymlinks: false),
             excludedPaths: settings?.excludedFolderPaths ?? [],
-            excludedPatterns: settings?.excludedPatterns ?? [],
-            protectRecentDays: 0
+            excludedPatterns: settings?.excludedPatterns ?? []
         )
         let planner = appUninstallPlanner
         appUninstallTask = Task { [weak self] in
@@ -1963,7 +1962,6 @@ final class AppModel {
                     measurer: AllocatedSizeMeasurer(followSymlinks: false),
                     excludedPaths: settings?.excludedFolderPaths ?? [],
                     excludedPatterns: settings?.excludedPatterns ?? [],
-                    protectRecentDays: settings?.protectRecentDays.rawValue ?? 30,
                     runningApplicationPaths: running,
                     runningApplications: runningOwners,
                     registeredApplicationBundleIdentifiers: registeredIdentifiers,

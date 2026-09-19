@@ -3,8 +3,8 @@ import Testing
 @testable import ScoloCore
 
 /// Build output is recognised by shape and offered as regenerable, wherever the
-/// project put it; and a recently used folder is shown with a badge, never hidden.
-@Suite("Build output and recency")
+/// project put it; and a folder used this morning is listed like any other.
+@Suite("Build output")
 struct BuildOutputTests {
 
     private final class Sandbox {
@@ -96,7 +96,7 @@ struct BuildOutputTests {
         try sandbox.file("Documents/old-project/node_modules/big/blob", bytes: 30 * 1024 * 1024)
 
         let result = try await DocumentsFilesScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
 
         let project = try #require(result.entries.first {
             $0.url.lastPathComponent == "old-project"
@@ -129,7 +129,7 @@ struct BuildOutputTests {
             .deletingLastPathComponent().deletingLastPathComponent()
 
         let result = try await DocumentsFilesScanner(home: sandbox.home).scan(
-            context: ScanContext(excludedPaths: [modules.standardizedFileURL.path], protectRecentDays: 0)
+            context: ScanContext(excludedPaths: [modules.standardizedFileURL.path])
         )
 
         #expect(!result.entries.contains { $0.url == modules })
@@ -148,7 +148,7 @@ struct BuildOutputTests {
         )
 
         let result = try await DocumentsFilesScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
         let row = try #require(result.entries.first {
             $0.url.lastPathComponent == "logioptionsplus_installer.app"
         })
@@ -199,7 +199,7 @@ struct BuildOutputTests {
             // "everything found here is safe" failed for a true reason about the
             // machine rather than a false one about the code.
             systemSimulatorRoot: sandbox.home.appendingPathComponent("no-simulators")
-        ).scan(context: ScanContext(protectRecentDays: 0))
+        ).scan(context: ScanContext())
 
         let row = try #require(result.entries.first { $0.displayName == "Renewals build output" })
         #expect(row.isRegenerable)
@@ -214,18 +214,19 @@ struct BuildOutputTests {
 
     // MARK: - Documents scanner
 
-    @Test("a recently used folder is listed with a badge, not hidden")
+    /// The scanner once skipped anything used in the last 30 days, which hid the
+    /// disk's largest folder — an 11 GB build, made that morning.
+    @Test("a folder written seconds ago is listed, unlocked and unlabelled")
     func recentFolderIsListedNotHidden() async throws {
         let sandbox = try Sandbox()
         try sandbox.file("Documents/Thesis/draft.txt", bytes: 2 * 1024 * 1024)
 
-        // Default window: 30 days. The fixture was written seconds ago.
         let result = try await DocumentsFilesScanner(home: sandbox.home)
             .scan(context: ScanContext())
         let row = try #require(result.entries.first { $0.url.lastPathComponent == "Thesis" })
 
-        #expect(row.protectionReason == .recentUse)
-        #expect(!row.isRemovalLocked, "information, not a veto: the checkbox works")
+        #expect(row.protectionReason == nil)
+        #expect(!row.isRemovalLocked)
         #expect(!row.isRegenerable, "and it is never counted as safe")
     }
 
@@ -243,7 +244,7 @@ struct BuildOutputTests {
         try sandbox.file("Pictures/Holiday/IMG_0002.HEIC", bytes: 2 * 1024 * 1024)
 
         let result = try await DocumentsFilesScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
         let names = Set(result.entries.map(\.url.lastPathComponent))
 
         #expect(!names.contains("Photos Library.photoslibrary"))
@@ -259,7 +260,7 @@ struct BuildOutputTests {
         try sandbox.derivedData("Documents/Renewals/build/Release", bytes: 40 * 1024 * 1024)
 
         let result = try await DocumentsFilesScanner(home: sandbox.home)
-            .scan(context: ScanContext(protectRecentDays: 0))
+            .scan(context: ScanContext())
         let row = try #require(result.entries.first { $0.url.lastPathComponent == "Renewals" })
 
         // The project keeps what the user made; the 40 MB of products left with
