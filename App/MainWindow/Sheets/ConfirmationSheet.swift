@@ -31,6 +31,13 @@ struct ConfirmationSheet: View {
             protectedDataCount: Int,
             applicationOnly: Bool
         )
+        /// Several applications, each already planned and shown in the batch review.
+        case uninstallApps(
+            applicationCount: Int,
+            itemCount: Int,
+            totalBytes: Int64,
+            protectedDataCount: Int
+        )
         case deleteDuplicateFiles(count: Int, totalBytes: Int64)
         case removeStorageItems(count: Int, totalBytes: Int64, cloudItemCount: Int)
         /// No byte count: `PHAssetResource` exposes no public size, so the sheet
@@ -162,6 +169,7 @@ struct ConfirmationSheet: View {
     private var showsReceipt: Bool {
         if case .cleanUp(let count, _, let permanent, _, _) = variant { return permanent < count }
         if case .uninstallApp = variant { return true }
+        if case .uninstallApps = variant { return true }
         if case .deleteDuplicateFiles = variant { return true }
         if case .removeStorageItems = variant { return true }
         return false
@@ -174,7 +182,7 @@ struct ConfirmationSheet: View {
         switch variant {
         case .cleanUp(_, _, let permanent, let protected, _): permanent > 0 || protected > 0
         case .emptyTrash, .deleteDuplicateFiles, .removeStorageItems,
-             .deletePhotos, .uninstallApp: true
+             .deletePhotos, .uninstallApp, .uninstallApps: true
         }
     }
 
@@ -198,6 +206,10 @@ struct ConfirmationSheet: View {
             return protected > 0
                 ? "Uninstall \(name) and remove its protected data?"
                 : "Uninstall \(name)?"
+        case .uninstallApps(let applications, _, _, let protected):
+            return protected > 0
+                ? "Uninstall \(applications) applications and remove their protected data?"
+                : "Uninstall \(applications) applications?"
         case .deletePhotos(let count):
             let noun = count == 1 ? "photo" : "photos"
             return "Delete \(count) \(noun) from every device?"
@@ -264,6 +276,20 @@ struct ConfirmationSheet: View {
                 + "(\(ByteFormatting.string(bytes))) will move to the Trash. "
                 + "If the application cannot move, none of its related files will be touched."
                 + warning
+        case .uninstallApps(let applications, let count, let bytes, let protected):
+            let related = max(0, count - applications)
+            let noun = related == 1 ? "related item" : "related items"
+            var warning = ""
+            if protected > 0 {
+                let protectedNoun = protected == 1 ? "item" : "items"
+                warning = " This includes \(protected) protected user-data \(protectedNoun); "
+                    + "profiles, logins, history, or settings may be lost."
+            }
+            return "\(applications) applications and \(related) \(noun) "
+                + "(\(ByteFormatting.string(bytes))) will move to the Trash, one application "
+                + "at a time. Each is asked to quit first; if one will not quit or cannot "
+                + "move, its files are left alone and the others continue."
+                + warning
         case .deletePhotos:
             // Every clause here is something the user would otherwise discover
             // afterwards: that this is not a local action, and that their iCloud
@@ -328,7 +354,7 @@ struct ConfirmationSheet: View {
             if permanent == count { return "Delete" }
             return permanent > 0 ? "Remove" : "Move to Trash"
         case .emptyTrash:   return "Erase"
-        case .uninstallApp: return "Uninstall"
+        case .uninstallApp, .uninstallApps: return "Uninstall"
         case .deletePhotos: return "Delete Everywhere"
         case .deleteDuplicateFiles: return "Move to Trash"
         case .removeStorageItems: return "Move to Trash"
@@ -353,6 +379,7 @@ struct ConfirmationSheet: View {
         if case .deleteDuplicateFiles = variant { return "doc.on.doc" }
         if case .removeStorageItems = variant { return "trash" }
         if case .uninstallApp = variant { return "trash.square" }
+        if case .uninstallApps = variant { return "trash.square" }
         if case .cleanUp(_, _, _, let protected, _) = variant, protected > 0 {
             return "exclamationmark.triangle"
         }

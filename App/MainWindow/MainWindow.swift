@@ -175,7 +175,74 @@ struct MainWindow: View {
                     onConfirm: { Task { await model.performAppUninstall() } },
                     onCancel: { model.cancelAppUninstall() }
                 )
+            case .uninstallApps:
+                ConfirmationSheet(
+                    variant: .uninstallApps(
+                        applicationCount: model.pendingBatchUninstall?.plans.count ?? 0,
+                        itemCount: model.pendingBatchUninstall?.itemCount ?? 0,
+                        totalBytes: model.pendingBatchUninstall?.totalBytes ?? 0,
+                        protectedDataCount: model.pendingBatchUninstall?.protectedDataCount ?? 0
+                    ),
+                    keepReceipt: $model.keepReceipt,
+                    onConfirm: { Task { await model.performBatchUninstall() } },
+                    onCancel: { model.cancelBatchUninstall() }
+                )
             }
+        }
+    }
+
+    /// The Uninstaller's actions, in the slot every other view uses. Which ones
+    /// depends on the page it is showing: a review, a batch review, or the grid.
+    @ViewBuilder
+    private var uninstallerStatusBarTrailing: some View {
+        if model.isPlanningAppUninstall || model.appUninstallOutcome != nil
+            || model.batchUninstallOutcome != nil {
+            EmptyView()
+        } else if let review = model.batchUninstallReview {
+            Text("\(review.plans.count) applications · \(review.itemCount) items")
+                .foregroundStyle(Token.Text.secondary)
+            Button("Back", action: model.resetAppUninstall)
+                .buttonStyle(SecondaryButtonStyle())
+            Button("Uninstall · \(ByteFormatting.string(review.totalBytes))",
+                   action: model.requestBatchUninstall)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(review.plans.isEmpty)
+        } else if let plan = model.appUninstallPlan {
+            Text(plan.items.count == 1 ? "1 item to remove" : "\(plan.items.count) items to remove")
+                .foregroundStyle(Token.Text.secondary)
+            if let package = plan.managedPackage {
+                Button("Copy Homebrew Uninstall Command") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(package.uninstallCommand, forType: .string)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .help(package.uninstallCommand)
+            } else {
+                Button(
+                    (plan.isApplicationOnly ? "Uninstall Application" : "Uninstall")
+                        + " · \(ByteFormatting.string(plan.totalBytes))",
+                    action: model.requestAppUninstall
+                )
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+            }
+        } else if !model.selectedApplicationIDs.isEmpty {
+            Text("\(model.selectedApplicationIDs.count) selected")
+                .foregroundStyle(Token.Text.secondary)
+            Button("Deselect All", action: model.clearApplicationSelection)
+                .buttonStyle(SecondaryButtonStyle())
+            // The ellipsis is the promise: related files are found and shown
+            // before anything is asked.
+            Button("Uninstall \(model.selectedApplicationIDs.count)…",
+                   action: model.reviewSelectedApplications)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(model.activity != nil)
         }
     }
 
@@ -312,7 +379,10 @@ struct MainWindow: View {
                     : "Select only unlocked items to continue."
             )
 
-        case .uninstaller, .history:
+        case .uninstaller:
+            uninstallerStatusBarTrailing
+
+        case .history:
             EmptyView()
 
         case .trash:
