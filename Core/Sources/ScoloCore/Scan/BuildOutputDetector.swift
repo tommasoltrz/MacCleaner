@@ -73,7 +73,32 @@ public enum BuildOutputDetector {
 
     /// Hidden names that are looked at anyway. Everything else starting with a
     /// dot is somebody's configuration.
-    private static let visibleHiddenNames: Set<String> = [".build", ".venv", ".tox", ".gradle"]
+    private static let visibleHiddenNames: Set<String> = Set(
+        [".build", ".venv", ".tox", ".gradle"] + taggedToolCaches.keys
+    )
+
+    /// Analysis caches that are recognised only when they carry their tool's
+    /// `CACHEDIR.TAG` — see `CacheDirectoryTag`.
+    ///
+    /// mypy, pytest and ruff each write the tag into their cache and rebuild it from
+    /// the sources beside it, with no network, so here the tag is both the shape test
+    /// and the evidence. The name says where to look; without the tag a folder so
+    /// named is somebody's folder.
+    ///
+    /// Three names and not "any tagged folder": `virtualenv` tags the environments it
+    /// creates too, and a tagged `.venv` with no lockfile is exactly what
+    /// `reinstallEvidence(for:)` refuses to call safe. The tag says "a tool made
+    /// this and can make it again"; only knowing the tool says what again costs.
+    ///
+    /// None of the three was on this Mac on 20 Sep 2026. What was: SwiftPM's `.build`
+    /// (tagged, and already recognised by `workspace-state.json`), uv's cache, and
+    /// `~/.gradle/daemon`. Nothing under `~/Library/Caches` carried a tag at all, so
+    /// there is no use for it there.
+    static let taggedToolCaches: [String: String] = [
+        ".mypy_cache": "mypy cache",
+        ".pytest_cache": "pytest cache",
+        ".ruff_cache": "ruff cache"
+    ]
 
     public static func kind(of url: URL) -> Kind? {
         if isXcodeDerivedData(url) { return .xcodeDerivedData }
@@ -131,6 +156,9 @@ public enum BuildOutputDetector {
     static func dependencyStore(_ url: URL) -> String? {
         let name = url.lastPathComponent
         let parent = url.deletingLastPathComponent()
+        if let label = taggedToolCaches[name] {
+            return CacheDirectoryTag.isPresent(in: url) ? label : nil
+        }
         switch name {
         case "node_modules":
             return "npm dependencies"
@@ -191,6 +219,10 @@ public enum BuildOutputDetector {
         let parent = url.deletingLastPathComponent()
         func firstBeside(_ names: [String]) -> String? {
             names.first { exists(parent.appendingPathComponent($0)) }
+        }
+        if taggedToolCaches[url.lastPathComponent] != nil {
+            // Rebuilt from the sources beside it; the tag is the tool's own word.
+            return CacheDirectoryTag.isPresent(in: url) ? CacheDirectoryTag.fileName : nil
         }
         switch url.lastPathComponent {
         case "node_modules":

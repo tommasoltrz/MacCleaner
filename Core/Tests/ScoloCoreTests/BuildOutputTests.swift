@@ -131,6 +131,48 @@ struct BuildOutputTests {
         #expect(evidence(try store("q/.tox", beside: ["tox.ini"])) == nil)
     }
 
+    /// mypy, pytest and ruff each write the Cache Directory Tagging Specification's
+    /// marker into their cache and rebuild it from the sources beside it, with no
+    /// network. The name says what to look for; the tag is the tool saying yes.
+    @Test("a tool's analysis cache is recognised on its tag, and the tag is its evidence")
+    func taggedToolCaches() async throws {
+        let sandbox = try Sandbox()
+        func tag(_ folder: String, signature: String = CacheDirectoryTag.signature) throws {
+            let url = sandbox.home.appendingPathComponent(folder).appendingPathComponent("CACHEDIR.TAG")
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data((signature + "\n").utf8).write(to: url)
+        }
+        try sandbox.file("Documents/py/src/app.py", bytes: 2 * 1024 * 1024)
+        let mypy = try sandbox.file("Documents/py/.mypy_cache/3.12/app.data.json", bytes: 9 * 1024 * 1024)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        try tag("Documents/py/.mypy_cache")
+        // The name without the tag is somebody's folder.
+        let bare = try sandbox.file("Documents/py/.ruff_cache/notes.txt", bytes: 3 * 1024 * 1024)
+            .deletingLastPathComponent()
+        let forged = try sandbox.file("Documents/py/.pytest_cache/v/cache", bytes: 3 * 1024 * 1024)
+            .deletingLastPathComponent().deletingLastPathComponent()
+        try tag("Documents/py/.pytest_cache", signature: "Signature: something-else")
+        // virtualenv tags its environments too, and a tag does not make one safe:
+        // putting it back needs the network and a lockfile.
+        try sandbox.file("Documents/py/.venv/pyvenv.cfg", bytes: 64)
+        try sandbox.file("Documents/py/.venv/lib/site.bin", bytes: 4 * 1024 * 1024)
+        try tag("Documents/py/.venv")
+
+        #expect(BuildOutputDetector.kind(of: mypy) == .dependencyStore("mypy cache"))
+        #expect(BuildOutputDetector.reinstallEvidence(for: mypy) == "CACHEDIR.TAG")
+        #expect(BuildOutputDetector.kind(of: bare) == nil)
+        #expect(BuildOutputDetector.kind(of: forged) == nil)
+
+        let result = try await DocumentsFilesScanner(home: sandbox.home).scan(context: ScanContext())
+        let project = try #require(result.entries.first { $0.url.lastPathComponent == "py" })
+        let safe = project.children.filter(\.regeneratesSafely).map(\.url.lastPathComponent)
+        #expect(safe == [".mypy_cache"])
+        let venv = try #require(project.children.first { $0.url.lastPathComponent == ".venv" })
+        #expect(venv.safetyCaveat == "no lockfile")
+    }
+
     @Test("a dependency store becomes a removable child of its project")
     func dependencyStoreBecomesProjectChild() async throws {
         let sandbox = try Sandbox()
