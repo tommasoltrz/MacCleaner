@@ -367,20 +367,124 @@ struct AppUninstallPlannerTests {
             at: sandbox.applications.appendingPathComponent("Linked.app"),
             withDestinationURL: real
         )
-        // A vendor folder is not an application, and what it holds is not listed.
+        // One level into a vendor folder — `Python 3.12/IDLE.app` — and no further.
+        let vendor = sandbox.applications.appendingPathComponent("Vendor", isDirectory: true)
+        try sandbox.application("Nested", identifier: "com.vendor.nested", under: vendor)
         try sandbox.application(
-            "Nested", identifier: "com.vendor.nested",
-            under: sandbox.applications.appendingPathComponent("Vendor", isDirectory: true)
+            "Buried", identifier: "com.vendor.buried",
+            under: vendor.appendingPathComponent("Deeper", isDirectory: true)
+        )
+        // What an excluded vendor folder holds is excluded with it.
+        let shut = sandbox.applications.appendingPathComponent("Shut", isDirectory: true)
+        try sandbox.application("Hidden", identifier: "com.vendor.hidden", under: shut)
+        // A link out of the root is not a vendor folder.
+        let outside = sandbox.home.appendingPathComponent("Elsewhere", isDirectory: true)
+        try sandbox.application("Outsider", identifier: "com.vendor.outsider", under: outside)
+        try FileManager.default.createSymbolicLink(
+            at: sandbox.applications.appendingPathComponent("LinkedFolder"),
+            withDestinationURL: outside
         )
 
-        let context = ScanContext(excludedPaths: [excluded.path])
+        let context = ScanContext(excludedPaths: [excluded.path, shut.path])
         let listed = sandbox.planner().installedApplications(context: context)
 
-        #expect(listed.map(\.name) == ["alpha", "No Identifier", "Real", "Zed"])
+        #expect(listed.map(\.name) == ["alpha", "Nested", "No Identifier", "Real", "Zed"])
         #expect(listed.first { $0.name == "No Identifier" }?.bundleIdentifier == nil)
         // Every card must open a review: nothing listed may be refused by the plan.
         for application in listed {
             _ = try await sandbox.planner().plan(applicationURL: application.url, context: context)
         }
+    }
+
+    // MARK: - Apple identifiers
+
+    /// A bundle with the App Store's receipt in it, as Pages or Xcode has.
+    private static func addAppStoreReceipt(to application: URL) throws {
+        let receipt = application.appendingPathComponent("Contents/_MASReceipt/receipt")
+        try FileManager.default.createDirectory(
+            at: receipt.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data(repeating: 0x30, count: 64).write(to: receipt)
+    }
+
+    /// `com.apple.` was refused outright until 19 Sep 2026, which on a real Mac
+    /// refused Pages, Numbers, Keynote, iMovie and Xcode — App Store installs — and
+    /// nothing else: system applications are not in `/Applications` to be refused.
+    @Test("an Apple application is offered on an App Store receipt, and refused without one")
+    func appleApplicationsNeedAReceipt() async throws {
+        let sandbox = try Sandbox()
+        let pages = try sandbox.application("Pages", identifier: "com.apple.iWork.Pages")
+        try Self.addAppStoreReceipt(to: pages)
+        let unknown = try sandbox.application("Unknown", identifier: "com.apple.unknowntool")
+
+        let listed = sandbox.planner().installedApplications()
+        #expect(listed.map(\.name) == ["Pages"])
+        _ = try await sandbox.planner().plan(applicationURL: pages)
+        await #expect(throws: AppUninstallPlanningError.protectedApplication) {
+            _ = try await sandbox.planner().plan(applicationURL: unknown)
+        }
+    }
+
+    @Test("under an Apple identifier only the exact name is matched, and the shared group stays")
+    func appleApplicationMatchesItsExactIdentifierOnly() async throws {
+        let sandbox = try Sandbox()
+        let pages = try sandbox.application("Pages", identifier: "com.apple.iWork.Pages")
+        try Self.addAppStoreReceipt(to: pages)
+        // Embedded, and named beneath the application — a vendor's helper would be
+        // claimed by the prefix rule. Under `com.apple.` it is not.
+        try sandbox.application(
+            "Helper", identifier: "com.apple.iWork.Pages.helper",
+            under: pages.appendingPathComponent("Contents/Library/LoginItems", isDirectory: true)
+        )
+        _ = try sandbox.write("Library/Caches/com.apple.iWork.Pages/blob")
+        _ = try sandbox.write("Library/Caches/com.apple.iWork.Pages.helper/blob")
+        _ = try sandbox.write("Library/Caches/com.apple.iWork.Numbers/blob")
+        _ = try sandbox.write("Library/Group Containers/group.com.apple.iWork.Pages/shared.db")
+
+        let plan = try await sandbox.planner().plan(applicationURL: pages)
+        let paths = plan.items.map(\.url.path)
+
+        #expect(!plan.isApplicationOnly)
+        #expect(paths.contains { $0.hasSuffix("/Library/Caches/com.apple.iWork.Pages") })
+        #expect(!paths.contains { $0.contains("com.apple.iWork.Pages.helper") })
+        #expect(!paths.contains { $0.contains("com.apple.iWork.Numbers") })
+        #expect(!paths.contains { $0.contains("/Group Containers/") })
+        #expect(plan.preservedPaths.contains { $0.path.contains("group.com.apple.iWork.Pages") })
+    }
+
+    /// Every droplet Shortcuts makes carries `com.apple.shortcuts.droplet`, so what
+    /// that name matches belongs to all of them and to none.
+    @Test("a Shortcuts droplet is the application alone, with its identifier still shown")
+    func shortcutsDropletIsApplicationOnly() async throws {
+        let sandbox = try Sandbox()
+        let droplet = try sandbox.application(
+            "Light Mode", identifier: "com.apple.shortcuts.droplet", under: sandbox.userApplications
+        )
+        _ = try sandbox.write("Library/Preferences/com.apple.shortcuts.droplet.plist")
+
+        #expect(sandbox.planner().installedApplications().map(\.name) == ["Light Mode"])
+        let plan = try await sandbox.planner().plan(applicationURL: droplet)
+        #expect(plan.isApplicationOnly)
+        #expect(plan.bundleIdentifier == "com.apple.shortcuts.droplet")
+        #expect(plan.items.map(\.url) == [droplet])
+    }
+
+    @Test("a browser's web-application launcher is not listed")
+    func chromiumShimIsNotListed() throws {
+        let sandbox = try Sandbox()
+        let folder = sandbox.userApplications
+            .appendingPathComponent("Chrome Apps.localized", isDirectory: true)
+        let shim = try sandbox.application(
+            "Some Site", identifier: "com.google.Chrome.app.abcdefgh", under: folder
+        )
+        let plistURL = shim.appendingPathComponent("Contents/Info.plist")
+        var plist = try #require(NSDictionary(contentsOf: plistURL) as? [String: Any])
+        plist["CrAppModeShortcutID"] = "abcdefgh"
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            .write(to: plistURL)
+        try sandbox.application("Real Tool", identifier: "com.vendor.tool", under: folder)
+
+        // Recognised by what it is, not by the folder it sits in.
+        #expect(sandbox.planner().installedApplications().map(\.name) == ["Real Tool"])
     }
 }
