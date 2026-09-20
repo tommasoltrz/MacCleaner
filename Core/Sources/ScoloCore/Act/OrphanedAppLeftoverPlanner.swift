@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// A review plan for files that have no installed application owner.
 public struct OrphanedAppLeftoverPlan: Sendable, Equatable {
@@ -59,14 +60,24 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         /// — see `uuidNamedContainers`. Paths, since `URL` is compared with its
         /// trailing slash.
         public let uuidNamedContainers: [String: [String]]
+        /// Group containers whose name begins with a Team ID, under the identifier
+        /// that follows it — see `teamGroupContainers`.
+        public let teamGroupContainers: [String: [TeamGroupContainer]]
+
+        public struct TeamGroupContainer: Sendable, Equatable {
+            public let path: String
+            public let team: String
+        }
 
         public init(
             identifiers: Set<String>, unreadableCount: Int,
-            uuidNamedContainers: [String: [String]] = [:]
+            uuidNamedContainers: [String: [String]] = [:],
+            teamGroupContainers: [String: [TeamGroupContainer]] = [:]
         ) {
             self.identifiers = identifiers
             self.unreadableCount = unreadableCount
             self.uuidNamedContainers = uuidNamedContainers
+            self.teamGroupContainers = teamGroupContainers
         }
     }
     enum CandidatePathStatus: Sendable {
@@ -78,6 +89,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
     private let pathPlanner: AppUninstallPlanner
     private let directoryNames: @Sendable (URL) throws -> [String]
     private let candidatePathStatus: @Sendable (URL) -> CandidatePathStatus
+    /// The Team ID an application bundle is signed by, or nil.
+    private let teamIdentifier: @Sendable (URL) -> String?
 
     public init() {
         pathPlanner = AppUninstallPlanner()
@@ -85,6 +98,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             try FileManager.default.contentsOfDirectory(atPath: url.path)
         }
         candidatePathStatus = Self.pathStatus
+        teamIdentifier = Self.signingTeam(of:)
     }
 
     init(
@@ -92,11 +106,13 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         directoryNames: @escaping @Sendable (URL) throws -> [String] = { url in
             try FileManager.default.contentsOfDirectory(atPath: url.path)
         },
-        candidatePathStatus: @escaping @Sendable (URL) -> CandidatePathStatus = Self.pathStatus
+        candidatePathStatus: @escaping @Sendable (URL) -> CandidatePathStatus = Self.pathStatus,
+        teamIdentifier: @escaping @Sendable (URL) -> String? = Self.signingTeam(of:)
     ) {
         self.pathPlanner = pathPlanner
         self.directoryNames = directoryNames
         self.candidatePathStatus = candidatePathStatus
+        self.teamIdentifier = teamIdentifier
     }
 
     /// - Parameter candidates: the scan the caller already ran to resolve owners.
@@ -125,6 +141,27 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         // everything below as any other candidate does: the allowed roots, the
         // exclusions, the protected patterns, and at removal the owner and identity
         // checks again.
+        // Asked only when there is a group container to ask about: reading forty
+        // signatures is quick, and still not free.
+        let teamContainers = identifiers.sorted().flatMap { identifier in
+            (candidateScan.teamGroupContainers[identifier] ?? []).map { (identifier, $0) }
+        }
+        if !teamContainers.isEmpty {
+            let installedTeams = Set(
+                AppUninstallPlanner.installedApplications(
+                    in: pathPlanner.applicationRoots, fileManager: fileManager
+                ).compactMap(teamIdentifier)
+            )
+            for (identifier, container) in teamContainers
+            where !installedTeams.contains(container.team) {
+                candidates.append(AppUninstallPlanner.Candidate(
+                    url: URL(fileURLWithPath: container.path, isDirectory: true),
+                    category: .containers,
+                    content: .userData,
+                    ownerBundleIdentifier: identifier
+                ))
+            }
+        }
         for identifier in identifiers.sorted() {
             for path in candidateScan.uuidNamedContainers[identifier] ?? [] {
                 candidates.append(AppUninstallPlanner.Candidate(
@@ -356,6 +393,10 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         let uuidNamed = Self.uuidNamedContainers(in: containersRoot, names: containerNames)
         result.formUnion(uuidNamed.keys)
 
+        let groupsRoot = userLibrary.appendingPathComponent("Group Containers")
+        let teamGroups = Self.teamGroupContainers(in: groupsRoot, names: names(in: groupsRoot))
+        result.formUnion(teamGroups.keys)
+
         // The curated table is a hand-verified claim that an application owns
         // this root — evidence of the strongest kind.
         for (identifier, curation) in ApplicationsScanner.curations {
@@ -365,8 +406,67 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
 
         return CandidateScan(
             identifiers: result, unreadableCount: unreadableCount,
-            uuidNamedContainers: uuidNamed
+            uuidNamedContainers: uuidNamed,
+            teamGroupContainers: teamGroups
         )
+    }
+
+    /// Group containers named `<Team ID>.<identifier>`, keyed by that identifier.
+    ///
+    /// Group containers were never offered, for a sound reason: the name is
+    /// whatever the developer chose, so it cannot be matched to a bundle identifier.
+    /// Surfshark is `com.surfshark.vpnclient.macos.direct` and keeps its group at
+    /// `YHUG37CKN8.com.surfshark.vpn.direct`; WorkingHours is
+    /// `mac.partl.workinghours` with a group at `P9337B87X7.partl.workinghours`.
+    /// Matching by name, Purge offered both — a working VPN's configuration — as
+    /// leftovers, along with Adobe's and Rhino's, on the owner's Mac on 20 Sep 2026.
+    ///
+    /// What the name does carry is the **Team ID**, ten characters before the first
+    /// dot, and every installed application is signed by one. So the owner test for
+    /// a group container is not about its name at all: it is a leftover only when
+    /// **no installed application is signed by that team**. On that Mac the rule
+    /// kept Surfshark's, WorkingHours', Adobe's and all five of Microsoft's (Visual
+    /// Studio Code is signed by the same team as `com.microsoft.oneauth`, and
+    /// nothing here can tell whose the container is), and found Raycast's, whose
+    /// team signs nothing that is installed.
+    ///
+    /// A `group.<name>` container carries no team and is still never offered. The
+    /// part after the team has to be an identifier — `22MMUN2RN5.lv` is not an
+    /// application's name — and Apple's are refused like any other of Apple's.
+    static func teamGroupContainers(
+        in groups: URL, names: [String]
+    ) -> [String: [CandidateScan.TeamGroupContainer]] {
+        var found: [String: [CandidateScan.TeamGroupContainer]] = [:]
+        for name in names.sorted() {
+            guard let dot = name.firstIndex(of: "."), name.distance(from: name.startIndex, to: dot) == 10
+            else { continue }
+            let team = String(name[..<dot])
+            guard team.unicodeScalars.allSatisfy({
+                ($0 >= "A" && $0 <= "Z") || ($0 >= "0" && $0 <= "9")
+            }), let identifier = AppUninstallPlanner.verifiedBundleIdentifier(
+                String(name[name.index(after: dot)...])
+            ) else { continue }
+            found[identifier, default: []].append(CandidateScan.TeamGroupContainer(
+                path: groups.appendingPathComponent(name, isDirectory: true).standardizedFileURL.path,
+                team: team
+            ))
+        }
+        return found
+    }
+
+    /// The Team ID a bundle is signed by, read from its signature without
+    /// validating it: the question is whose it says it is, not whether it is intact.
+    @Sendable static func signingTeam(of application: URL) -> String? {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(application as CFURL, [], &code) == errSecSuccess,
+              let code
+        else { return nil }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            code, SecCSFlags(rawValue: kSecCSSigningInformation), &information
+        ) == errSecSuccess, let information = information as? [String: Any]
+        else { return nil }
+        return information[kSecCodeInfoTeamIdentifier as String] as? String
     }
 
     /// Containers whose folder is a UUID, keyed by the identifier inside them.

@@ -607,7 +607,12 @@ public struct AppUninstallPlanner: Sendable {
     static func verifiedBundleIdentifier(_ rawValue: String?) -> String? {
         guard let rawValue else { return nil }
         let parts = rawValue.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else { return nil }
+        // Two parts, not three: `net.scribus` is a real application's identifier.
+        // Three was a shorthand for "looks like reverse-DNS", and its cost was that
+        // Scribus' saved state was nobody's. A bare word is still not an identifier.
+        // Every place an identifier is *used* matches it exactly, or beneath it with
+        // a dot, so a shorter one claims no more than its own name.
+        guard parts.count >= 2 else { return nil }
         for part in parts where part.isEmpty { return nil }
         for scalar in rawValue.unicodeScalars {
             let valid = (scalar >= "a" && scalar <= "z")
