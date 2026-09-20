@@ -48,12 +48,9 @@ struct AdvancedPane: View {
 
     private var removalBehaviour: some View {
         PrefSection("Removal behaviour") {
-            PrefToggleRow(
-                title: "Always move to Trash, never delete",
-                description: "Off means caches are unlinked immediately. This is faster and unrecoverable.",
-                isOn: $settings.trashFirst
-            )
-            PrefDivider()
+            // "Always move to Trash, never delete" used to live here, and turning it
+            // off made a Scanner clean-up unlink files for good. It was removed
+            // rather than kept: everything this app removes goes to the Trash.
             PrefToggleRow(
                 title: "Confirm before every clean-up",
                 isOn: $settings.confirmBeforeCleanup

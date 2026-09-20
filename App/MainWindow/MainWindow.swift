@@ -102,7 +102,6 @@ struct MainWindow: View {
                     variant: .cleanUp(
                         itemCount: model.pendingCleanUp?.itemCount ?? 0,
                         totalBytes: model.pendingCleanUp?.totalBytes ?? 0,
-                        permanentCount: model.pendingCleanUp?.permanentCount ?? 0,
                         protectedDataCount: model.pendingCleanUp?.protectedDataCount ?? 0,
                         // Absent until the private-size reading lands, a moment
                         // after the sheet appears.
