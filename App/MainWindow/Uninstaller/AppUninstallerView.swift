@@ -167,8 +167,7 @@ struct AppUninstallerView: View {
             // The one thing in this header that may narrow. At a fixed 180 pt it
             // won the space and the button beside it was cut to "Unins…" — a
             // truncated label on the destructive control is the wrong one to lose.
-            TextField("Search", text: $searchText)
-                .textFieldStyle(.roundedBorder)
+            FindField(text: $searchText, findRequest: model.findRequest)
                 .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
 
             if !model.selectedApplicationIDs.isEmpty {

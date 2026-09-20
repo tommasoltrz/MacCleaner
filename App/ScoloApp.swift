@@ -68,6 +68,14 @@ struct ScoloApp: App {
                     .keyboardShortcut(".")
                     .disabled(!model.isScanning)
             }
+            // Replacing, not adding: the stock group is the text system's Find,
+            // Spelling and Substitutions submenus, which act on a document this app
+            // does not have — and its Find would hold ⌘F and do nothing with it.
+            CommandGroup(replacing: .textEditing) {
+                Button("Find") { model.requestFind() }
+                    .keyboardShortcut("f")
+                    .disabled(!model.canFind)
+            }
             CommandGroup(after: .appSettings) {
                 Button("Grant Full Disk Access") {
                     let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
