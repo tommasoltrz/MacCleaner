@@ -860,6 +860,91 @@ final class AppModel {
     /// Reads the application folders again and measures whatever is new. Listing is
     /// one `contentsOfDirectory` per root plus an Info.plist per app; the sizes are
     /// the slow part (Xcode alone is a few seconds) and arrive one card at a time.
+    // MARK: Application leftovers, in the Uninstaller
+
+    /// What removed applications left behind, for the Uninstaller's second tab.
+    ///
+    /// The Scanner lists these under Needs Review. They are here as well because
+    /// this is where the question gets asked: someone who came to uninstall an
+    /// application is the person who wants to know what the last one left. `nil`
+    /// until it has been looked for, so the tab shows nothing rather than "no
+    /// leftovers" before it has looked. It is read from the disk on its own and
+    /// needs no junk scan.
+    private(set) var applicationLeftovers: OrphanedAppLeftoverPlan?
+    private(set) var isLoadingApplicationLeftovers = false
+    /// Removed applications ticked in that tab, by bundle identifier.
+    var selectedLeftoverIdentifiers: Set<String> = []
+    @ObservationIgnored private var applicationLeftoversTask: Task<Void, Never>?
+
+    var selectedLeftoverBytes: Int64 {
+        applicationLeftovers?.groups
+            .filter { selectedLeftoverIdentifiers.contains($0.bundleIdentifier) }
+            .reduce(0) { $0 + $1.totalBytes } ?? 0
+    }
+
+    func loadApplicationLeftovers() {
+        applicationLeftoversTask?.cancel()
+        let settings = settings
+        let context = ScanContext(
+            measurer: AllocatedSizeMeasurer(followSymlinks: false),
+            excludedPaths: settings?.excludedFolderPaths ?? [],
+            excludedPatterns: settings?.excludedPatterns ?? []
+        )
+        let planner = orphanedAppLeftoverPlanner
+        isLoadingApplicationLeftovers = true
+        applicationLeftoversTask = Task { [weak self] in
+            // One candidate scan, resolved once, handed to the planner whole — the
+            // same order the junk scan uses, for the same reason: scanning twice
+            // lets an identifier appear between the passes with no owner check.
+            let candidates = await Task.detached(priority: .userInitiated) {
+                planner.scanCandidates()
+            }.value
+            guard self != nil, !Task.isCancelled else { return }
+            let registered = Self.registeredApplicationBundleIdentifiers(for: candidates.identifiers)
+            let plan = try? await planner.plan(
+                context: context,
+                registeredApplicationBundleIdentifiers: registered,
+                candidates: candidates
+            )
+            guard let self, !Task.isCancelled else { return }
+            self.applicationLeftovers = plan
+            self.isLoadingApplicationLeftovers = false
+            let listed = Set(plan?.groups.map(\.bundleIdentifier) ?? [])
+            self.selectedLeftoverIdentifiers.formIntersection(listed)
+        }
+    }
+
+    func toggleLeftoverSelection(_ bundleIdentifier: String) {
+        if selectedLeftoverIdentifiers.contains(bundleIdentifier) {
+            selectedLeftoverIdentifiers.remove(bundleIdentifier)
+        } else {
+            selectedLeftoverIdentifiers.insert(bundleIdentifier)
+        }
+    }
+
+    /// Sends the ticked leftovers through the clean-up every other removal takes:
+    /// the same captured plan, the same sheet, and
+    /// `CleanupService.removeOrphanedAppLeftovers`, which checks each owner and each
+    /// file's identity again before anything moves. Nothing here removes a file.
+    func requestLeftoverRemoval() {
+        guard activity == nil, let leftovers = applicationLeftovers else { return }
+        let identifiers = selectedLeftoverIdentifiers
+        let items = leftovers.groups
+            .filter { identifiers.contains($0.bundleIdentifier) }
+            .flatMap(\.items)
+        guard !items.isEmpty else { return }
+        pendingCleanUp = CleanupPlan(
+            entries: [],
+            userDataRemovalOverrides: [],
+            applicationLeftoverPlan: leftovers,
+            orphanedApplicationBundleIdentifiers: identifiers,
+            orphanedApplicationItemPaths: Set(items.map(\.id))
+        )
+        // Always confirmed, whatever the preference says: a leftover is somebody's
+        // settings, and this is the only place the user is told how many.
+        activeSheet = .cleanUp
+    }
+
     func loadInstalledApplications() {
         installedApplicationsTask?.cancel()
         let settings = settings
@@ -1501,6 +1586,11 @@ final class AppModel {
         }
 
         deselectAll()
+        // The Uninstaller's list of leftovers was read from the disk this changed.
+        if applicationLeftovers != nil, !plan.orphanedApplicationBundleIdentifiers.isEmpty {
+            selectedLeftoverIdentifiers.subtract(plan.orphanedApplicationBundleIdentifiers)
+            loadApplicationLeftovers()
+        }
         // Removed entries must leave the tables, or the next total counts files that
         // are already gone.
         if var results = scanResults {
