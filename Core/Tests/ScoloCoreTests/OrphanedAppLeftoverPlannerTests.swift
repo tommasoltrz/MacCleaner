@@ -92,12 +92,16 @@ struct OrphanedAppLeftoverPlannerTests {
             candidatePathStatus: @escaping @Sendable (URL) ->
                 OrphanedAppLeftoverPlanner.CandidatePathStatus = { url in
                     FileManager.default.fileExists(atPath: url.path) ? .present : .missing
-                }
+                },
+            teams: [String: String] = [:]
         ) -> OrphanedAppLeftoverPlanner {
             OrphanedAppLeftoverPlanner(
                 pathPlanner: appPlanner(),
                 directoryNames: directoryNames,
-                candidatePathStatus: candidatePathStatus
+                candidatePathStatus: candidatePathStatus,
+                // A fixture bundle is not signed, so the team it would be signed by
+                // is stated: application name → Team ID.
+                teamIdentifier: { url in teams[url.deletingPathExtension().lastPathComponent] }
             )
         }
     }
@@ -163,6 +167,60 @@ struct OrphanedAppLeftoverPlannerTests {
         for url in [kept, extensionOfKept, apple, silent] {
             #expect(!offered.contains(url.standardizedFileURL.path), "\(url.lastPathComponent)")
         }
+    }
+
+    /// A group container's name is whatever its developer chose, so it cannot be
+    /// matched to a bundle identifier: Surfshark is `com.surfshark.vpnclient.macos
+    /// .direct` and keeps its group at `YHUG37CKN8.com.surfshark.vpn.direct`. Purge
+    /// matched by name and offered that, a working VPN's configuration, as a
+    /// leftover. What the name does carry is the Team ID, and every installed
+    /// application is signed by one.
+    @Test("a group container is a leftover only when no installed application is signed by its team")
+    func groupContainersFollowTheirTeam() async throws {
+        let sandbox = try Sandbox()
+        _ = try sandbox.application("Surfshark", identifier: "com.surfshark.vpnclient.macos.direct")
+        let live = try sandbox.write(
+            "Library/Group Containers/YHUG37CKN8.com.surfshark.vpn.direct/config.db"
+        ).deletingLastPathComponent()
+        let orphan = try sandbox.write(
+            "Library/Group Containers/SY64MV22J9.com.raycast.macos.shared/state.db"
+        ).deletingLastPathComponent()
+        // No team in the name, so nothing says whose it is: never offered.
+        let teamless = try sandbox.write(
+            "Library/Group Containers/group.com.gone.app/shared.db"
+        ).deletingLastPathComponent()
+        // A team and a remainder that is not an identifier: not an application's name.
+        let odd = try sandbox.write("Library/Group Containers/22MMUN2RN5.lv/blob")
+            .deletingLastPathComponent()
+
+        // A Team ID is ten characters. Three capitals and a dot are somebody's name.
+        let short = try sandbox.write("Library/Group Containers/ABC.com.vendor.thing/blob")
+            .deletingLastPathComponent()
+
+        let plan = try await sandbox.planner(teams: ["Surfshark": "YHUG37CKN8"]).plan()
+
+        let group = try #require(plan.groups.first { $0.id == "com.raycast.macos.shared" })
+        #expect(group.items.map(\.url.standardizedFileURL.path) == [orphan.standardizedFileURL.path])
+        #expect(group.items.first?.isProtectedUserData == true)
+        let offered = Set(plan.groups.flatMap(\.items).map(\.url.standardizedFileURL.path))
+        for url in [live, teamless, odd, short] {
+            #expect(!offered.contains(url.standardizedFileURL.path), "\(url.lastPathComponent)")
+        }
+    }
+
+    /// `net.scribus` is a real application's identifier, and it has two parts. The
+    /// check wanted three, so Scribus' saved state was nobody's.
+    @Test("a two-part identifier is an identifier; a bare word is not")
+    func twoPartIdentifiers() async throws {
+        let sandbox = try Sandbox()
+        let state = try sandbox.evidence(for: "net.scribus")
+        _ = try sandbox.evidence(for: "scribus")
+
+        let plan = try await sandbox.planner().plan()
+
+        #expect(plan.groups.map(\.id) == ["net.scribus"])
+        #expect(plan.groups.first?.items.map(\.url.standardizedFileURL.path)
+            == [state.standardizedFileURL.path])
     }
 
     @Test("an installed owner protects its identifier and helper identifiers")
