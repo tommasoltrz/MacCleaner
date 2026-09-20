@@ -37,7 +37,7 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .hiddenSystemData:
             "iOS backups, Mail downloads, hidden folders, large disk images"
         case .systemCaches:
-            "~/Library/Caches, ~/Library/Logs, ~/.cache"
+            "~/Library/Caches, ~/Library/Logs, ~/.cache, Apple's own apps"
         case .packageManagers:
             "npm, pnpm, pip, Homebrew, Cargo, CocoaPods, Gradle and more"
         case .xcode:

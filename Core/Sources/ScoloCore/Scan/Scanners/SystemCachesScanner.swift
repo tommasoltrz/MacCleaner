@@ -32,22 +32,36 @@ public struct SystemCachesScanner: CategoryScanner {
     /// all: 1.68 GB of `codex-runtimes` on this Mac on 20 Sep 2026. A cache belongs
     /// with the caches.
     let dotCacheRoot: URL?
+    /// `~/Library/Containers`, read for the system applications' caches only — see
+    /// `appendSystemApplicationCaches`.
+    let containersRoot: URL?
+    let systemApplicationDirectories: [URL]
 
     public init() {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         self.init(
             cachesRoot: home.appendingPathComponent("Library/Caches"),
             logsRoot: home.appendingPathComponent("Library/Logs"),
-            dotCacheRoot: home.appendingPathComponent(".cache")
+            dotCacheRoot: home.appendingPathComponent(".cache"),
+            containersRoot: home.appendingPathComponent("Library/Containers"),
+            systemApplicationDirectories: [
+                URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+                URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true)
+            ]
         )
     }
 
     /// Exists so tests can aim the scan at a fixture tree; production always uses the
-    /// three real roots above.
-    init(cachesRoot: URL, logsRoot: URL, dotCacheRoot: URL? = nil) {
+    /// real roots above.
+    init(
+        cachesRoot: URL, logsRoot: URL, dotCacheRoot: URL? = nil,
+        containersRoot: URL? = nil, systemApplicationDirectories: [URL] = []
+    ) {
         self.cachesRoot = cachesRoot
         self.logsRoot = logsRoot
         self.dotCacheRoot = dotCacheRoot
+        self.containersRoot = containersRoot
+        self.systemApplicationDirectories = systemApplicationDirectories
     }
 
     private var roots: [URL] { [cachesRoot, logsRoot] + [dotCacheRoot].compactMap { $0 } }
@@ -220,6 +234,10 @@ public struct SystemCachesScanner: CategoryScanner {
             }
         }
 
+        try await appendSystemApplicationCaches(
+            context: context, to: &entries, unreadableCount: &unreadableCount
+        )
+
         // Every root refused us. Say how to fix it rather than reporting an empty
         // category, which would read as "nothing to clean".
         if reachableRoots == 0, unreadableCount > 0 {
@@ -244,6 +262,80 @@ public struct SystemCachesScanner: CategoryScanner {
             availability: entries.isEmpty ? .empty : .available,
             unreadableCount: unreadableCount
         )
+    }
+
+    // MARK: - System applications
+
+    /// The sandboxed caches of the applications in `/System/Applications`.
+    ///
+    /// Podcasts, Music, TV and Mail are sandboxed, so their caches are in
+    /// `~/Library/Containers/<id>/Data/Library/Caches` and not in `~/Library/Caches`;
+    /// and they live on the sealed volume, which the Applications scanner does not
+    /// list. Nothing offered them, and on a Mac that has never seen a developer tool
+    /// they are often the largest caches there are.
+    ///
+    /// **Only a container whose identifier is a system application's**, read out of
+    /// the bundles themselves. `~/Library/Containers` held 907 folders on this Mac,
+    /// nearly all of them agents' and extensions'; an agent always runs and is in no
+    /// list of open applications, so nothing here could say whether its cache is in
+    /// use. An application is something the user opens and can see. A third party's
+    /// container belongs to the Applications scanner or to Application Leftovers.
+    ///
+    /// **Review rows, never safe**, though every one of them is a cache. Music's is
+    /// read by `AMPLibraryAgent`, which outlives Music, so "Music is closed" does not
+    /// mean nothing is using it. Purge (github.com/jithin-sabu/purge-app) labels the
+    /// same caches Check First and keeps them out of one-click cleaning; this agrees.
+    /// `IdentityState` refuses Passwords, Home, Safari and their like outright.
+    ///
+    /// The cache folder's children are the rows, never `Caches` itself, for the
+    /// reason given on `ApplicationsScanner.containerCuration`.
+    private func appendSystemApplicationCaches(
+        context: ScanContext, to entries: inout [FileEntry], unreadableCount: inout Int
+    ) async throws {
+        guard let containersRoot, !context.isWithinExclusion(containersRoot) else { return }
+        let fileManager = FileManager.default
+
+        for (identifier, name) in systemApplications().sorted(by: { $0.key < $1.key }) {
+            try Task.checkCancellation()
+            guard !IdentityState.isProtectedContainer(bundleIdentifier: identifier) else { continue }
+            let caches = containersRoot.appendingPathComponent(identifier, isDirectory: true)
+                .appendingPathComponent(ApplicationsScanner.containerCachePath, isDirectory: true)
+            guard fileManager.fileExists(atPath: caches.path) else { continue }
+
+            let measured = try await context.measurer.measureChildren(of: caches)
+            for (url, measurement) in measured {
+                unreadableCount += measurement.unreadableCount
+                guard measurement.allocatedBytes >= Self.minimumEntryBytes,
+                      !context.isExcluded(url),
+                      !measurement.containsProtectedPattern
+                else { continue }
+                entries.append(FileEntry(
+                    url: url,
+                    displayName: "\(name) · \(url.lastPathComponent)",
+                    kind: .cache,
+                    allocatedBytes: measurement.allocatedBytes,
+                    lastOpened: lastOpenedDate(for: url),
+                    // Deliberately not: see above.
+                    isRegenerable: false,
+                    inUseBy: context.runningOwner(bundleIdentifier: identifier),
+                    childCount: Self.childCount(of: url)
+                ))
+            }
+        }
+    }
+
+    /// Bundle identifier → name, for the applications in the system's own folders.
+    private func systemApplications() -> [String: String] {
+        var found: [String: String] = [:]
+        for directory in systemApplicationDirectories {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            for name in names where name.hasSuffix(".app") {
+                let url = directory.appendingPathComponent(name, isDirectory: true)
+                guard let identifier = Bundle(url: url)?.bundleIdentifier else { continue }
+                found[identifier] = String(name.dropLast(".app".count))
+            }
+        }
+        return found
     }
 
     // MARK: - Support
