@@ -117,17 +117,12 @@ struct CategoryRow: View {
             // every root — and promising "safe to remove" for something we could not
             // even read is exactly the unearned claim this app exists to stop making.
             Badge(text: "unavailable").fixedSize()
-        } else {
-            // The result, not the static flag: the Xcode category is marked safe
-            // but can hold an archive that is not, and a "safe" badge over a list
-            // containing it would be the unearned claim the app exists to avoid.
-            if category.isSafe && result.needsReviewBytes == 0 {
-                Badge(text: "safe to delete", style: .safe).fixedSize()
-            }
-            if category.alwaysMovesToTrash {
-                Badge(text: "moves to Trash").fixedSize()
-            }
         }
+        // Nothing else. "safe to delete" sat here and is on the rows now, where a
+        // claim about a file belongs: over a category it meant "every row", and
+        // vanished when one row did not qualify. "moves to Trash" marked the
+        // categories that ignored a preference for permanent deletion; that
+        // preference is gone and everything moves to the Trash.
     }
 
     @ViewBuilder
@@ -233,10 +228,6 @@ struct CategoryRow: View {
         } else {
             parts.append("nothing to clean")
         }
-
-        // The same words the badge shows, so VoiceOver and the screen agree.
-        if category.isSafe && result.needsReviewBytes == 0 { parts.append("safe to delete") }
-        if category.alwaysMovesToTrash { parts.append("moves to Trash") }
 
         return parts.joined(separator: ", ")
     }

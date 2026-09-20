@@ -1,44 +1,23 @@
 import SwiftUI
 import ScoloCore
 
-/// The Scanner's results as one flat list, narrowed to what a filter counts.
+/// The line above the Scanner's outline when a tab narrows it: how much that tab
+/// holds, and what the tab means.
 ///
-/// The grouped outline beside it answers "what was found, and where"; this answers
-/// "what can I act on", so it drops the category structure and sorts by size. Both
-/// draw the same rows from the same `ScanResults` and share one selection, and the
-/// Scanner chooses between them.
-struct FilteredEntryList: View {
+/// This file held `FilteredEntryList`, a flat list that replaced the outline under
+/// "Safe to Remove" and "Needs Review". It answered "what can I act on" and threw
+/// away "where is it", which is the first thing anybody asks of a row called
+/// `com.apple.helpd`. All three tabs draw the outline now — see
+/// `ScannerView.categories(of:for:)` — and what is left of the list is its summary
+/// and the one behaviour that was its own: the safe tab opens pre-selected.
+struct FilteredSummary: View {
     @Bindable var model: AppModel
     let filter: AppModel.ScanFilter
 
     var body: some View {
-        let entries = filteredEntries
-        VStack(alignment: .leading, spacing: 12) {
-            header(entries)
-            if entries.isEmpty {
-                nothingHere
-            } else {
-                GroupedBox {
-                    FileTable(
-                        entries: entries,
-                        selection: $model.scannerSelection,
-                        userDataRemovalOverrides: $model.userDataRemovalOverrides,
-                        onUninstallApplication: { model.planAppUninstall($0.url) }
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
-                }
-            }
-        }
-        // Only this list opens pre-selected — see `seedSafeToRemoveSelection`.
-        // Keyed on the scan, so a fresh scan seeds again and a return visit does
-        // not overwrite what the user chose.
-        .task(id: model.scanResults?.finishedAt) {
-            guard filter == .safeToRemove else { return }
-            model.seedSafeToRemoveSelection()
-        }
-    }
-
-    private func header(_ entries: [FileEntry]) -> some View {
+        // The model owns this list: the status bar's Select All acts on exactly
+        // these rows, and they are the rows the outline below is made of.
+        let entries = model.tileEntries(safeToRemove: filter == .safeToRemove)
         VStack(alignment: .leading, spacing: 4) {
             // `displayBytes`, the same arithmetic the Dashboard tile uses: summing
             // what cleanup can free instead showed "0 B" over a list of gigabyte
@@ -53,20 +32,19 @@ struct FilteredEntryList: View {
         .foregroundStyle(Token.Text.tertiary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 2)
+        // Only the safe tab opens pre-selected — see `seedSafeToRemoveSelection`,
+        // which seeds once for each scan, so a return visit does not overwrite what
+        // the user chose. Keyed on the tab as well as the scan: this view is the
+        // same view under both tabs, and keyed on the scan alone it never ran when
+        // the user came to "Safe to Remove" from "Needs Review".
+        .task(id: SeedKey(scan: model.scanResults?.finishedAt, filter: filter)) {
+            guard filter == .safeToRemove else { return }
+            model.seedSafeToRemoveSelection()
+        }
     }
 
-    /// The model owns this list: the status bar's Select All has to act on exactly
-    /// the rows shown here, and two copies of the arithmetic would eventually
-    /// disagree about what "exactly" meant.
-    private var filteredEntries: [FileEntry] {
-        model.tileEntries(safeToRemove: filter == .safeToRemove)
-    }
-
-    private var nothingHere: some View {
-        Text("The last scan found nothing in this group.")
-            .font(.mcBody)
-            .foregroundStyle(Token.Text.tertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 20)
+    private struct SeedKey: Equatable {
+        let scan: Date?
+        let filter: AppModel.ScanFilter
     }
 }

@@ -130,6 +130,74 @@ struct TileArithmeticTests {
         #expect(Self.tileMatchesItsList(category))
     }
 
+    // MARK: - The Scanner's tabs
+
+    /// All three tabs of the Scanner draw the same outline. "Safe to Remove" and
+    /// "Needs Review" are the scan with the other half taken out of each category,
+    /// so a category's figure under a tab is that tab's share of it and nothing else.
+    @Test("a category filtered for a tab holds that tab's rows, and the two halves are the category")
+    func filteredCategoriesPartitionTheScan() {
+        var held = Self.child("Held Cache", bytes: 200, regenerable: true)
+        held.inUseBy = FileEntry.RunningOwner(
+            name: "Fixture", bundleIdentifier: "com.example.fixture",
+            bundlePath: "/Applications/Fixture.app"
+        )
+        let app = Self.application(bytes: 1_000, children: [
+            held,
+            Self.child("Free Cache", bytes: 300, regenerable: true),
+            Self.child("Support", bytes: 500, regenerable: false, protection: .userData)
+        ])
+        let category = ScanCategoryResult(categoryID: .applications, entries: [app])
+
+        let safe = category.filtered(safeToRemove: true)
+        let review = category.filtered(safeToRemove: false)
+
+        #expect(safe.categoryID == .applications && review.categoryID == .applications)
+        #expect(safe.entries.map(\.displayName) == ["Free Cache"])
+        #expect(safe.totalBytes == category.safeToRemoveBytes)
+        // The application is still there under review, without the cache it gave up.
+        #expect(review.entries.map(\.url) == [app.url])
+        #expect(review.entries.first?.children.map(\.displayName) == ["Held Cache", "Support"])
+        #expect(review.totalBytes == category.needsReviewBytes)
+        #expect(safe.totalBytes + review.totalBytes
+                == category.entries.reduce(0) { $0 + $1.displayBytes })
+
+        // Nothing for a tab is an empty category, which the outline leaves out.
+        let none = ScanCategoryResult(categoryID: .documentsAndFiles, entries: [
+            FileEntry(url: URL(fileURLWithPath: "/tmp/thesis"), kind: .folder, allocatedBytes: 900)
+        ]).filtered(safeToRemove: true)
+        #expect(none.entries.isEmpty && none.availability == .empty && none.totalBytes == 0)
+    }
+
+    /// The green "safe to remove" badge on a row. It was a badge on the category,
+    /// which could only say "everything in here" — and said nothing at all the moment
+    /// one row in the category needed review.
+    @Test("a row is badged safe exactly when the tile counts it safe")
+    func rowBadgeFollowsTheTile() {
+        var held = FileEntry(url: URL(fileURLWithPath: "/tmp/held"), kind: .cache,
+                             allocatedBytes: 100, isRegenerable: true)
+        held.inUseBy = FileEntry.RunningOwner(name: "Owner", bundleIdentifier: nil, bundlePath: "/x")
+        let free = FileEntry(url: URL(fileURLWithPath: "/tmp/free"), kind: .cache,
+                             allocatedBytes: 200, isRegenerable: true)
+        let plain = FileEntry(url: URL(fileURLWithPath: "/tmp/plain"), kind: .cache,
+                              allocatedBytes: 300)
+        let caches = ScanCategoryResult(categoryID: .systemCaches, entries: [held, free, plain])
+        #expect(caches.entries.filter(caches.isCountedSafe).map(\.url) == [free.url])
+
+        // Regenerable, in a category that is review-only: Photos' derivatives.
+        let hidden = ScanCategoryResult(categoryID: .hiddenSystemData, entries: [free])
+        #expect(!hidden.isCountedSafe(free))
+
+        // Every row the safe tab shows is safe, including a cache lifted out of an
+        // application — whose category is not a safe one.
+        let app = Self.application(bytes: 1_000, children: [
+            Self.child("Free Cache", bytes: 300, regenerable: true)
+        ])
+        let lifted = ScanCategoryResult(categoryID: .applications, entries: [app])
+            .filtered(safeToRemove: true)
+        #expect(lifted.entries.allSatisfy(lifted.isCountedSafe))
+    }
+
     @Test("a safe category's regenerable row still counts whole")
     func safeCategoryUnchanged() {
         let derived = FileEntry(

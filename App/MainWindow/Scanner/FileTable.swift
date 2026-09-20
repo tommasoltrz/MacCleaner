@@ -12,6 +12,10 @@ import ScoloCore
 /// here and costs three constants.
 struct FileTable: View {
     let entries: [FileEntry]
+    /// Which top-level rows wear the green "safe to remove" — the category's own
+    /// answer, `ScanCategoryResult.isCountedSafe`, so the badge and the tile cannot
+    /// disagree. A table with no category behind it (a preview) badges nothing.
+    var isSafeToRemove: (FileEntry) -> Bool = { _ in false }
     @Binding var selection: Set<FileEntry.ID>
     @Binding var userDataRemovalOverrides: Set<FileEntry.ID>
     var onUninstallApplication: ((FileEntry) -> Void)? = nil
@@ -159,6 +163,7 @@ struct FileTable: View {
                 if index > 0 { Hairline() }
                 FileRow(
                     entry: entry,
+                    isSafeToRemove: isSafeToRemove(entry),
                     isSelected: selection.contains(entry.id),
                     hasUserDataOverride: userDataRemovalOverrides.contains(entry.id),
                     isExpanded: expandedRows.contains(entry.id),
@@ -272,6 +277,7 @@ struct FileTable: View {
 
 private struct FileRow: View {
     let entry: FileEntry
+    var isSafeToRemove = false
     let isSelected: Bool
     let hasUserDataOverride: Bool
     var isExpanded = false
@@ -469,6 +475,11 @@ private struct FileRow: View {
                     // Names the owner: "in use" alone sends the user hunting for
                     // which of their open apps is meant.
                     Badge(text: "\(owner.name) is open").fixedSize()
+                } else if isSafeToRemove {
+                    // On the row, where the claim is made. It was one badge on the
+                    // category, which could only say "everything in here" and so
+                    // said nothing at all once a single row needed review.
+                    Badge(text: "safe to remove", style: .safe).fixedSize()
                 }
             }
 
@@ -575,7 +586,11 @@ private struct ChildRow: View {
                     // the colour goes. The owner is not named on each child: the
                     // parent row a line above already reads "running", and eight
                     // copies of "Google Chrome is open" said nothing the first had not.
-                    Badge(text: "regenerable", style: entry.regeneratesSafely ? .safe : .neutral)
+                    // One word for one claim: the green badge reads "safe to remove"
+                    // on a child as on a row. Held by an open app it is still
+                    // regenerable, which is what the grey one goes on saying.
+                    Badge(text: entry.regeneratesSafely ? "safe to remove" : "regenerable",
+                          style: entry.regeneratesSafely ? .safe : .neutral)
                         .fixedSize()
                 } else if let caveat = entry.safetyCaveat {
                     Badge(text: caveat).fixedSize()
