@@ -43,8 +43,24 @@ struct SystemCachesScanTests {
             SystemCachesScanner(
                 cachesRoot: home.appendingPathComponent("Library/Caches"),
                 logsRoot: home.appendingPathComponent("Library/Logs"),
-                dotCacheRoot: home.appendingPathComponent(".cache")
+                dotCacheRoot: home.appendingPathComponent(".cache"),
+                containersRoot: home.appendingPathComponent("Library/Containers"),
+                systemApplicationDirectories: [home.appendingPathComponent("System/Applications")]
             )
+        }
+
+        /// A bundle in the fixture's `/System/Applications`, real enough for
+        /// `Bundle(url:)` to read an identifier out of it.
+        func systemApplication(_ name: String, identifier: String) throws {
+            let plist = home.appendingPathComponent("System/Applications/\(name).app/Contents/Info.plist")
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleIdentifier": identifier, "CFBundleName": name,
+                                   "CFBundlePackageType": "APPL"],
+                format: .xml, options: 0
+            ).write(to: plist)
         }
     }
 
@@ -162,6 +178,44 @@ struct SystemCachesScanTests {
             == ["com.apple.helpd", "com.example.app", "com.apple.akd"])
         #expect(result.entries.first { $0.url.lastPathComponent == "com.apple.akd" }?
             .url.path.contains("/Library/Logs/") == true)
+    }
+
+    /// Podcasts, Music, TV and Mail live in `/System/Applications`, which the
+    /// Applications scanner does not list, so their sandboxed caches — often the
+    /// largest caches on a Mac that has never seen a developer tool — had no row.
+    @Test("a system application's container cache is a review row named for the app")
+    func systemApplicationContainerCaches() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.systemApplication("Podcasts", identifier: "com.apple.podcasts")
+        try sandbox.systemApplication("Passwords", identifier: "com.apple.Passwords")
+        let caches = "Data/Library/Caches"
+        try sandbox.file("Library/Containers/com.apple.podcasts/\(caches)/episodes/ep1.mp3",
+                         bytes: 9 * 1024 * 1024)
+        try sandbox.file("Library/Containers/com.apple.podcasts/Data/Documents/library.sqlite")
+        // A system application, and never offered: see `IdentityState`.
+        try sandbox.file("Library/Containers/com.apple.Passwords/\(caches)/icons/a.png")
+        // An agent's container. Nothing in /System/Applications answers to it.
+        try sandbox.file("Library/Containers/com.apple.CalendarAgent/\(caches)/blob")
+        // A third party's: the Applications scanner or Application Leftovers owns it.
+        try sandbox.file("Library/Containers/com.vendor.app/\(caches)/blob")
+
+        let result = try await sandbox.scanner().scan(context: ScanContext(
+            runningApplications: [FileEntry.RunningOwner(
+                name: "Podcasts", bundleIdentifier: "com.apple.podcasts",
+                bundlePath: "/System/Applications/Podcasts.app"
+            )]
+        ))
+
+        let row = try #require(result.entries.first)
+        #expect(result.entries.count == 1)
+        #expect(row.displayName == "Podcasts · episodes")
+        #expect(row.url.path.hasSuffix("com.apple.podcasts/Data/Library/Caches/episodes"))
+        // Review only. Music's cache is read by an agent that outlives Music, and no
+        // list of open applications shows an agent.
+        #expect(!row.isRegenerable && !row.isRemovalLocked)
+        #expect(row.inUseBy?.name == "Podcasts")
+        #expect(result.safeToRemoveBytes == 0)
+        #expect(result.needsReviewBytes == row.allocatedBytes)
     }
 
     @Test("a Mac with no ~/.cache is an ordinary Mac")
