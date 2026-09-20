@@ -79,8 +79,9 @@ public struct PackageManagerScanner: CategoryScanner {
         CacheRoot(label: "Yarn cache (classic)", components: [".yarn", "cache"]),
         // Taken off this list at integration and put back on 20 Sep 2026.
         // `HiddenDataScanner` claimed `~/.cache` as a single row then, so a child
-        // claimed here was offered twice. It lists the folder child by child now and
-        // skips the names claimed here — see `packageManagerOwnedDotCacheNames`.
+        // claimed here was offered twice. `SystemCachesScanner` lists the folder child
+        // by child now and skips the names claimed here — see its
+        // `packageManagerOwnedDotCacheNames`.
         // The XDG layout is Linux's, but a Yarn run with `XDG_CACHE_HOME` set, or one
         // carried over in a migrated home, leaves it on a Mac too.
         CacheRoot(label: "Yarn cache (XDG)", components: [".cache", "yarn"]),
@@ -195,8 +196,8 @@ public struct PackageManagerScanner: CategoryScanner {
         //   its cache. System Caches still offers that folder whole, which is a
         //   fault of that scanner's and is written down in the backlog.
         // * rebar3, `act`, pre-commit, Puppeteer — under `~/.cache`, never seen on this
-        //   Mac. Hidden Data lists each as a row of its own, which is where a cache
-        //   nobody has looked at belongs.
+        //   Mac. System Caches lists each as a row of its own, safe only on its tool's
+        //   `CACHEDIR.TAG`, which is where a cache nobody has looked at belongs.
     ]
 
     // MARK: - Scan
