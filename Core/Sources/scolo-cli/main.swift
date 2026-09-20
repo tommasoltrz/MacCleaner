@@ -45,6 +45,11 @@ struct CLI {
                 uninstallable()
             case "models":
                 models()
+            case "installer":
+                guard arguments.count > 1 else {
+                    throw CLIError.usage("installer needs the path of an application")
+                }
+                await installer(path: arguments[1])
             case "measure":
                 guard arguments.count > 1 else {
                     throw CLIError.usage("measure needs a path")
@@ -59,6 +64,7 @@ struct CLI {
                 print("scolo-cli — ScoloCore engine harness")
                 print("commands: volume | snapshots | breakdown | snapshot"
                       + " | growth [previous|7d|cleanup] | scan | apps | uninstallable | models"
+                      + " | installer <app>"
                       + " | measure <path>"
                       + " | reclaim <path>")
             }
@@ -103,6 +109,18 @@ struct CLI {
                       + (child.childCount.map { " · \($0) items" } ?? ""))
             }
         }
+    }
+
+    /// The installer package an application came from, and where else it wrote.
+    static func installer(path: String) async {
+        let url = URL(fileURLWithPath: path)
+        guard let package = await InstallerReceipts().package(owning: url) else {
+            print("  no installer receipt lists \(url.lastPathComponent): it was put in place by hand")
+            return
+        }
+        print("  \(package.fileName ?? "an installer package")  (\(package.identifier))")
+        if package.otherLocations.isEmpty { print("      the same installer wrote nowhere else") }
+        for location in package.otherLocations { print("      also wrote to  \(location)") }
     }
 
     /// Locally stored models: what each occupies alone, and what it shares and keeps.

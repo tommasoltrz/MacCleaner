@@ -343,6 +343,10 @@ struct AppUninstallerView: View {
                         managedPackageCard(package)
                     }
 
+                    if let package = plan.installerPackage {
+                        installerPackageCard(package)
+                    }
+
                     completeUninstallCard(plan)
 
                     if !plan.preservedPaths.isEmpty {
@@ -483,6 +487,35 @@ struct AppUninstallerView: View {
                 }
 
                 Spacer()
+            }
+            .padding(12)
+        }
+    }
+
+    /// An application a `.pkg` put in place is often a part of what that installer
+    /// wrote — Python's leaves 468 MB of framework behind IDLE. Information, not a
+    /// gate, so it is drawn in the ordinary tone and not the Homebrew card's orange.
+    /// The words are Core's, where they are tested.
+    private func installerPackageCard(
+        _ package: InstallerReceipts.Package
+    ) -> some View {
+        GroupedBox {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: "shippingbox")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Token.Text.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(package.reviewTitle)
+                        .font(.mcBody.weight(.medium))
+                        .foregroundStyle(Token.Text.primary)
+                    Text(package.reviewDetail)
+                        .font(.mcCaption)
+                        .foregroundStyle(Token.Text.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
             }
             .padding(12)
         }
