@@ -110,7 +110,13 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     let allowedRelatedRoots: [URL]
 
     public var applicationItem: Item { items[0] }
-    public var isApplicationOnly: Bool { bundleIdentifier == nil }
+    /// No related file could be attributed: there is no identifier to match on, or
+    /// the identifier is one no single application owns (every Shortcuts droplet
+    /// carries `com.apple.shortcuts.droplet`). An ordinary plan always has at least
+    /// its primary identifier as a candidate.
+    public var isApplicationOnly: Bool {
+        bundleIdentifier == nil || candidateBundleIdentifiers.isEmpty
+    }
     public var protectedItems: [Item] { items.filter(\.isProtectedUserData) }
     public var totalBytes: Int64 { items.reduce(0) { $0 + $1.allocatedBytes } }
 
@@ -170,7 +176,8 @@ public enum AppUninstallPlanningError: Error, Sendable, Equatable, LocalizedErro
         case .untrustedLocation:
             "Only applications installed in /Applications or your Applications folder can be uninstalled."
         case .protectedApplication:
-            "System applications and Scolo itself cannot be removed here."
+            "System applications and Scolo itself cannot be removed here. An application "
+                + "with an Apple identifier needs an App Store receipt to be offered."
         case .symbolicLink:
             "This application is reached through a symbolic link. Reveal and remove the original application instead."
         case .applicationExcluded:
@@ -256,11 +263,8 @@ public struct AppUninstallPlanner: Sendable {
               applicationURL.resolvingSymlinksInPath().standardizedFileURL == applicationURL
         else { throw AppUninstallPlanningError.symbolicLink }
         let bundleIdentifier = Self.verifiedBundleIdentifier(bundle.bundleIdentifier)
-        if let bundleIdentifier {
-            guard !Self.isProtectedBundleIdentifier(bundleIdentifier),
-                  !protectedBundleIdentifiers.contains(bundleIdentifier)
-            else { throw AppUninstallPlanningError.protectedApplication }
-        }
+        let scope = uninstallScope(identifier: bundleIdentifier, applicationURL: applicationURL)
+        guard scope != .refused else { throw AppUninstallPlanningError.protectedApplication }
         guard !context.isExcluded(applicationURL) else {
             throw AppUninstallPlanningError.applicationExcluded
         }
@@ -293,13 +297,14 @@ public struct AppUninstallPlanner: Sendable {
             ownerBundleIdentifier: nil
         )
 
-        // A missing identifier prevents safe related-file attribution.
-        // The reviewed application can still move to the Trash by itself.
-        guard let bundleIdentifier else {
+        // A missing identifier prevents safe related-file attribution, and so does
+        // one that no single application owns — see `UninstallScope`. The reviewed
+        // application can still move to the Trash by itself.
+        guard let bundleIdentifier, scope != .applicationOnly else {
             return AppUninstallPlan(
                 applicationURL: applicationURL,
                 applicationName: name,
-                bundleIdentifier: nil,
+                bundleIdentifier: bundleIdentifier,
                 items: [applicationItem],
                 managedPackage: managedPackage,
                 preservedPaths: [],
@@ -309,9 +314,15 @@ public struct AppUninstallPlanner: Sendable {
             )
         }
 
-        let candidateIDs = Self.ownedBundleIdentifiers(
-            in: applicationURL, primary: bundleIdentifier, fileManager: fm
-        )
+        // Under an Apple identifier only the application's own name is matched.
+        // The prefix rule below is sound for a vendor, who owns everything under
+        // their reverse-DNS name; nobody but the system owns `com.apple.`, and what
+        // else answers to a name beneath this one cannot be known from here.
+        let candidateIDs = scope == .exactIdentifier
+            ? [bundleIdentifier]
+            : Self.ownedBundleIdentifiers(
+                in: applicationURL, primary: bundleIdentifier, fileManager: fm
+            )
         let exclusiveIDs = Self.exclusiveBundleIdentifiers(
             candidates: candidateIDs,
             selectedApplication: applicationURL,
@@ -587,6 +598,68 @@ public struct AppUninstallPlanner: Sendable {
         return rawValue
     }
 
+    // MARK: - Who may be uninstalled
+
+    /// How far the uninstaller may go for one application.
+    enum UninstallScope: Equatable {
+        /// The application and everything under its vendor's identifier.
+        case full
+        /// The application and what is named by its identifier exactly.
+        case exactIdentifier
+        /// The application alone.
+        case applicationOnly
+        case refused
+    }
+
+    /// An Apple identifier was refused outright until 19 Sep 2026, on the reading
+    /// that `com.apple.` means a system application. It does not. System
+    /// applications live in `/System/Applications`, on the sealed volume, which is
+    /// not an application root and is never listed; Safari's entry in
+    /// `/Applications` is a symbolic link, refused by its own rule. What the
+    /// identifier test actually caught in `/Applications` on this Mac was Pages,
+    /// Numbers, Keynote, iMovie, Developer and Xcode — App Store installs the user
+    /// can delete from Launchpad — and a Shortcuts droplet the user had made.
+    ///
+    /// So the name is no longer the test; evidence that the user installed it is.
+    /// An App Store receipt inside the bundle is that evidence. An Apple-named
+    /// bundle without one stays refused: nothing here can say where it came from.
+    ///
+    /// Related files are the careful half. `exactIdentifier` and not `full`, because
+    /// the prefix rule assumes a vendor owns everything beneath their name, and
+    /// under `com.apple.` that vendor is the operating system. Shared group
+    /// containers (`group.com.apple.iWork`, which Pages, Numbers and Keynote share)
+    /// are preserved for every application already.
+    ///
+    /// A droplet is the application alone: all droplets carry one identifier, so
+    /// anything matched by it belongs to each of them and to none.
+    func uninstallScope(identifier: String?, applicationURL: URL) -> UninstallScope {
+        guard let identifier else { return .applicationOnly }
+        guard !protectedBundleIdentifiers.contains(identifier) else { return .refused }
+        guard Self.isProtectedBundleIdentifier(identifier) else { return .full }
+        if identifier == Self.shortcutsDropletIdentifier { return .applicationOnly }
+        return Self.hasAppStoreReceipt(applicationURL) ? .exactIdentifier : .refused
+    }
+
+    static let shortcutsDropletIdentifier = "com.apple.shortcuts.droplet"
+
+    /// The receipt the App Store writes into every bundle it installs.
+    static func hasAppStoreReceipt(_ applicationURL: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: applicationURL.appendingPathComponent("Contents/_MASReceipt/receipt").path
+        )
+    }
+
+    /// A web application's launcher, written by a Chromium browser: `app_mode_loader`
+    /// and a plist naming the profile that owns it. Seen on this Mac as two 0-byte
+    /// entries in `~/Applications/Chrome Apps.localized`. The browser manages these
+    /// and writes them again; removing one uninstalls nothing, so it is not listed.
+    static func isChromiumApplicationShim(_ bundle: Bundle) -> Bool {
+        bundle.object(forInfoDictionaryKey: "CrAppModeShortcutID") != nil
+    }
+
+    /// An identifier the system may own. Not by itself a verdict on an application —
+    /// see `uninstallScope` — but it is one for a leftover, which has no bundle to
+    /// carry a receipt.
     static func isProtectedBundleIdentifier(_ identifier: String) -> Bool {
         let lowered = identifier.lowercased()
         let wrapped = "." + lowered + "."

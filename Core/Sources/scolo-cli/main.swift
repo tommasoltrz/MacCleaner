@@ -14,6 +14,7 @@ import ScoloCore
 //     swift run scolo-cli snapshots
 //     swift run scolo-cli measure <path>
 //     swift run scolo-cli apps
+//     swift run scolo-cli uninstallable
 //
 // `snapshot` and `growth` write to and read from the same measurement history the
 // app keeps. A snapshot taken here is tagged `cli`, so it is easy to see — and to
@@ -39,6 +40,8 @@ struct CLI {
                 try await scan()
             case "apps":
                 try await apps()
+            case "uninstallable":
+                uninstallable()
             case "measure":
                 guard arguments.count > 1 else {
                     throw CLIError.usage("measure needs a path")
@@ -52,7 +55,8 @@ struct CLI {
             default:
                 print("scolo-cli — ScoloCore engine harness")
                 print("commands: volume | snapshots | breakdown | snapshot"
-                      + " | growth [previous|7d|cleanup] | scan | apps | measure <path>"
+                      + " | growth [previous|7d|cleanup] | scan | apps | uninstallable"
+                      + " | measure <path>"
                       + " | reclaim <path>")
             }
         } catch {
@@ -96,6 +100,21 @@ struct CLI {
                       + (child.childCount.map { " · \($0) items" } ?? ""))
             }
         }
+    }
+
+    /// What the Uninstaller's grid offers, by the planner's own rules.
+    static func uninstallable() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let applications = AppUninstallPlanner().installedApplications()
+        for application in applications {
+            let path = application.url.deletingLastPathComponent().path
+                .replacingOccurrences(of: home, with: "~")
+            print("  \(application.name.padding(toLength: 34, withPad: " ", startingAt: 0)) "
+                  + "\((application.bundleIdentifier ?? "—").padding(toLength: 44, withPad: " ", startingAt: 0)) "
+                  + path)
+        }
+        print("")
+        print("  \(applications.count) applications")
     }
 
     static func scan() async throws {
