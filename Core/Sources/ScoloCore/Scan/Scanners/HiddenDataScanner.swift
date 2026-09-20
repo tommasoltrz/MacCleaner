@@ -1,7 +1,8 @@
 import Foundation
 
-/// **Hidden & System Data** — the Trash, iOS device backups, Mail, cloud mirrors,
-/// large hidden dot-directories in `$HOME`, and oversized archive/VM images.
+/// **Hidden & System Data** — iOS device backups, Mail, cloud mirrors, what is in
+/// `~/.cache`, large hidden dot-directories in `$HOME`, and oversized archive/VM
+/// images. Not the Trash — see `scan`.
 ///
 /// Ports `electron/cleaners/hiddenData.ts`, keeping its roots and thresholds and
 /// dropping the three things that made it wrong:
@@ -112,14 +113,14 @@ public struct HiddenDataScanner: CategoryScanner {
         // predecessor made every time.
         var claimed = context.excludedPaths
 
-        // 1. Trash. One row for the folder, not one per item: `FileEntry` sums its
-        // children into `totalBytesIncludingChildren`, so attaching per-item children
-        // to a folder already measured whole would double its size. The Trash view
-        // owns per-item detail.
-        let trash = url(Root.trash)
-        claimed.append(trash.path)
-        try await measureAndAppend(trash, kind: .folder, minimumBytes: Threshold.any,
-                                   context: context, to: &found)
+        // 1. The Trash is claimed and not listed. It was a row until 20 Sep 2026, and
+        // a row here is a checkbox in front of Clean Up, which knows nothing about
+        // what it is handed: with "move to Trash" on it asked macOS to move the Trash
+        // into the Trash, and with it off it deleted `~/.Trash` outright — past Empty
+        // Trash, its confirmation, its receipts and Put Back. The Trash view owns the
+        // Trash, its size is on the sidebar and the capacity card, and emptying it is
+        // that view's one button. Claiming the path keeps the archive sweep out of it.
+        claimed.append(url(Root.trash).path)
 
         // 2. iOS/iPadOS backups, one row per device backup so a single stale device
         // can be removed without touching the others.
@@ -343,6 +344,19 @@ public struct HiddenDataScanner: CategoryScanner {
         ]
         let standardRoot = root.standardizedFileURL
         let rootDepth = standardRoot.pathComponents.count
+
+        // The walk reports real paths and the claimed paths are spelled the way the
+        // home was given. Where those differ — `/var/…` against `/private/var/…` in a
+        // temporary folder, a home reached through a link — no prefix matched and
+        // nothing claimed was skipped, the Trash included. `standardizedFileURL` does
+        // not close that gap (it leaves `/var` alone), so each prefix is kept as
+        // given and also resolved with `realpath`, which is what the walk reports.
+        let skipPrefixes = skipPrefixes.flatMap { prefix -> [String] in
+            guard let resolved = realpath(prefix, nil) else { return [prefix] }
+            defer { free(resolved) }
+            let real = String(cString: resolved)
+            return real == prefix ? [prefix] : [prefix, real]
+        }
 
         guard let enumerator = FileManager.default.enumerator(
             at: standardRoot,

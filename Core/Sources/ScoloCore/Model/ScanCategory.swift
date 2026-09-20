@@ -35,7 +35,7 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .applicationLeftovers:
             "Files with no installed application owner"
         case .hiddenSystemData:
-            "Trash, iOS backups, Mail downloads, dot-caches, snapshots"
+            "iOS backups, Mail downloads, ~/.cache, hidden folders, large disk images"
         case .systemCaches:
             "~/Library/Caches, ~/Library/Logs"
         case .packageManagers:
