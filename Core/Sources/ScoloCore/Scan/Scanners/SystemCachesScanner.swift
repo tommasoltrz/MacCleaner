@@ -36,6 +36,9 @@ public struct SystemCachesScanner: CategoryScanner {
     /// `appendSystemApplicationCaches`.
     let containersRoot: URL?
     let systemApplicationDirectories: [URL]
+    /// `~/Library/Application Support`, read for the few caches named in
+    /// `applicationSupportCaches` and for nothing else.
+    let applicationSupportRoot: URL?
 
     public init() {
         let home = URL(fileURLWithPath: NSHomeDirectory())
@@ -47,7 +50,8 @@ public struct SystemCachesScanner: CategoryScanner {
             systemApplicationDirectories: [
                 URL(fileURLWithPath: "/System/Applications", isDirectory: true),
                 URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true)
-            ]
+            ],
+            applicationSupportRoot: home.appendingPathComponent("Library/Application Support")
         )
     }
 
@@ -55,13 +59,15 @@ public struct SystemCachesScanner: CategoryScanner {
     /// real roots above.
     init(
         cachesRoot: URL, logsRoot: URL, dotCacheRoot: URL? = nil,
-        containersRoot: URL? = nil, systemApplicationDirectories: [URL] = []
+        containersRoot: URL? = nil, systemApplicationDirectories: [URL] = [],
+        applicationSupportRoot: URL? = nil
     ) {
         self.cachesRoot = cachesRoot
         self.logsRoot = logsRoot
         self.dotCacheRoot = dotCacheRoot
         self.containersRoot = containersRoot
         self.systemApplicationDirectories = systemApplicationDirectories
+        self.applicationSupportRoot = applicationSupportRoot
     }
 
     private var roots: [URL] { [cachesRoot, logsRoot] + [dotCacheRoot].compactMap { $0 } }
@@ -237,6 +243,9 @@ public struct SystemCachesScanner: CategoryScanner {
         try await appendSystemApplicationCaches(
             context: context, to: &entries, unreadableCount: &unreadableCount
         )
+        try await appendApplicationSupportCaches(
+            context: context, to: &entries, unreadableCount: &unreadableCount
+        )
 
         // Every root refused us. Say how to fix it rather than reporting an empty
         // category, which would read as "nothing to clean".
@@ -262,6 +271,78 @@ public struct SystemCachesScanner: CategoryScanner {
             availability: entries.isEmpty ? .empty : .available,
             unreadableCount: unreadableCount
         )
+    }
+
+    // MARK: - Caches kept in Application Support
+
+    /// A cache an application keeps under `~/Library/Application Support`, where no
+    /// cache sweep looks.
+    struct ApplicationSupportCache: Sendable {
+        let label: String
+        let components: [String]
+        /// Any running application whose identifier begins with this holds the row.
+        let ownerIdentifierPrefix: String
+    }
+
+    /// A short, audited list — `~/Library/Application Support` is where
+    /// applications keep the user's data, and a rule that went looking for
+    /// cache-shaped names in it is how a cleaner deletes a project.
+    ///
+    /// **Adobe's media cache.** Premiere Pro, After Effects and Media Encoder write
+    /// conformed audio, peak files and rendered previews to `Common/Media Cache
+    /// Files`, and the index that tracks them to `Common/Media Cache`; on a machine
+    /// that edits video the pair runs to tens of gigabytes. Adobe's own instruction
+    /// for reclaiming the space is to quit its applications and delete both; the
+    /// media is conformed again when a project is next opened, which takes minutes.
+    /// Only these default locations: a cache the user has pointed at another disk is
+    /// theirs to find. `Common` also holds plug-ins and presets, which are not
+    /// named and are not touched. An Adobe identifier carries the year
+    /// (`com.adobe.PremierePro.24`), so any open Adobe application holds the rows.
+    ///
+    /// Not seen on this Mac, which has no Adobe application; the paths are Adobe's
+    /// published ones, and Purge (github.com/jithin-sabu/purge-app) lists the same
+    /// two.
+    static let applicationSupportCaches: [ApplicationSupportCache] = [
+        ApplicationSupportCache(
+            label: "Adobe media cache files",
+            components: ["Adobe", "Common", "Media Cache Files"],
+            ownerIdentifierPrefix: "com.adobe."
+        ),
+        ApplicationSupportCache(
+            label: "Adobe media cache database",
+            components: ["Adobe", "Common", "Media Cache"],
+            ownerIdentifierPrefix: "com.adobe."
+        )
+    ]
+
+    private func appendApplicationSupportCaches(
+        context: ScanContext, to entries: inout [FileEntry], unreadableCount: inout Int
+    ) async throws {
+        guard let applicationSupportRoot else { return }
+        for cache in Self.applicationSupportCaches {
+            try Task.checkCancellation()
+            let url = cache.components.reduce(applicationSupportRoot) {
+                $0.appendingPathComponent($1, isDirectory: true)
+            }
+            guard FileManager.default.fileExists(atPath: url.path),
+                  !context.isExcluded(url)
+            else { continue }
+            let measurement = try await context.measurer.measure(url)
+            unreadableCount += measurement.unreadableCount
+            guard measurement.allocatedBytes >= Self.minimumEntryBytes,
+                  !measurement.containsProtectedPattern
+            else { continue }
+            entries.append(FileEntry(
+                url: url,
+                displayName: cache.label,
+                kind: .cache,
+                allocatedBytes: measurement.allocatedBytes,
+                lastOpened: lastOpenedDate(for: url),
+                isRegenerable: true,
+                inUseBy: context.runningOwner(bundleIdentifierPrefix: cache.ownerIdentifierPrefix),
+                childCount: Self.childCount(of: url)
+            ))
+        }
     }
 
     // MARK: - System applications
