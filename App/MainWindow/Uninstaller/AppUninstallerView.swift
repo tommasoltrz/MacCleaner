@@ -25,6 +25,17 @@ struct AppUninstallerView: View {
     /// by name — so the label would sit beside `Name` and mean the same thing.
     @State private var sortOrder: SortOrder = .name
 
+    /// The page's two lists. Leftovers are here as well as in the Scanner because
+    /// this is where the question gets asked: whoever came to uninstall an
+    /// application is the person who wants to know what the last one left behind.
+    private enum Tab: String, CaseIterable {
+        case installed = "Installed"
+        case leftovers = "Leftovers"
+    }
+    @State private var tab: Tab = .installed
+    /// Removed applications whose files are disclosed, by bundle identifier.
+    @State private var expandedLeftovers: Set<String> = []
+
     private enum SortOrder: String, CaseIterable {
         case name = "Name"
         case largest = "Largest"
@@ -78,7 +89,9 @@ struct AppUninstallerView: View {
                             .foregroundStyle(Token.textColor(.orange))
                     }
 
-                    if let applications = model.installedApplications {
+                    if tab == .leftovers {
+                        leftoversList
+                    } else if let applications = model.installedApplications {
                         let shown = visibleApplications(applications)
                         if shown.isEmpty {
                             ContentUnavailableView {
@@ -134,52 +147,171 @@ struct AppUninstallerView: View {
             }
         }
         .onAppear { model.loadInstalledApplications() }
+        // Read when the tab is first opened, and again on each return to it: the
+        // disk it describes changes whenever something is uninstalled.
+        .onChange(of: tab) { _, newTab in
+            if newTab == .leftovers { model.loadApplicationLeftovers() }
+        }
     }
 
-    private var libraryHeader: some View {
-        HStack(spacing: 10) {
-            // A selection takes over the summary's place: the count the user is
-            // building matters more than the total they are not acting on.
-            if model.selectedApplicationIDs.isEmpty {
-                Text(librarySummary)
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-                    .lineLimit(1)
-                    .help("Sizes are the application itself. Its related files are found when you open it.")
+    // MARK: Leftovers
+
+    @ViewBuilder
+    private var leftoversHeaderContent: some View {
+        if model.selectedLeftoverIdentifiers.isEmpty {
+            Text(leftoversSummary)
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+                .help("Files whose application is no longer installed. "
+                    + "They are that application's settings and data: nothing puts them back.")
+        } else {
+            Text("\(model.selectedLeftoverIdentifiers.count) selected · "
+                 + ByteFormatting.string(model.selectedLeftoverBytes))
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+            Button("Deselect All") { model.selectedLeftoverIdentifiers.removeAll() }
+                .buttonStyle(SecondaryButtonStyle())
+                .fixedSize()
+        }
+
+        Spacer()
+
+        if !model.selectedLeftoverIdentifiers.isEmpty {
+            // The ellipsis is the promise: the sheet says how many items, and that
+            // they move to the Trash, before anything does.
+            Button("Remove \(model.selectedLeftoverIdentifiers.count)…",
+                   action: model.requestLeftoverRemoval)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(model.activity != nil)
+                .fixedSize()
+        }
+    }
+
+    private var leftoversSummary: String {
+        guard let leftovers = model.applicationLeftovers else { return "Looking for leftovers…" }
+        let count = leftovers.groups.count
+        guard count > 0 else { return "No leftovers" }
+        return "\(count) removed \(count == 1 ? "application" : "applications") · "
+            + ByteFormatting.string(leftovers.totalBytes)
+    }
+
+    @ViewBuilder
+    private var leftoversList: some View {
+        if let leftovers = model.applicationLeftovers {
+            if leftovers.groups.isEmpty {
+                ContentUnavailableView {
+                    Label("No Leftovers", systemImage: "checkmark.circle")
+                } description: {
+                    Text("Nothing was found that a removed application left behind.")
+                }
+                .frame(maxWidth: .infinity, minHeight: 320)
             } else {
-                Text("\(model.selectedApplicationIDs.count) selected")
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
+                // Never ticked for the user: whether a removed application's
+                // settings matter depends on whether it is coming back.
+                GroupedBox {
+                    VStack(spacing: 0) {
+                        let groups = leftovers.groups.sorted { $0.totalBytes > $1.totalBytes }
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                            if index > 0 { HairlineDivider() }
+                            leftoverRow(group)
+                            if expandedLeftovers.contains(group.bundleIdentifier) {
+                                ForEach(group.items, id: \.id) { item in
+                                    HairlineDivider()
+                                    itemRow(item).padding(.leading, 28)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Bones, not a spinner over an empty page: the list is a few rows.
+            GroupedBox {
+                VStack(spacing: 0) {
+                    ForEach(0..<3, id: \.self) { index in
+                        if index > 0 { HairlineDivider() }
+                        skeletonRow(nameWidth: 180, pathWidth: 120).frame(height: 46)
+                    }
+                }
+            }
+        }
+    }
+
+    private func leftoverRow(_ group: OrphanedAppLeftoverPlan.Group) -> some View {
+        let isSelected = model.selectedLeftoverIdentifiers.contains(group.bundleIdentifier)
+        let isExpanded = expandedLeftovers.contains(group.bundleIdentifier)
+        let holdsUserData = group.items.contains(where: \.isProtectedUserData)
+        return HStack(spacing: 10) {
+            Button {
+                if isExpanded { expandedLeftovers.remove(group.bundleIdentifier) }
+                else { expandedLeftovers.insert(group.bundleIdentifier) }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Token.Text.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .frame(width: 14, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("\(group.items.count) files")
+
+            Toggle("", isOn: Binding(
+                get: { isSelected },
+                set: { _ in model.toggleLeftoverSelection(group.bundleIdentifier) }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    // The identifier is what is known. The application is gone, and
+                    // a friendlier name would be a guess about something not here.
+                    Text(group.bundleIdentifier)
+                        .font(.mcBody)
+                        .foregroundStyle(Token.Text.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if holdsUserData { Badge(text: "includes user data").fixedSize() }
+                }
+                Text("No installed application owner · "
+                     + (group.items.count == 1 ? "1 file" : "\(group.items.count) files"))
+                    .font(.mcMonoSmall)
+                    .foregroundStyle(Token.Text.tertiary)
                     .lineLimit(1)
-                Button("Deselect All", action: model.clearApplicationSelection)
-                    .buttonStyle(SecondaryButtonStyle())
-                    .fixedSize()
             }
 
             Spacer()
 
-            Picker("Sort", selection: $sortOrder) {
-                ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            Text(ByteFormatting.string(group.totalBytes))
+                .font(.mcRowValue)
+                .foregroundStyle(Token.Text.secondary)
+                .fixedSize()
+        }
+        .padding(.horizontal, 13)
+        .frame(height: 46)
+        .contentShape(Rectangle())
+        .hoverHighlight()
+        .onTapGesture { model.toggleLeftoverSelection(group.bundleIdentifier) }
+    }
+
+    private var libraryHeader: some View {
+        HStack(spacing: 10) {
+            Picker("Show", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
 
-            // The one thing in this header that may narrow. At a fixed 180 pt it
-            // won the space and the button beside it was cut to "Unins…" — a
-            // truncated label on the destructive control is the wrong one to lose.
-            FindField(text: $searchText, findRequest: model.findRequest)
-                .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
-
-            if !model.selectedApplicationIDs.isEmpty {
-                // The ellipsis is the promise: related files are found and shown
-                // before anything is asked.
-                Button("Uninstall \(model.selectedApplicationIDs.count)…",
-                       action: model.reviewSelectedApplications)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .tint(Token.color(.red))
-                    .disabled(model.activity != nil)
-                    .fixedSize()
+            if tab == .leftovers {
+                leftoversHeaderContent
+            } else {
+                installedHeaderContent
             }
         }
         // Fixed, so the first tick does not push the grid down by the difference
@@ -187,6 +319,53 @@ struct AppUninstallerView: View {
         .frame(height: Self.headerControlHeight)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var installedHeaderContent: some View {
+        // A selection takes over the summary's place: the count the user is
+        // building matters more than the total they are not acting on.
+        if model.selectedApplicationIDs.isEmpty {
+            Text(librarySummary)
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+                .help("Sizes are the application itself. Its related files are found when you open it.")
+        } else {
+            Text("\(model.selectedApplicationIDs.count) selected")
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.secondary)
+                .lineLimit(1)
+            Button("Deselect All", action: model.clearApplicationSelection)
+                .buttonStyle(SecondaryButtonStyle())
+                .fixedSize()
+        }
+
+        Spacer()
+
+        Picker("Sort", selection: $sortOrder) {
+            ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .labelsHidden()
+        .fixedSize()
+
+        // The one thing in this header that may narrow. At a fixed 180 pt it
+        // won the space and the button beside it was cut to "Unins…" — a
+        // truncated label on the destructive control is the wrong one to lose.
+        FindField(text: $searchText, findRequest: model.findRequest)
+            .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
+
+        if !model.selectedApplicationIDs.isEmpty {
+            // The ellipsis is the promise: related files are found and shown
+            // before anything is asked.
+            Button("Uninstall \(model.selectedApplicationIDs.count)…",
+                   action: model.reviewSelectedApplications)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(Token.color(.red))
+                .disabled(model.activity != nil)
+                .fixedSize()
+        }
     }
 
     /// Tall enough for the header's tallest control, a regular bordered button.
