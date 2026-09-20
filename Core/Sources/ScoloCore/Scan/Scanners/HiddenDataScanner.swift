@@ -309,7 +309,8 @@ public struct HiddenDataScanner: CategoryScanner {
         for child in contents.sorted(by: { $0.path < $1.path }) {
             let name = child.lastPathComponent
             guard name.hasPrefix("."), !Self.dotDirectorySkipList.contains(name),
-                  !LocalModelStores.homeDotFolders.contains(name)
+                  !LocalModelStores.homeDotFolders.contains(name),
+                  !EditorExtensionStores.homeDotFolders.contains(name)
             else { continue }
             guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }

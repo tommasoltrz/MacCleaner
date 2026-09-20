@@ -255,6 +255,36 @@ public struct PackageManagerScanner: CategoryScanner {
             totalBytes += measured.allocatedBytes
         }
 
+        // Old extension versions an editor has itself marked for removal — see
+        // `EditorExtensionStores`. Here and not in a category of their own because
+        // that is what they are: packages from a registry, superseded, that the tool
+        // which fetched them will delete. Safe on the editor's word, with one
+        // condition the editor's word does not cover: an update waiting for a reload
+        // leaves the old version running in the open window, so a row under an open
+        // editor is held like any cache under its owner.
+        for extensionFolder in EditorExtensionStores.obsolete(home: home) {
+            try Task.checkCancellation()
+            let url = extensionFolder.url
+            guard !context.isExcluded(url) else { continue }
+            let measured = try await context.measurer.measure(url)
+            unreadableCount += measured.unreadableCount
+            guard !measured.containsProtectedPattern, measured.allocatedBytes > 0 else { continue }
+
+            let editor = extensionFolder.editor
+            entries.append(FileEntry(
+                url: url,
+                displayName: EditorExtensionStores.displayName(forFolder: url.lastPathComponent),
+                parentDisplay: "\(editor.name) marked this version for removal · "
+                    + FileEntry.abbreviate(url.deletingLastPathComponent().path),
+                kind: .cache,
+                allocatedBytes: measured.allocatedBytes,
+                lastOpened: lastOpenedDate(for: url),
+                isRegenerable: true,
+                inUseBy: context.runningOwner(bundleIdentifier: editor.bundleIdentifier)
+            ))
+            totalBytes += measured.allocatedBytes
+        }
+
         entries.sort { $0.allocatedBytes > $1.allocatedBytes }
 
         // `.empty`, never `.unavailable`: a machine with no package-manager caches is
