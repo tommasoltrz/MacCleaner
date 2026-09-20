@@ -90,6 +90,28 @@ struct DisjointCategoriesTests {
         )
     }
 
+    /// `HiddenDataScanner` lists every large dot-folder in the home whole. A package
+    /// manager root inside one — `~/.cargo/registry` inside `~/.cargo` — would be
+    /// offered by both, and the whole-folder row would take the toolchain with the
+    /// cache. `~/.pnpm-store` was claimed here and listed there from the day pnpm
+    /// was added; nothing compared the two lists.
+    @Test("Hidden Data skips every home dot-folder that Package Manager claims inside")
+    func hiddenDataSkipsPackageManagerDotFolders() {
+        let claimed = Set(PackageManagerScanner.roots.compactMap { root -> String? in
+            guard let first = root.components.first, first.hasPrefix(".") else { return nil }
+            return first
+        })
+        let listedTwice = claimed.subtracting(HiddenDataScanner.dotDirectorySkipList)
+        #expect(
+            listedTwice.isEmpty,
+            """
+            PackageManagerScanner claims paths inside \(listedTwice.sorted()), which \
+            HiddenDataScanner also lists whole. Add them to \
+            HiddenDataScanner.dotDirectorySkipList.
+            """
+        )
+    }
+
     @Test("application leftovers replace overlapping generic cleanup rows")
     func applicationLeftoversOwnTheirPaths() throws {
         let root = URL(fileURLWithPath: "/tmp/scolo-overlap", isDirectory: true)

@@ -80,7 +80,12 @@ public struct SystemCachesScanner: CategoryScanner {
         "Homebrew", "pip", "CocoaPods",
         // Added at integration: PackageManagerScanner claims these too, and the
         // original three-name list would have double-counted them.
-        "Yarn", "pnpm", "ms-playwright"
+        "Yarn", "pnpm", "ms-playwright",
+        // Added with the 20 Sep 2026 roots. Each was a row here, named for its
+        // folder; it is a row there now, named for its tool.
+        "deno", "go-build", "Coursier", "composer", "pipenv", "org.swift.swiftpm",
+        "org.carthage.CarthageKit", "node-gyp", "electron", "electron-builder",
+        "Cypress", "ccache"
     ]
 
     /// The ported threshold: the original emitted any child whose measured size was
