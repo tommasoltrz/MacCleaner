@@ -637,10 +637,26 @@ public struct AppUninstallPlanner: Sendable {
         guard !protectedBundleIdentifiers.contains(identifier) else { return .refused }
         guard Self.isProtectedBundleIdentifier(identifier) else { return .full }
         if identifier == Self.shortcutsDropletIdentifier { return .applicationOnly }
+        if identifier.hasPrefix(Self.macOSInstallerIdentifierPrefix) { return .applicationOnly }
         return Self.hasAppStoreReceipt(applicationURL) ? .exactIdentifier : .refused
     }
 
     static let shortcutsDropletIdentifier = "com.apple.shortcuts.droplet"
+
+    /// `Install macOS Sonoma.app` is `com.apple.InstallAssistant.macOSSonoma`: about
+    /// twelve gigabytes, and the first thing anyone opening a disk cleaner would
+    /// clear. The receipt rule refused most of them. One fetched by Software Update,
+    /// or by `softwareupdate --fetch-full-installer`, carries no App Store receipt,
+    /// so it was a row the size of the scan that nothing here could remove.
+    ///
+    /// An installer is never part of the running system: it is a download that sits
+    /// in `/Applications` until someone runs it, and the same download can be had
+    /// again. The identifier says what it is, and the application roots — never
+    /// `/System` — say where. It goes alone: what else answers to an Apple name is
+    /// not knowable from here.
+    ///
+    /// None was on this Mac on 20 Sep 2026; the identifier is Apple's documented one.
+    static let macOSInstallerIdentifierPrefix = "com.apple.InstallAssistant."
 
     /// The receipt the App Store writes into every bundle it installs.
     static func hasAppStoreReceipt(_ applicationURL: URL) -> Bool {

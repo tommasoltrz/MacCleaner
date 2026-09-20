@@ -469,6 +469,26 @@ struct AppUninstallPlannerTests {
         #expect(plan.items.map(\.url) == [droplet])
     }
 
+    /// `Install macOS Sonoma.app` is twelve gigabytes and the first thing anyone
+    /// would clear. Fetched through Software Update or `softwareupdate
+    /// --fetch-full-installer` it carries no App Store receipt, so the receipt rule
+    /// refused it: a row the size of the scan that nothing could remove.
+    @Test("a macOS installer is removable on its own, with or without a receipt")
+    func macOSInstallerIsApplicationOnly() async throws {
+        let sandbox = try Sandbox()
+        let installer = try sandbox.application(
+            "Install macOS Sonoma", identifier: "com.apple.InstallAssistant.macOSSonoma"
+        )
+        _ = try sandbox.write("Library/Preferences/com.apple.InstallAssistant.macOSSonoma.plist")
+
+        #expect(sandbox.planner().installedApplications().map(\.name) == ["Install macOS Sonoma"])
+        let plan = try await sandbox.planner().plan(applicationURL: installer)
+        // The installer alone: what else answers to an Apple name is not knowable.
+        #expect(plan.isApplicationOnly)
+        #expect(plan.items.map(\.url) == [installer])
+        #expect(plan.bundleIdentifier == "com.apple.InstallAssistant.macOSSonoma")
+    }
+
     @Test("a browser's web-application launcher is not listed")
     func chromiumShimIsNotListed() throws {
         let sandbox = try Sandbox()
