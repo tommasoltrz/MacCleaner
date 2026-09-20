@@ -39,7 +39,7 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .systemCaches:
             "~/Library/Caches, ~/Library/Logs"
         case .packageManagers:
-            "npm, Yarn, pip, Homebrew, CocoaPods, Gradle"
+            "npm, pnpm, pip, Homebrew, Cargo, CocoaPods, Gradle and more"
         case .xcode:
             "DerivedData, Device Support, Simulator caches"
         case .docker:

@@ -118,15 +118,76 @@ public struct PackageManagerScanner: CategoryScanner {
 
         // ADDED: Playwright's macOS default is `~/Library/Caches/ms-playwright`; the
         // original listed only the Linux path, so it never found the browsers.
-        CacheRoot(label: "Playwright browsers", components: ["Library", "Caches", "ms-playwright"])
+        CacheRoot(label: "Playwright browsers", components: ["Library", "Caches", "ms-playwright"]),
         // REMOVED at integration: `~/.cache/ms-playwright`, for the same reason as
         // `~/.cache/yarn` above — HiddenDataScanner owns all of `~/.cache`.
 
-        // Not listed here: `~/.cargo`, `~/.m2`, `~/.rustup`, `~/.nvm`, `~/.bun`,
-        // `~/.deno`. The category subtitle names the tools it covers, and those roots
-        // mix caches with installed toolchains that removal would break. The
-        // Dashboard's "Package & Build Caches" segment measures them separately, so
-        // they are not unaccounted for — only out of scope for unattended cleanup.
+        // ADDED 20 Sep 2026, after reading Purge (github.com/jithin-sabu/purge-app),
+        // which offers most of these. `~/.cargo`, `~/.bun` and the rest were left out
+        // whole because each mixes a cache with an installed toolchain. That was the
+        // right reason to refuse the folder and the wrong reason to refuse the cache
+        // inside it: every root below is the tool's own download cache by its
+        // documented default, never the folder that holds the tool.
+        //
+        // Inside a home dot-folder. `HiddenDataScanner.dotDirectorySkipList` names
+        // each of these folders, or that scanner lists it whole and the two
+        // categories offer the same bytes; `DisjointCategoriesTests` holds the two
+        // lists together.
+        CacheRoot(label: "Bun install cache", components: [".bun", "install", "cache"]),
+        // `registry` is the index, the downloaded crates and their unpacked source;
+        // `git` is the same for git dependencies. `~/.cargo/bin` — what
+        // `cargo install` put there — is not touched.
+        CacheRoot(label: "Cargo registry", components: [".cargo", "registry"]),
+        CacheRoot(label: "Cargo git dependencies", components: [".cargo", "git"]),
+        // `~/.ivy2/local` holds what the user published with `publishLocal` and is
+        // not a download, so only `cache` is named.
+        CacheRoot(label: "Ivy cache", components: [".ivy2", "cache"]),
+        CacheRoot(label: "Bundler cache", components: [".bundle", "cache"]),
+        // Projects build against this folder directly, so the next build restores
+        // it; `dotnet nuget locals all --clear` is Microsoft's own instruction.
+        CacheRoot(label: "NuGet packages", components: [".nuget", "packages"]),
+        CacheRoot(label: "Hex packages", components: [".hex", "packages"]),
+        CacheRoot(label: "Cabal packages", components: [".cabal", "packages"]),
+        // `~/.pub-cache/bin` and `global_packages` are what `pub global activate`
+        // installed, so the two download folders are named and the root is not.
+        CacheRoot(label: "Dart pub cache", components: [".pub-cache", "hosted"]),
+        CacheRoot(label: "Dart pub git dependencies", components: [".pub-cache", "git"]),
+
+        // Under `~/Library/Caches`, where System Caches had been offering each as a
+        // safe row named for its folder. Nothing becomes safe that was not; the row
+        // gains a name a person can read and the category it belongs to. Mirrored in
+        // `SystemCachesScanner.packageManagerOwnedCacheNames`.
+        CacheRoot(label: "Deno cache", components: ["Library", "Caches", "deno"]),
+        CacheRoot(label: "Go build cache", components: ["Library", "Caches", "go-build"]),
+        CacheRoot(label: "Coursier cache", components: ["Library", "Caches", "Coursier"]),
+        CacheRoot(label: "Composer cache", components: ["Library", "Caches", "composer"]),
+        CacheRoot(label: "Pipenv cache", components: ["Library", "Caches", "pipenv"]),
+        CacheRoot(label: "SwiftPM cache", components: ["Library", "Caches", "org.swift.swiftpm"]),
+        CacheRoot(label: "Carthage cache", components: ["Library", "Caches", "org.carthage.CarthageKit"]),
+        CacheRoot(label: "node-gyp headers", components: ["Library", "Caches", "node-gyp"]),
+        CacheRoot(label: "Electron downloads", components: ["Library", "Caches", "electron"]),
+        CacheRoot(label: "electron-builder cache", components: ["Library", "Caches", "electron-builder"]),
+        // The same kind of thing as Playwright's browsers above: the test runner's
+        // own binary, fetched again by `cypress install`.
+        CacheRoot(label: "Cypress binaries", components: ["Library", "Caches", "Cypress"]),
+        CacheRoot(label: "ccache", components: ["Library", "Caches", "ccache"])
+
+        // Looked at and left out, each for a reason a name does not show:
+        // * `~/.m2/repository` — also holds what the user built with `mvn install`,
+        //   which no server can give back.
+        // * `~/go/pkg/mod` — read-only by design, so a plain removal fails half way;
+        //   `go clean -modcache` is the tool for it.
+        // * `~/.gem` — installed gems, not a cache. `~/.sbt`, `~/.stack`, `~/.rustup`,
+        //   `~/.nvm`, `~/.deno` — toolchains, with or without a cache beside them.
+        // * `~/.vagrant.d/boxes` — a box may have been packaged on this Mac, and the
+        //   rest are multi-gigabyte downloads, the CocoaPods-repos argument again.
+        // * `~/.terraform.d/plugin-cache` — working directories link into it, so
+        //   removal leaves them broken until the next `terraform init`.
+        // * `~/Library/Caches/pypoetry` — holds Poetry's virtual environments beside
+        //   its cache. System Caches still offers that folder whole, which is a
+        //   fault of that scanner's and is written down in the backlog.
+        // * uv, Bazel's repository cache, rebar3, `act` — all under `~/.cache`, which
+        //   Hidden Data offers whole.
     ]
 
     // MARK: - Scan

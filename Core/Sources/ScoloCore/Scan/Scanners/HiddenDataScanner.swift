@@ -80,8 +80,18 @@ public struct HiddenDataScanner: CategoryScanner {
 
     /// `scanHiddenDirs` skipped these: `.Trash` and `.cache` are listed in their own
     /// right below, and the rest belong to the package-manager category.
-    private static let dotDirectorySkipList: Set<String> = [
-        ".Trash", ".cache", ".npm", ".yarn", ".gradle", ".local"
+    ///
+    /// Every home dot-folder `PackageManagerScanner` claims a path inside must be
+    /// here, or this scanner lists the folder whole and the cache is offered twice —
+    /// once as a cache, once inside a row that would take the toolchain with it.
+    /// `.pnpm-store` was missing from the day pnpm was added; `DisjointCategoriesTests`
+    /// compares the two lists now. The price is that what is left of such a folder
+    /// (`~/.cargo/bin`, `~/.npm/_npx`) is listed by nobody. That is the better side
+    /// to err on: a row offering `~/.cargo` whole is an offer to uninstall Rust.
+    static let dotDirectorySkipList: Set<String> = [
+        ".Trash", ".cache", ".npm", ".yarn", ".gradle", ".local",
+        ".pnpm-store",
+        ".bun", ".cargo", ".ivy2", ".bundle", ".nuget", ".hex", ".cabal", ".pub-cache"
     ]
 
     private static let diskImageExtensions: Set<String> = ["dmg", "iso", "vmdk", "vhd", "qcow2"]

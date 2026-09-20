@@ -45,6 +45,51 @@ struct PackageManagerScanTests {
         #expect(result.totalBytes >= 4 * 1024 * 1024)
     }
 
+    /// `~/.cargo` was left out whole because it holds a toolchain. The cache inside
+    /// it is a cache all the same, and the toolchain beside it is nobody's to offer.
+    @Test("a cache inside a toolchain folder is offered; the toolchain is offered by no one")
+    func cacheInsideAToolchainFolder() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file(".cargo/registry/cache/index/serde.crate", bytes: 8 * 1024 * 1024)
+        try sandbox.file(".cargo/bin/ripgrep", bytes: 7 * 1024 * 1024)
+        try sandbox.file(".pub-cache/hosted/pub.dev/http/lib.dart", bytes: 6 * 1024 * 1024)
+        try sandbox.file(".pub-cache/bin/activated-tool", bytes: 6 * 1024 * 1024)
+        // Control: a dot-folder no package manager claims is still Hidden Data's.
+        try sandbox.file(".somebody/data.bin", bytes: 6 * 1024 * 1024)
+
+        let packages = try await PackageManagerScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+        let hidden = try await HiddenDataScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+
+        #expect(packages.entries.map(\.displayName) == ["Cargo registry", "Dart pub cache"])
+        #expect(packages.entries.allSatisfy { $0.isRegenerable })
+        let offered = (packages.entries + hidden.entries).map(\.url.path)
+        #expect(!offered.contains { $0.hasSuffix("/.cargo") || $0.contains("/.cargo/bin") })
+        #expect(!offered.contains { $0.hasSuffix("/.pub-cache") || $0.contains("/.pub-cache/bin") })
+        #expect(hidden.entries.contains { $0.url.lastPathComponent == ".somebody" })
+    }
+
+    @Test("a cache that moved here from System Caches is offered once, under its tool's name")
+    func relabelledCacheIsOfferedOnce() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file("Library/Caches/org.swift.swiftpm/repositories/pkg/pack", bytes: 4 * 1024 * 1024)
+        try sandbox.file("Library/Caches/com.example.other/blob", bytes: 2 * 1024 * 1024)
+        try FileManager.default.createDirectory(
+            at: sandbox.home.appendingPathComponent("Library/Logs"), withIntermediateDirectories: true
+        )
+
+        let packages = try await PackageManagerScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+        let system = try await SystemCachesScanner(
+            cachesRoot: sandbox.home.appendingPathComponent("Library/Caches"),
+            logsRoot: sandbox.home.appendingPathComponent("Library/Logs")
+        ).scan(context: ScanContext())
+
+        #expect(packages.entries.map(\.displayName) == ["SwiftPM cache"])
+        #expect(system.entries.map(\.url.lastPathComponent) == ["com.example.other"])
+    }
+
     @Test("recency does not hide a cache written this morning")
     func recencyDoesNotHideACache() async throws {
         let sandbox = try Sandbox()
