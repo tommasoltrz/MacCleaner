@@ -300,7 +300,7 @@ final class AppModel {
     private(set) var activity: Activity?
 
     enum Activity: Equatable {
-        case cleaningUp(itemCount: Int, totalBytes: Int64, permanentCount: Int)
+        case cleaningUp(itemCount: Int, totalBytes: Int64)
         case emptyingTrash(itemCount: Int, totalBytes: Int64)
         case removingDuplicateFiles(itemCount: Int, totalBytes: Int64)
         case removingStorageItems(itemCount: Int, totalBytes: Int64)
@@ -310,11 +310,9 @@ final class AppModel {
 
         var title: String {
             switch self {
-            case .cleaningUp(let count, _, let permanent):
+            case .cleaningUp(let count, _):
                 let items = count == 1 ? "item" : "items"
-                if permanent == 0 { return "Moving \(count) \(items) to the Trash" }
-                if permanent == count { return "Deleting \(count) \(items)" }
-                return "Removing \(count) \(items)"
+                return "Moving \(count) \(items) to the Trash"
             case .emptyingTrash:
                 return "Emptying the Trash"
             case .removingDuplicateFiles(let count, _):
@@ -336,7 +334,7 @@ final class AppModel {
         /// Explains why the current disk operation can take time.
         var detail: String {
             switch self {
-            case .cleaningUp(_, let bytes, _),
+            case .cleaningUp(_, let bytes),
                  .emptyingTrash(_, let bytes),
                  .removingStorageItems(_, let bytes):
                 return "\(ByteFormatting.string(bytes)). Each item is measured on disk "
@@ -1200,14 +1198,20 @@ final class AppModel {
     /// Exactly what the confirmation was asked about: which entries, and whether
     /// they go to the Trash.
     ///
-    /// Captured when the sheet opens rather than read again when it is confirmed.
-    /// Settings is a separate window that stays usable while the sheet is up, so
-    /// turning off "Always move to Trash" mid-confirmation used to make a sheet
-    /// promising the Trash perform a permanent deletion. The plan the user agreed
-    /// to is the plan that runs.
+    /// Captured when the sheet opens rather than read again when it is confirmed:
+    /// the plan the user agreed to is the plan that runs.
+    ///
+    /// It carried a `trashFirst` flag, for a preference — "Always move to Trash,
+    /// never delete" — that let a Scanner clean-up unlink files outright. The
+    /// preference was removed on 20 Sep 2026 (the owner's call): every other
+    /// removal in the app already went to the Trash, a cleaner that deletes for
+    /// good on a setting the user flipped months ago is a trap, and the Trash is
+    /// what Put Back, the receipts and History are built on. A clean-up moves to
+    /// the Trash, and space comes back when the Trash is emptied.
+    /// `CleanupService.remove(trashFirst:)` keeps its parameter, as a Core primitive
+    /// with its tests, and the app always passes `true`.
     struct CleanupPlan {
         let entries: [FileEntry]
-        let trashFirst: Bool
         let userDataRemovalOverrides: Set<FileEntry.ID>
         let applicationLeftoverPlan: OrphanedAppLeftoverPlan?
         let orphanedApplicationBundleIdentifiers: Set<String>
@@ -1246,14 +1250,6 @@ final class AppModel {
             }
             return ordinary + orphanedApplicationItems.reduce(0) { $0 + $1.allocatedBytes }
         }
-        /// How many entries this plan deletes outright — the same rule
-        /// `CleanupService` applies, so the sheet's copy cannot drift from what
-        /// the service does: everything when `trashFirst` is off, except app
-        /// bundles and explicitly unlocked user data, which insist on the Trash.
-        var permanentCount: Int {
-            trashFirst ? 0 : entries.filter { !CleanupService.alwaysMovesToTrash($0) }.count
-        }
-
         /// Rows the user deliberately unlocked. The final confirmation calls these
         /// out separately from ordinary cache removal.
         var protectedDataCount: Int {
@@ -1287,7 +1283,6 @@ final class AppModel {
             .applicationLeftoverPlan
         let plan = CleanupPlan(
             entries: entries,
-            trashFirst: settings?.trashFirst ?? true,
             // Capture authorizations only for rows in this exact operation. The
             // service therefore cannot receive a broader capability than it needs.
             userDataRemovalOverrides: userDataRemovalOverrides.intersection(selectedIDs),
@@ -1466,13 +1461,8 @@ final class AppModel {
             clearInUse(of: plan.runningOwners)
         }
 
-        activity = .cleaningUp(
-            itemCount: plan.itemCount,
-            totalBytes: plan.totalBytes,
-            permanentCount: plan.permanentCount
-        )
-        statusMessage = plan.permanentCount == 0
-            ? "Moving selected items to the Trash…" : "Removing selected items…"
+        activity = .cleaningUp(itemCount: plan.itemCount, totalBytes: plan.totalBytes)
+        statusMessage = "Moving selected items to the Trash…"
         defer { activity = nil }
         let entries = plan.entries
         pendingCleanUp = nil
@@ -1482,7 +1472,7 @@ final class AppModel {
         if !entries.isEmpty {
             let ordinary = (try? await cleanupService.remove(
                 entries: entries,
-                trashFirst: plan.trashFirst,
+                trashFirst: true,
                 // Root-owned App Store installs need Finder's remedy: one admin
                 // prompt. Only the app enables this fallback.
                 privilegedFallback: true,

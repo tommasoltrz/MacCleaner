@@ -9,14 +9,13 @@ import ScoloCore
 struct ConfirmationSheet: View {
 
     enum Variant {
-        /// `permanentCount` is how many of the items will be deleted outright —
-        /// non-zero when "Always move to Trash" is off in Advanced. The copy, the
-        /// tint and the receipt row all key off it: a permanent deletion presented
-        /// with Trash language would promise an undo that does not exist.
+        /// A clean-up always moves to the Trash. There was a `permanentCount` here,
+        /// for a preference that let the Scanner delete outright; it took a title, a
+        /// message, a tint, a button label and the receipt row with it. The
+        /// preference is gone — 20 Sep 2026 — and so is every branch it needed.
         case cleanUp(
             itemCount: Int,
             totalBytes: Int64,
-            permanentCount: Int,
             protectedDataCount: Int,
             /// What the disk would actually give back, once measured. `nil` while
             /// the reading is still running or when the filesystem declined it, and
@@ -164,10 +163,9 @@ struct ConfirmationSheet: View {
     }
 
     /// Only the Trash keeps a receipt; a deleted photo is recovered in Photos'
-    /// own Recently Deleted, which this app has no hand in — and a wholly
-    /// permanent clean-up has nothing a receipt could bring back.
+    /// own Recently Deleted, which this app has no hand in.
     private var showsReceipt: Bool {
-        if case .cleanUp(let count, _, let permanent, _, _) = variant { return permanent < count }
+        if case .cleanUp = variant { return true }
         if case .uninstallApp = variant { return true }
         if case .uninstallApps = variant { return true }
         if case .deleteDuplicateFiles = variant { return true }
@@ -180,7 +178,7 @@ struct ConfirmationSheet: View {
     /// the destructive tint rather than the neutral one.
     private var isDestructive: Bool {
         switch variant {
-        case .cleanUp(_, _, let permanent, let protected, _): permanent > 0 || protected > 0
+        case .cleanUp(_, _, let protected, _): protected > 0
         case .emptyTrash, .deleteDuplicateFiles, .removeStorageItems,
              .deletePhotos, .uninstallApp, .uninstallApps: true
         }
@@ -188,16 +186,10 @@ struct ConfirmationSheet: View {
 
     private var title: String {
         switch variant {
-        case .cleanUp(let count, _, let permanent, let protected, _):
+        case .cleanUp(let count, _, let protected, _):
             let noun = count == 1 ? "item" : "items"
             if protected > 0 {
                 return "Remove \(count) \(noun), including protected data?"
-            }
-            if permanent == count {
-                return "Permanently delete \(count) \(noun)?"
-            }
-            if permanent > 0 {
-                return "Remove \(count) \(noun)?"
             }
             return "Move \(count) \(noun) to the Trash?"
         case .emptyTrash(let count, _):
@@ -224,7 +216,7 @@ struct ConfirmationSheet: View {
 
     private var message: String {
         switch variant {
-        case .cleanUp(let count, let bytes, let permanent, let protected, let saving):
+        case .cleanUp(_, let bytes, let protected, let saving):
             let warning: String
             if protected > 0 {
                 let noun = protected == 1 ? "item" : "items"
@@ -235,17 +227,6 @@ struct ConfirmationSheet: View {
                 warning = ""
             }
             let sharing = Self.sharedStorageClause(selected: bytes, saving: saving)
-            if permanent == count {
-                return "\(ByteFormatting.string(bytes)) will be deleted immediately — "
-                    + "not moved to the Trash — because \u{201C}Always move to Trash\u{201D} "
-                    + "is off in Advanced. This cannot be undone." + sharing + warning
-            }
-            if permanent > 0 {
-                let noun = permanent == 1 ? "item is" : "items are"
-                return "\(ByteFormatting.string(bytes)) will be removed. "
-                    + "\(permanent) \(noun) deleted immediately. The other selected "
-                    + "items move to the Trash." + sharing + warning
-            }
             // The receipt line states what the checkbox below it is currently set
             // to do: promising a removal log while it is unchecked was a lie the
             // user could see through by unticking the box.
@@ -349,10 +330,8 @@ struct ConfirmationSheet: View {
 
     private var confirmLabel: String {
         switch variant {
-        case .cleanUp(let count, _, let permanent, let protected, _):
-            if protected > 0 { return "Remove Anyway" }
-            if permanent == count { return "Delete" }
-            return permanent > 0 ? "Remove" : "Move to Trash"
+        case .cleanUp(_, _, let protected, _):
+            return protected > 0 ? "Remove Anyway" : "Move to Trash"
         case .emptyTrash:   return "Erase"
         case .uninstallApp, .uninstallApps: return "Uninstall"
         case .deletePhotos: return "Delete Everywhere"
@@ -380,7 +359,7 @@ struct ConfirmationSheet: View {
         if case .removeStorageItems = variant { return "trash" }
         if case .uninstallApp = variant { return "trash.square" }
         if case .uninstallApps = variant { return "trash.square" }
-        if case .cleanUp(_, _, _, let protected, _) = variant, protected > 0 {
+        if case .cleanUp(_, _, let protected, _) = variant, protected > 0 {
             return "exclamationmark.triangle"
         }
         return "trash"
@@ -414,7 +393,7 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 4, totalBytes: 4_512_000_000,
-            permanentCount: 0, protectedDataCount: 0, saving: nil
+            protectedDataCount: 0, saving: nil
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
@@ -425,7 +404,7 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 6, totalBytes: 14_210_000_000,
-            permanentCount: 0, protectedDataCount: 0, saving: nil
+            protectedDataCount: 0, saving: nil
         ),
         keepReceipt: .constant(true),
         runningOwnerNames: ["Google Chrome", "Xcode"],
@@ -433,22 +412,11 @@ struct ConfirmationSheet: View {
     )
 }
 
-#Preview("Clean up — permanent") {
-    ConfirmationSheet(
-        variant: .cleanUp(
-            itemCount: 4, totalBytes: 4_512_000_000,
-            permanentCount: 4, protectedDataCount: 0, saving: nil
-        ),
-        keepReceipt: .constant(true),
-        onConfirm: {}, onCancel: {}
-    )
-}
-
 #Preview("Clean up — protected data") {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 2, totalBytes: 2_400_000_000,
-            permanentCount: 0, protectedDataCount: 1, saving: nil
+            protectedDataCount: 1, saving: nil
         ),
         keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
@@ -461,7 +429,7 @@ struct ConfirmationSheet: View {
     ConfirmationSheet(
         variant: .cleanUp(
             itemCount: 1, totalBytes: 1_108_205_568,
-            permanentCount: 0, protectedDataCount: 0,
+            protectedDataCount: 0,
             saving: .init(freedBytes: 0, isMinimum: false)
         ),
         keepReceipt: .constant(true),

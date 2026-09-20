@@ -61,7 +61,7 @@ struct ActivityOverlay: View {
 #Preview("Cleaning up") {
     ZStack {
         Token.pageBackground
-        ActivityOverlay(activity: .cleaningUp(itemCount: 12, totalBytes: 3_400_000_000, permanentCount: 0))
+        ActivityOverlay(activity: .cleaningUp(itemCount: 12, totalBytes: 3_400_000_000))
     }
     .frame(width: 760, height: 480)
     .preferredColorScheme(.dark)

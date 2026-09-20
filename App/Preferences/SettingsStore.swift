@@ -137,7 +137,6 @@ final class SettingsStore {
         static let scanSchedule = ScanSchedule.weekly
         static let idleOnly = true
         static let warnBelowGB = 20
-        static let trashFirst = true
         static let confirmBeforeCleanup = true
 
         /// One category ships off. Docker needs Docker Desktop running, so on by
@@ -195,7 +194,6 @@ final class SettingsStore {
         static let warnBelowGB = "settings.warnBelowGB"
         static let iCloudPlan = "settings.iCloudPlan"
         static let categoryEnabled = "settings.categoryEnabled"
-        static let trashFirst = "settings.trashFirst"
         static let confirmBeforeCleanup = "settings.confirmBeforeCleanup"
         static let exclusions = "settings.exclusions"
     }
@@ -263,9 +261,6 @@ final class SettingsStore {
 
     // MARK: Removal behaviour
 
-    var trashFirst: Bool {
-        didSet { defaults.set(trashFirst, forKey: Key.trashFirst) }
-    }
 
     var confirmBeforeCleanup: Bool {
         didSet { defaults.set(confirmBeforeCleanup, forKey: Key.confirmBeforeCleanup) }
@@ -369,7 +364,6 @@ final class SettingsStore {
             }
         )
 
-        self.trashFirst = bool(Key.trashFirst, or: Defaults.trashFirst)
         self.confirmBeforeCleanup = bool(Key.confirmBeforeCleanup, or: Defaults.confirmBeforeCleanup)
 
         let storedExclusions = defaults.data(forKey: Key.exclusions)
@@ -403,7 +397,6 @@ final class SettingsStore {
         categoryEnabled = Dictionary(
             uniqueKeysWithValues: CategoryID.allCases.map { ($0, Defaults.categoryEnabled($0)) }
         )
-        trashFirst = Defaults.trashFirst
         confirmBeforeCleanup = Defaults.confirmBeforeCleanup
         exclusions = Defaults.exclusions
     }
