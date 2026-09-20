@@ -55,10 +55,18 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
     public struct CandidateScan: Sendable, Equatable {
         public let identifiers: Set<String>
         public let unreadableCount: Int
+        /// Containers named by a UUID, under the identifier macOS wrote inside each
+        /// — see `uuidNamedContainers`. Paths, since `URL` is compared with its
+        /// trailing slash.
+        public let uuidNamedContainers: [String: [String]]
 
-        public init(identifiers: Set<String>, unreadableCount: Int) {
+        public init(
+            identifiers: Set<String>, unreadableCount: Int,
+            uuidNamedContainers: [String: [String]] = [:]
+        ) {
             self.identifiers = identifiers
             self.unreadableCount = unreadableCount
+            self.uuidNamedContainers = uuidNamedContainers
         }
     }
     enum CandidatePathStatus: Sendable {
@@ -113,6 +121,20 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         }
 
         var candidates = pathPlanner.candidates(for: Set(identifiers))
+        // A container the identifier's own name does not lead to. It goes through
+        // everything below as any other candidate does: the allowed roots, the
+        // exclusions, the protected patterns, and at removal the owner and identity
+        // checks again.
+        for identifier in identifiers.sorted() {
+            for path in candidateScan.uuidNamedContainers[identifier] ?? [] {
+                candidates.append(AppUninstallPlanner.Candidate(
+                    url: URL(fileURLWithPath: path, isDirectory: true),
+                    category: .containers,
+                    content: .userData,
+                    ownerBundleIdentifier: identifier
+                ))
+            }
+        }
         for identifier in identifiers.sorted() {
             guard let curation = ApplicationsScanner.curations[identifier] else { continue }
             candidates.append(AppUninstallPlanner.Candidate(
@@ -283,8 +305,10 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             }
         }
 
-        func addDirectNames(in root: URL, skippingSuffix skipped: String? = nil) {
-            for name in names(in: root) {
+        func addDirectNames(
+            in root: URL, skippingSuffix skipped: String? = nil, listed: [String]? = nil
+        ) {
+            for name in listed ?? names(in: root) {
                 // A `<id>.binarycookies` file is claimed by the suffix pass below;
                 // taking it whole here manufactured `<id>.binarycookies` as a
                 // second, phantom identifier.
@@ -308,7 +332,12 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         // Each of these is created by macOS for an application and for nothing
         // else. A daemon has no sandbox container, no application scripts and no
         // saved window state; a command-line tool has no WebKit storage.
-        for relative in ["Containers", "Application Scripts", "WebKit"] {
+        // Listed once: the same names are read again below for the UUID-named
+        // containers, and a folder that cannot be read is one gap, not two.
+        let containersRoot = userLibrary.appendingPathComponent("Containers")
+        let containerNames = names(in: containersRoot)
+        addDirectNames(in: containersRoot, listed: containerNames)
+        for relative in ["Application Scripts", "WebKit"] {
             addDirectNames(in: userLibrary.appendingPathComponent(relative))
         }
         addDirectNames(
@@ -324,6 +353,9 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             removing: ".savedState"
         )
 
+        let uuidNamed = Self.uuidNamedContainers(in: containersRoot, names: containerNames)
+        result.formUnion(uuidNamed.keys)
+
         // The curated table is a hand-verified claim that an application owns
         // this root — evidence of the strongest kind.
         for (identifier, curation) in ApplicationsScanner.curations {
@@ -331,7 +363,49 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             if fileManager.fileExists(atPath: root.path) { result.insert(identifier) }
         }
 
-        return CandidateScan(identifiers: result, unreadableCount: unreadableCount)
+        return CandidateScan(
+            identifiers: result, unreadableCount: unreadableCount,
+            uuidNamedContainers: uuidNamed
+        )
+    }
+
+    /// Containers whose folder is a UUID, keyed by the identifier inside them.
+    ///
+    /// An application that came from iOS, or was built with Catalyst, is given a
+    /// container at `~/Library/Containers/<UUID>`. The name says nothing, so a
+    /// classifier that reads identifiers off folder names walks past it: 57 MB of a
+    /// removed PokerStars on the owner's Mac on 20 Sep 2026. macOS records whose it
+    /// is in `.com.apple.containermanagerd.metadata.plist`, under
+    /// `MCMMetadataIdentifier`, inside every container it creates. That is the
+    /// system's own word, and a container is already positive evidence of an
+    /// application, so the identifier qualifies like any other found here — and
+    /// then has to pass the same tests: not Apple's, no installed owner by bundle or
+    /// by Launch Services, and an extension (`….NotificationExt`) answers to the
+    /// application it is named beneath.
+    ///
+    /// A container with no readable record is left alone. Purge
+    /// (github.com/jithin-sabu/purge-app) reads the same file, which is how it names
+    /// this row; six of the eleven leftovers it listed beside it belonged to
+    /// installed applications, which is what the owner tests are for.
+    ///
+    /// Not read from the shell that wrote this: it has no Full Disk Access, and a
+    /// container's contents are closed to it. Verified in the app.
+    static func uuidNamedContainers(
+        in containers: URL, names: [String]
+    ) -> [String: [String]] {
+        var found: [String: [String]] = [:]
+        for name in names.sorted() where UUID(uuidString: name) != nil {
+            let folder = containers.appendingPathComponent(name, isDirectory: true)
+            let record = folder.appendingPathComponent(".com.apple.containermanagerd.metadata.plist")
+            guard let data = try? Data(contentsOf: record),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
+                    as? [String: Any],
+                  let raw = plist["MCMMetadataIdentifier"] as? String,
+                  let identifier = AppUninstallPlanner.verifiedBundleIdentifier(raw)
+            else { continue }
+            found[identifier, default: []].append(folder.standardizedFileURL.path)
+        }
+        return found
     }
 
     private func deduplicated(_ urls: [URL]) -> [URL] {

@@ -121,6 +121,50 @@ struct OrphanedAppLeftoverPlannerTests {
         })
     }
 
+    /// An application that came from iOS, or was built with Catalyst, gets a
+    /// container named by a UUID. The folder's name says nothing; macOS writes who
+    /// it belongs to inside it. Seen on the owner's Mac on 20 Sep 2026: 57 MB of a
+    /// removed PokerStars in `~/Library/Containers/94F36404-…`, which the classifier
+    /// walked past because it read identifiers off folder names.
+    @Test("a UUID-named container is a leftover on the identifier macOS wrote inside it")
+    func uuidNamedContainers() async throws {
+        let sandbox = try Sandbox()
+        func container(_ uuid: String, identifier: String?) throws -> URL {
+            let folder = sandbox.home.appendingPathComponent("Library/Containers/\(uuid)")
+            _ = try sandbox.write("Library/Containers/\(uuid)/Data/Documents/save.db")
+            if let identifier {
+                try PropertyListSerialization.data(
+                    fromPropertyList: ["MCMMetadataIdentifier": identifier, "MCMMetadataVersion": 1],
+                    format: .binary, options: 0
+                ).write(to: folder.appendingPathComponent(".com.apple.containermanagerd.metadata.plist"))
+            }
+            return folder
+        }
+        let gone = try container("94F36404-A18D-4D25-934C-60BF64DCB120",
+                                 identifier: "it.vendor.pokerclient")
+        // Its application is still installed: the container is a live app's data.
+        _ = try sandbox.application("Kept", identifier: "com.vendor.kept")
+        let kept = try container("11111111-2222-3333-4444-555555555555",
+                                 identifier: "com.vendor.kept")
+        // An extension of the installed application, named beneath it.
+        let extensionOfKept = try container("66666666-7777-8888-9999-000000000000",
+                                            identifier: "com.vendor.kept.NotificationExt")
+        // The system's own, and one with nothing written inside it.
+        let apple = try container("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                                  identifier: "com.apple.something")
+        let silent = try container("FFFFFFFF-0000-1111-2222-333333333333", identifier: nil)
+
+        let plan = try await sandbox.planner().plan()
+
+        let group = try #require(plan.groups.first { $0.id == "it.vendor.pokerclient" })
+        #expect(group.items.map(\.url.standardizedFileURL.path) == [gone.standardizedFileURL.path])
+        #expect(group.items.first?.isProtectedUserData == true)
+        let offered = Set(plan.groups.flatMap(\.items).map(\.url.standardizedFileURL.path))
+        for url in [kept, extensionOfKept, apple, silent] {
+            #expect(!offered.contains(url.standardizedFileURL.path), "\(url.lastPathComponent)")
+        }
+    }
+
     @Test("an installed owner protects its identifier and helper identifiers")
     func installedOwnersAreProtected() async throws {
         let sandbox = try Sandbox()
