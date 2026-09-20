@@ -171,6 +171,15 @@ public struct PackageManagerScanner: CategoryScanner {
         CacheRoot(label: "Coursier cache", components: ["Library", "Caches", "Coursier"]),
         CacheRoot(label: "Composer cache", components: ["Library", "Caches", "composer"]),
         CacheRoot(label: "Pipenv cache", components: ["Library", "Caches", "pipenv"]),
+        // Poetry's folder is not one cache. `cache` and `artifacts` are downloads;
+        // `virtualenvs`, beside them, holds the environment of every Poetry project
+        // on the disk. System Caches listed the folder whole, as one safe row, so
+        // those environments were offered and ticked as a cache. The two downloads
+        // are named here, System Caches skips the folder, and the environments are
+        // offered by nobody: whether one can be put back is its project's lockfile's
+        // to say, and the project is somewhere else.
+        CacheRoot(label: "Poetry cache", components: ["Library", "Caches", "pypoetry", "cache"]),
+        CacheRoot(label: "Poetry artifacts", components: ["Library", "Caches", "pypoetry", "artifacts"]),
         CacheRoot(label: "SwiftPM cache", components: ["Library", "Caches", "org.swift.swiftpm"]),
         CacheRoot(label: "Carthage cache", components: ["Library", "Caches", "org.carthage.CarthageKit"]),
         CacheRoot(label: "node-gyp headers", components: ["Library", "Caches", "node-gyp"]),
@@ -192,9 +201,6 @@ public struct PackageManagerScanner: CategoryScanner {
         //   rest are multi-gigabyte downloads, the CocoaPods-repos argument again.
         // * `~/.terraform.d/plugin-cache` — working directories link into it, so
         //   removal leaves them broken until the next `terraform init`.
-        // * `~/Library/Caches/pypoetry` — holds Poetry's virtual environments beside
-        //   its cache. System Caches still offers that folder whole, which is a
-        //   fault of that scanner's and is written down in the backlog.
         // * rebar3, `act`, pre-commit, Puppeteer — under `~/.cache`, never seen on this
         //   Mac. System Caches lists each as a row of its own, safe only on its tool's
         //   `CACHEDIR.TAG`, which is where a cache nobody has looked at belongs.
