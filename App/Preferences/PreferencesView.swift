@@ -77,19 +77,29 @@ enum PrefMetrics {
 // MARK: - Pane shell
 
 /// One tab's content: the fixed pane size and the content-area padding.
+///
+/// The pane scrolls. The window is a fixed 660 × 484 and not resizable, so a pane that
+/// grows past 432pt has nowhere else to go: General's Permissions section sat below
+/// the bottom edge, its header cut in half and its rows unreachable. The padding is
+/// inside the scroll view so the last section clears the edge by the same 22pt the
+/// first one clears the toolbar.
 struct PrefPane<Content: View>: View {
     var spacing: CGFloat = PrefMetrics.sectionGap
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: spacing) {
-            content
+        ScrollView(.vertical) {
             // Sections stack from the top; the pane never centres them, whichever tab
             // is shortest.
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: spacing) {
+                content
+            }
+            .padding(.horizontal, PrefMetrics.contentPaddingH)
+            .padding(.vertical, PrefMetrics.contentPaddingV)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(.horizontal, PrefMetrics.contentPaddingH)
-        .padding(.vertical, PrefMetrics.contentPaddingV)
+        // A pane that fits stays still: no rubber band on a page with nothing to scroll.
+        .scrollBounceBehavior(.basedOnSize)
         .frame(
             width: PrefMetrics.paneWidth,
             height: PrefMetrics.paneHeight,
