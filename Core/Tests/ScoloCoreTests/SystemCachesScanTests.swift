@@ -45,7 +45,8 @@ struct SystemCachesScanTests {
                 logsRoot: home.appendingPathComponent("Library/Logs"),
                 dotCacheRoot: home.appendingPathComponent(".cache"),
                 containersRoot: home.appendingPathComponent("Library/Containers"),
-                systemApplicationDirectories: [home.appendingPathComponent("System/Applications")]
+                systemApplicationDirectories: [home.appendingPathComponent("System/Applications")],
+                applicationSupportRoot: home.appendingPathComponent("Library/Application Support")
             )
         }
 
@@ -216,6 +217,39 @@ struct SystemCachesScanTests {
         #expect(row.inUseBy?.name == "Podcasts")
         #expect(result.safeToRemoveBytes == 0)
         #expect(result.needsReviewBytes == row.allocatedBytes)
+    }
+
+    /// Premiere Pro and After Effects keep rendered previews and conformed audio
+    /// outside `~/Library/Caches`, where no cache sweep looks, and they run to tens
+    /// of gigabytes on a machine that edits video.
+    @Test("Adobe's media cache is two safe rows, held while any Adobe application is open")
+    func adobeMediaCache() async throws {
+        let sandbox = try Sandbox()
+        let common = "Library/Application Support/Adobe/Common"
+        try sandbox.file("\(common)/Media Cache Files/clip.cfa", bytes: 9 * 1024 * 1024)
+        try sandbox.file("\(common)/Media Cache/index.mcdb", bytes: 3 * 1024 * 1024)
+        // Beside them, and not a cache: what the user installed and configured.
+        try sandbox.file("\(common)/Plug-ins/7.0/MediaCore/filter.plugin", bytes: 4 * 1024 * 1024)
+        try sandbox.file("Library/Application Support/Adobe/Premiere Pro/24.0/Profile/prefs")
+
+        let closed = try await sandbox.scanner().scan(context: ScanContext())
+        #expect(closed.entries.map(\.displayName)
+            == ["Adobe media cache files", "Adobe media cache database"])
+        #expect(closed.entries.allSatisfy { $0.isRegenerable })
+        #expect(closed.safeToRemoveBytes == closed.totalBytes)
+        // The two folders and nothing around them: `Common` also holds the plug-ins.
+        #expect(closed.entries.map(\.url.lastPathComponent) == ["Media Cache Files", "Media Cache"])
+        #expect(closed.totalBytes < 13 * 1024 * 1024, "nine and three, not the four beside them")
+
+        // The identifier carries the year: `com.adobe.PremierePro.24`.
+        let open = try await sandbox.scanner().scan(context: ScanContext(
+            runningApplications: [FileEntry.RunningOwner(
+                name: "Adobe Premiere Pro 2024", bundleIdentifier: "com.adobe.PremierePro.24",
+                bundlePath: "/Applications/Adobe Premiere Pro 2024/Adobe Premiere Pro 2024.app"
+            )]
+        ))
+        #expect(open.entries.allSatisfy { $0.inUseBy?.name == "Adobe Premiere Pro 2024" })
+        #expect(open.safeToRemoveBytes == 0)
     }
 
     @Test("a Mac with no ~/.cache is an ordinary Mac")

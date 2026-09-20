@@ -60,6 +60,13 @@ public struct ScanContext: Sendable {
         }
     }
 
+    /// The first running application whose identifier begins with `prefix`, for a
+    /// vendor that puts the year in it: `com.adobe.PremierePro.24`.
+    public func runningOwner(bundleIdentifierPrefix prefix: String) -> FileEntry.RunningOwner? {
+        let prefix = prefix.lowercased()
+        return runningApplications.first { $0.bundleIdentifier?.lowercased().hasPrefix(prefix) == true }
+    }
+
     /// The running application a folder in `~/Library/Caches` or `~/Library/Logs`
     /// belongs to, judged by the folder's name.
     ///
