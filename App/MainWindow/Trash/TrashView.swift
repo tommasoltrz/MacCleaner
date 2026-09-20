@@ -20,6 +20,7 @@ struct TrashView: View {
             if let summary = model.trashSummary {
                 TrashContent(
                     summary: summary,
+                    findRequest: model.findRequest,
                     onPutBack: { item in Task { await model.putBack(item) } }
                 )
             } else {
@@ -89,7 +90,24 @@ struct TrashView: View {
 /// real states without a Trash on disk.
 private struct TrashContent: View {
     let summary: TrashSummary
+    /// `AppModel.findRequest`: ⌘F moves the focus to the search field.
+    var findRequest = 0
     let onPutBack: (TrashItem) -> Void
+
+    /// Narrows the rows and nothing else. The header's size and count stay the whole
+    /// Trash's: they are what Empty Trash will remove, whatever is typed here.
+    @State private var searchText = ""
+
+    private var query: String {
+        searchText.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Names only. A trashed item's path is `~/.Trash/<name>` for every row, so
+    /// matching it would make "trash" match everything.
+    private var visibleItems: [TrashItem] {
+        guard !query.isEmpty else { return summary.items }
+        return summary.items.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,6 +117,17 @@ private struct TrashContent: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if summary.items.isEmpty {
                         emptyNote
+                    } else if visibleItems.isEmpty {
+                        // The list can be capped (`TrashService.summary(limit:)`), and
+                        // then "no match" is only true of the rows that were read.
+                        ContentUnavailableView {
+                            Label("No Results for “\(query)”", systemImage: "magnifyingglass")
+                        } description: {
+                            Text(summary.itemCount > summary.items.count
+                                 ? "Only the \(summary.items.count) largest items were searched."
+                                 : "No item in the Trash has that in its name.")
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 240)
                     } else {
                         // Finder's Bin also shows iCloud's Recently Deleted, which are cloud
                         // records with no bytes on this disk. Saying so heads off "why does
@@ -114,7 +143,7 @@ private struct TrashContent: View {
                             // Lazy: `TrashService` caps the rows it returns, but the cap is 50 and
                             // each row carries a button and a hover tracker.
                             LazyVStack(spacing: 0) {
-                                ForEach(Array(summary.items.enumerated()), id: \.element.id) { index, item in
+                                ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
                                     if index > 0 { Hairline() }
                                     TrashRow(item: item, onPutBack: { onPutBack(item) })
                                 }
@@ -143,6 +172,27 @@ private struct TrashContent: View {
     // MARK: Summary header
 
     private var summaryHeader: some View {
+        HStack(alignment: .top, spacing: 12) {
+            summaryFigures
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Disabled over an empty Trash: a field with nothing to search is a
+            // control that answers every query with "no results".
+            FindField(text: $searchText, findRequest: findRequest)
+                .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
+                .disabled(summary.items.isEmpty)
+        }
+        .padding(.vertical, 16)
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Token.separator)
+                .frame(height: Token.hairline)
+        }
+    }
+
+    private var summaryFigures: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Trash")
                 .mcEyebrowStyle()
@@ -165,14 +215,6 @@ private struct TrashContent: View {
                 .foregroundStyle(Token.Text.quaternary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Token.separator)
-                .frame(height: Token.hairline)
         }
     }
 

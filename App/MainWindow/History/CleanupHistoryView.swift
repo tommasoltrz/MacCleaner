@@ -6,6 +6,27 @@ struct CleanupHistoryView: View {
     @Bindable var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Narrows the table only. The header's counts and sizes stay the whole log's.
+    @State private var searchText = ""
+
+    /// Opens newest first, which is the order the log is read in.
+    @State private var sortKey: SortKey = .date
+    @State private var ascending = false
+
+    private enum SortKey { case name, result, date, size }
+
+    /// The Scanner's rule: a second click flips the column; a new column opens in
+    /// the direction it is usually wanted — largest and newest first, names and
+    /// results from the top.
+    private func adopt(_ key: SortKey) {
+        if sortKey == key {
+            ascending.toggle()
+        } else {
+            sortKey = key
+            ascending = (key == .name || key == .result)
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -14,6 +35,13 @@ struct CleanupHistoryView: View {
                 loadingState
             } else if items.isEmpty {
                 emptyState
+            } else if visibleItems.isEmpty {
+                VStack {
+                    ContentUnavailableView.search(text: query)
+                        .frame(maxWidth: .infinity)
+                    Spacer()
+                }
+                .padding(.top, 36)
             } else {
                 historyTable
             }
@@ -27,6 +55,25 @@ struct CleanupHistoryView: View {
     }
 
     private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            headerText
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            FindField(text: $searchText, findRequest: model.findRequest)
+                .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
+                .disabled(items.isEmpty)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Token.separator)
+                .frame(height: Token.hairline)
+        }
+    }
+
+    private var headerText: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Cleanup History")
                 .mcEyebrowStyle()
@@ -41,55 +88,61 @@ struct CleanupHistoryView: View {
                 .font(.mcSubtitle)
                 .foregroundStyle(Token.Text.quaternary)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Token.separator)
-                .frame(height: Token.hairline)
+    }
+
+    /// The Trash view's list, not a native `Table`. `Table` paints its own backdrop —
+    /// the window material, which takes the desktop's tint — so this one page stood
+    /// brown against the opaque canvas every other page sits on, with AppKit's header
+    /// and alternating stripes where the rest of the app has a grouped box.
+    private var historyTable: some View {
+        ScrollView {
+            GroupedBox {
+                VStack(spacing: 0) {
+                    columnHeader
+                    Hairline()
+                    // Lazy: the log is read 5,000 records deep.
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
+                            if index > 0 { Hairline() }
+                            HistoryRow(item: item)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 22)
         }
     }
 
-    private var historyTable: some View {
-        Table(items) {
-            TableColumn("Item") { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(item.originalURL.deletingLastPathComponent().path)
-                        .font(.mcCaption)
-                        .foregroundStyle(Token.Text.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .help(item.originalURL.path)
-            }
-            .width(min: 220, ideal: 430)
-
-            TableColumn("Result") { item in
-                ResultLabel(state: item.state)
-            }
-            .width(min: 150, ideal: 180, max: 210)
-
-            TableColumn("Date") { item in
-                Text(
-                    item.timestamp,
-                    format: .dateTime.day().month(.abbreviated).year().hour().minute()
-                )
-                    .foregroundStyle(Token.Text.secondary)
-            }
-            .width(min: 130, ideal: 145, max: 165)
-
-            TableColumn("Size") { item in
-                Text(item.bytes > 0 ? ByteFormatting.string(item.bytes) : "—")
-                    .monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .width(min: 70, ideal: 82, max: 96)
+    /// The Scanner's column header: same face, tracking and tone.
+    private var columnHeader: some View {
+        HStack(spacing: Metrics.gap) {
+            sortHeader("Item", .name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            sortHeader("Result", .result)
+                .frame(width: Metrics.result, alignment: .leading)
+            sortHeader("Date", .date)
+                .frame(width: Metrics.date, alignment: .leading)
+            sortHeader("Size", .size)
+                .frame(width: Metrics.size, alignment: .trailing)
         }
-        .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .font(.mcColumnHeader)
+        .tracking(0.04 * 10.5)
+        .textCase(.uppercase)
+        .foregroundStyle(Token.Text.quaternary)
+        .padding(.horizontal, Metrics.sidePadding)
+        .padding(.vertical, 6)
+    }
+
+    private func sortHeader(_ title: String, _ key: SortKey) -> some View {
+        SortableColumnHeader(
+            title: title,
+            isActive: sortKey == key,
+            ascending: ascending,
+            action: { adopt(key) }
+        )
     }
 
     private var loadingState: some View {
@@ -124,6 +177,40 @@ struct CleanupHistoryView: View {
         model.cleanupHistory?.items ?? []
     }
 
+    private var query: String {
+        searchText.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Name or original folder: "where did that file from Downloads go" is asked by
+    /// place as often as by name, and the row shows both.
+    private var visibleItems: [CleanupHistoryItem] {
+        let matching = query.isEmpty ? items : items.filter {
+            $0.originalURL.path.localizedCaseInsensitiveContains(query)
+        }
+        return sorted(matching)
+    }
+
+    /// Every key but the date falls back to newest first, so the rows inside one
+    /// result — several hundred "No longer in Trash" here — keep a readable order
+    /// instead of whatever the sort left them in. The fallback does not flip with
+    /// the column: reversing "Result" should not also turn its groups oldest first.
+    private func sorted(_ items: [CleanupHistoryItem]) -> [CleanupHistoryItem] {
+        items.sorted { a, b in
+            let order: ComparisonResult = switch sortKey {
+            case .name:   a.name.localizedStandardCompare(b.name)
+            case .result: compare(a.state.sortRank, b.state.sortRank)
+            case .date:   compare(a.timestamp, b.timestamp)
+            case .size:   compare(a.bytes, b.bytes)
+            }
+            if order == .orderedSame { return a.timestamp > b.timestamp }
+            return (order == .orderedAscending) == ascending
+        }
+    }
+
+    private func compare<T: Comparable>(_ a: T, _ b: T) -> ComparisonResult {
+        a < b ? .orderedAscending : (a > b ? .orderedDescending : .orderedSame)
+    }
+
     private func summaryText(_ summary: CleanupHistorySummary) -> String {
         var parts = [
             "\(summary.removedCount) \(summary.removedCount == 1 ? "item" : "items") removed",
@@ -144,6 +231,88 @@ struct CleanupHistoryView: View {
             parts.append("\(summary.failedCount) failed")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+private extension CleanupHistoryState {
+    /// What can still be acted on first, then what went wrong, then the settled
+    /// outcomes. Alphabetical by label would put "Available in Trash" and "In Trash"
+    /// either side of "Could not remove".
+    var sortRank: Int {
+        switch self {
+        case .availableInTrash:   0
+        case .inTrash:            1
+        case .failed:             2
+        case .restored:           3
+        case .removedPermanently: 4
+        case .noLongerInTrash:    5
+        }
+    }
+}
+
+private struct HistoryRow: View {
+    let item: CleanupHistoryItem
+
+    var body: some View {
+        HStack(spacing: Metrics.gap) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name)
+                    .font(.mcBody)
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(item.originalURL.deletingLastPathComponent().path)
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(item.originalURL.path)
+
+            ResultLabel(state: item.state)
+                .font(.mcSubtitle)
+                .frame(width: Metrics.result, alignment: .leading)
+
+            Text(
+                item.timestamp,
+                format: .dateTime.day().month(.abbreviated).year().hour().minute()
+            )
+                .font(.mcSubtitle)
+                .foregroundStyle(Token.Text.quaternary)
+                .lineLimit(1)
+                .frame(width: Metrics.date, alignment: .leading)
+
+            Text(item.bytes > 0 ? ByteFormatting.string(item.bytes) : "—")
+                .font(.mcRowValue)
+                .foregroundStyle(Token.Text.primary)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: Metrics.size, alignment: .trailing)
+        }
+        .padding(.horizontal, Metrics.sidePadding)
+        .frame(height: Token.Size.trashRow)
+        .contentShape(Rectangle())
+        .hoverHighlight()
+    }
+}
+
+/// The Trash list's numbers, so the two pages that show removed items hold the same
+/// columns. `date` is wider than the Trash's relative caption: this one is absolute,
+/// and at 140 pt "20 Sep 2026 at 15:46" was cut to "15:…".
+private enum Metrics {
+    static let sidePadding: CGFloat = 15
+    static let gap: CGFloat = 11
+    static let result: CGFloat = 160
+    static let date: CGFloat = 150
+    static let size: CGFloat = 78
+}
+
+private struct Hairline: View {
+    var body: some View {
+        Rectangle()
+            .fill(Token.Fill.boxBorder)
+            .frame(height: Token.hairline)
     }
 }
 

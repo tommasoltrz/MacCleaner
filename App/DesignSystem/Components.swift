@@ -209,6 +209,33 @@ struct HoverTip: View {
     }
 }
 
+// MARK: - Find field
+
+/// The search field a list's header carries, and the receiving end of Edit › Find.
+///
+/// In the page header and not `.searchable`: the toolbar's principal item is already
+/// the scan readout, and the Uninstaller's field set the precedent of sitting beside
+/// the list it narrows. `findRequest` is `AppModel.findRequest`; every change to it
+/// takes the focus, so ⌘F works again after the user has clicked away. Escape clears
+/// the query first and gives up the focus second, as a search field in Finder does.
+struct FindField: View {
+    @Binding var text: String
+    let findRequest: Int
+    var prompt = "Search"
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField(prompt, text: $text)
+            .textFieldStyle(.roundedBorder)
+            .focused($isFocused)
+            .onChange(of: findRequest) { isFocused = true }
+            .onExitCommand {
+                if text.isEmpty { isFocused = false } else { text = "" }
+            }
+    }
+}
+
 // MARK: - Sortable column header
 
 /// A column label that sorts the list beneath it, Finder-style: click to adopt the

@@ -188,6 +188,26 @@ final class AppModel {
         }
     }
     var duplicateKind: DuplicateKind = .files
+
+    /// Edit › Find (⌘F) bumps this; the view on screen moves focus to its search
+    /// field when it changes. A counter and not a flag, so a second ⌘F after the
+    /// user has clicked away focuses again with nothing to reset in between.
+    private(set) var findRequest = 0
+
+    /// The views with a list to search. Find is disabled everywhere else, not left
+    /// as a key that does nothing.
+    var canFind: Bool {
+        switch view {
+        case .trash, .history, .uninstaller: activity == nil
+        case .dashboard, .scanner, .storageExplorer, .duplicates: false
+        }
+    }
+
+    func requestFind() {
+        guard canFind else { return }
+        findRequest += 1
+    }
+
     var scanFilter: ScanFilter = .all
     private var history: [View] = []
     private var forwardStack: [View] = []
