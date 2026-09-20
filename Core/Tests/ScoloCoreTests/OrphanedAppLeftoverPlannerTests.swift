@@ -149,7 +149,7 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(plan.groups.isEmpty)
     }
 
-    @Test("the scanner groups application leftovers as safe rows")
+    @Test("the scanner groups application leftovers as rows that need review")
     func scannerGroupsLeftovers() async throws {
         let sandbox = try Sandbox()
         let state = try sandbox.evidence(for: "com.vendor.old")
@@ -164,8 +164,9 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(entry.orphanedApplicationBundleIdentifier == "com.vendor.old")
         #expect(Set(entry.children.map(\.url)) == [cache, state])
         #expect(entry.displayBytes == result.totalBytes)
-        #expect(result.safeToRemoveBytes == result.totalBytes)
-        #expect(result.needsReviewBytes == 0)
+        // Whose removal is the user's to decide — see `CategoryID.isSafe`.
+        #expect(result.safeToRemoveBytes == 0)
+        #expect(result.needsReviewBytes == result.totalBytes)
         #expect(result.filteringNoise(below: Int64.max).entries.count == 1)
     }
 

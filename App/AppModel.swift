@@ -152,10 +152,9 @@ final class AppModel {
             case .all:
                 nil
             case .safeToRemove:
-                "Caches and package files regenerate on demand. Application leftovers "
-                    + "have no installed owner."
+                "Caches and package files. They regenerate on demand, so removing them costs nothing."
             case .needsReview:
-                "Large files and unused apps. Look before you remove."
+                "Large files, unused apps and what removed apps left behind. Look before you remove."
             }
         }
     }
@@ -701,10 +700,11 @@ final class AppModel {
         else { return }
         safeSelectionSeededAt = finishedAt
 
-        // Application-leftover groups are never pre-ticked. They sit in this tile
-        // because their owner is gone, which is a different claim from "this
-        // regenerates": if the classification is ever wrong, a cache comes back
-        // and a preferences file does not. The user opts in to those by hand.
+        // Everything under this tab is ticked, because everything under it costs
+        // nothing to remove. Application leftovers used to sit here unticked — safe
+        // by one meaning and not by the other — and are under Needs Review now; the
+        // `removalAction` test stays as a guard, since a leftover group is never
+        // removed through the ordinary selection.
         let selectable = tileEntries(safeToRemove: true).filter {
             !$0.isRemovalLocked && $0.kind != .appBundle && $0.removalAction == nil
         }

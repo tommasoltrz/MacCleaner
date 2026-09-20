@@ -63,13 +63,23 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// Removal has a verified low-risk rule. Cache contents regenerate on demand.
-    /// Application leftovers have no installed owner. This value drives the
-    /// Dashboard's "Safe to Remove" total and the green `safe` badge.
+    /// Removing it costs nothing: what is here regenerates on demand. This value
+    /// drives the Dashboard's "Safe to Remove" total and the green badge on a row.
+    ///
+    /// Application leftovers were in this list until 20 Sep 2026, on the reasoning
+    /// that a file with no installed owner is safe. It is safe for the *system* and
+    /// not free for the *user*: a leftover is a removed application's settings, its
+    /// saved state, sometimes its licence, and nothing regenerates those. Whether
+    /// they matter depends on whether that application is ever installed again,
+    /// which only the user knows. So leftovers need review, like everything else
+    /// whose removal is a decision, and "safe to remove" keeps one meaning. They had
+    /// been counted safe and deliberately never ticked, which was the two meanings
+    /// showing.
     public var isSafe: Bool {
         switch self {
-        case .applicationLeftovers, .systemCaches, .packageManagers, .xcode: true
-        case .documentsAndFiles, .applications, .hiddenSystemData, .docker: false
+        case .systemCaches, .packageManagers, .xcode: true
+        case .documentsAndFiles, .applications, .applicationLeftovers,
+             .hiddenSystemData, .docker: false
         }
     }
 
@@ -146,6 +156,10 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     public func tileRows(safeToRemove wantSafe: Bool) -> [FileEntry] {
         entries.flatMap { entry -> [FileEntry] in
             if countsAsSafe(entry) { return wantSafe ? [entry] : [] }
+            // A leftover group or a model is one thing, removed through its own row —
+            // a leftover's route checks the owner and each file's identity again.
+            // A cache lifted out of it would be removed the ordinary way, unchecked.
+            if entry.removalAction != nil || entry.removesAsUnit { return wantSafe ? [] : [entry] }
 
             let safeChildren = entry.children.filter(Self.isSafeChild)
             if wantSafe { return safeChildren }
@@ -203,8 +217,7 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// seeded from the safe list. See `FileEntry.inUseBy`.
     private func countsAsSafe(_ entry: FileEntry) -> Bool {
         guard entry.inUseBy == nil else { return false }
-        return categoryID == .applicationLeftovers
-            || (categoryID.isSafe && entry.isRegenerable)
+        return categoryID.isSafe && entry.isRegenerable
     }
 
     /// Everything else: each category without a safe badge, plus each
