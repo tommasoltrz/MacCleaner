@@ -77,11 +77,13 @@ public struct PackageManagerScanner: CategoryScanner {
         // for. All four are kept, since a machine can carry any of them.
         CacheRoot(label: "Yarn cache", components: ["Library", "Caches", "Yarn"]),
         CacheRoot(label: "Yarn cache (classic)", components: [".yarn", "cache"]),
-        // REMOVED at integration: `~/.cache/yarn`. HiddenDataScanner claims the whole
-        // of `~/.cache` as a single entry, so claiming a child here would offer the
-        // same bytes in two categories. Yarn's real macOS default is the
-        // `~/Library/Caches/Yarn` root above; the XDG layout is the Linux one.
-        // See DisjointCategoriesTests.
+        // Taken off this list at integration and put back on 20 Sep 2026.
+        // `HiddenDataScanner` claimed `~/.cache` as a single row then, so a child
+        // claimed here was offered twice. It lists the folder child by child now and
+        // skips the names claimed here — see `packageManagerOwnedDotCacheNames`.
+        // The XDG layout is Linux's, but a Yarn run with `XDG_CACHE_HOME` set, or one
+        // carried over in a migrated home, leaves it on a Mac too.
+        CacheRoot(label: "Yarn cache (XDG)", components: [".cache", "yarn"]),
         // ADDED: Yarn Berry's global cache, used by every non-zero-install repo.
         CacheRoot(label: "Yarn Berry cache", components: [".yarn", "berry", "cache"]),
 
@@ -119,8 +121,14 @@ public struct PackageManagerScanner: CategoryScanner {
         // ADDED: Playwright's macOS default is `~/Library/Caches/ms-playwright`; the
         // original listed only the Linux path, so it never found the browsers.
         CacheRoot(label: "Playwright browsers", components: ["Library", "Caches", "ms-playwright"]),
-        // REMOVED at integration: `~/.cache/ms-playwright`, for the same reason as
-        // `~/.cache/yarn` above — HiddenDataScanner owns all of `~/.cache`.
+        // Back for the same reason as `~/.cache/yarn` above.
+        CacheRoot(label: "Playwright browsers (XDG)", components: [".cache", "ms-playwright"]),
+
+        // uv keeps its cache at `~/.cache/uv` on macOS as on Linux — 2.0 GB on this
+        // Mac, the largest thing in `~/.cache`, and until the split offered only as
+        // part of that folder's single row. `uv cache clean` is the tool's own
+        // instruction; environments are linked or cloned out of it, so they survive.
+        CacheRoot(label: "uv cache", components: [".cache", "uv"]),
 
         // ADDED 20 Sep 2026, after reading Purge (github.com/jithin-sabu/purge-app),
         // which offers most of these. `~/.cargo`, `~/.bun` and the rest were left out
@@ -186,8 +194,9 @@ public struct PackageManagerScanner: CategoryScanner {
         // * `~/Library/Caches/pypoetry` — holds Poetry's virtual environments beside
         //   its cache. System Caches still offers that folder whole, which is a
         //   fault of that scanner's and is written down in the backlog.
-        // * uv, Bazel's repository cache, rebar3, `act` — all under `~/.cache`, which
-        //   Hidden Data offers whole.
+        // * rebar3, `act`, pre-commit, Puppeteer — under `~/.cache`, never seen on this
+        //   Mac. Hidden Data lists each as a row of its own, which is where a cache
+        //   nobody has looked at belongs.
     ]
 
     // MARK: - Scan

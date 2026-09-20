@@ -138,11 +138,10 @@ public struct HiddenDataScanner: CategoryScanner {
                                        context: context, to: &found)
         }
 
-        // 4. The XDG-style dot-cache.
+        // 4. The XDG-style dot-cache, child by child.
         let dotCache = url(Root.dotCache)
         claimed.append(dotCache.path)
-        try await measureAndAppend(dotCache, kind: .cache, minimumBytes: Threshold.any,
-                                   isRegenerable: true, context: context, to: &found)
+        try await appendDotCacheChildren(of: dotCache, context: context, to: &found)
 
         // 5/6. Local cloud mirrors. Not marked regenerable: a file that has not
         // finished uploading exists only here.
@@ -223,6 +222,51 @@ public struct HiddenDataScanner: CategoryScanner {
                    context: context, to: &found)
         }
     }
+
+    /// `~/.cache`, one row for each thing in it.
+    ///
+    /// It was one row, marked regenerable, and on this Mac on 20 Sep 2026 that row
+    /// was 4.07 GB: uv's download cache (2.0 GB), a Codex runtime with its binaries
+    /// (1.6 GB), Hugging Face models (261 MB), `gh` run logs. One checkbox for a
+    /// cache, an installed runtime and somebody's models is not a choice. Listed the
+    /// way `~/Library/Caches` is, in one walk.
+    ///
+    /// A row is called regenerable on the tool's own `CACHEDIR.TAG`, not on where it
+    /// sits — see `CacheDirectoryTag`. Everything else is listed plainly, for the
+    /// user to judge. The category is review-only either way: the badge informs, and
+    /// nothing here is counted safe or ticked.
+    private func appendDotCacheChildren(
+        of dotCache: URL, context: ScanContext, to found: inout Found
+    ) async throws {
+        // The exclusion test saves a walk and decides nothing: `append` refuses each
+        // child of an excluded folder on its own. Four gigabytes is worth not walking.
+        guard FileManager.default.fileExists(atPath: dotCache.path),
+              !context.isWithinExclusion(dotCache)
+        else { return }
+
+        let measured = try await context.measurer.measureChildren(of: dotCache)
+        for (child, measurement) in measured {
+            try Task.checkCancellation()
+            // Skipped before the tally, so a read failure inside uv's cache is
+            // reported by the category that owns those bytes.
+            guard !Self.packageManagerOwnedDotCacheNames.contains(child.lastPathComponent)
+            else { continue }
+            append(child, kind: .cache, measurement: measurement,
+                   lastOpened: lastOpenedDate(for: child), minimumBytes: Threshold.any,
+                   isRegenerable: CacheDirectoryTag.isPresent(in: child),
+                   context: context, to: &found)
+        }
+    }
+
+    /// Children of `~/.cache` that **Package Manager Caches** offers.
+    ///
+    /// Must mirror every `[".cache", …]` root in `PackageManagerScanner`, in both
+    /// directions — a name missing here is offered twice, a stale name here is
+    /// offered by nobody. `DisjointCategoriesTests` holds the two together, as it
+    /// does for `SystemCachesScanner.packageManagerOwnedCacheNames`.
+    static let packageManagerOwnedDotCacheNames: Set<String> = [
+        "uv", "yarn", "ms-playwright"
+    ]
 
     private func appendHiddenDirectories(
         context: ScanContext,
