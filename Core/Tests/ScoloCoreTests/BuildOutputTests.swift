@@ -100,7 +100,7 @@ struct BuildOutputTests {
             }
             return url
         }
-        let evidence = BuildOutputDetector.reinstallEvidence(for:)
+        let evidence = { (url: URL) in BuildOutputDetector.reinstallEvidence(for: url) }
 
         #expect(evidence(try store("a/node_modules", beside: ["yarn.lock"])) == "yarn.lock")
         #expect(evidence(try store("b/node_modules", beside: ["pnpm-lock.yaml"])) == "pnpm-lock.yaml")
@@ -171,6 +171,81 @@ struct BuildOutputTests {
         #expect(safe == [".mypy_cache"])
         let venv = try #require(project.children.first { $0.url.lastPathComponent == ".venv" })
         #expect(venv.safetyCaveat == "no lockfile")
+    }
+
+    /// A workspace keeps one lockfile at its root for every package under it, so a
+    /// package's own `node_modules` has none beside it. A lockfile somewhere above is
+    /// not enough: the root has to *declare* a workspace that covers the package.
+    /// Both shapes below were read off this Mac on 20 Sep 2026.
+    @Test("a workspace's root lockfile covers the packages its declaration names, and no others")
+    func workspaceLockfile() throws {
+        let sandbox = try Sandbox()
+        func store(_ path: String) throws -> URL {
+            let url = sandbox.home.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        func write(_ path: String, _ text: String) throws {
+            let url = sandbox.home.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(text.utf8).write(to: url)
+        }
+        let evidence = BuildOutputDetector.reinstallEvidence(for:within:)
+
+        // npm, as `Ambrogio` has it: `"workspaces": ["packages/**"]` beside the lockfile.
+        let npm = sandbox.home.appendingPathComponent("npm")
+        try write("npm/package.json", #"{"name":"root","workspaces":["packages/**","!packages/legacy"]}"#)
+        try write("npm/package-lock.json", "{}")
+        #expect(evidence(try store("npm/packages/api/node_modules"), npm)
+            == "package-lock.json at the workspace root")
+        #expect(evidence(try store("npm/packages/web/ui/node_modules"), npm)
+            == "package-lock.json at the workspace root")
+        // Inside the repository and outside the workspace: installed on its own.
+        #expect(evidence(try store("npm/examples/demo/node_modules"), npm) == nil)
+        #expect(evidence(try store("npm/packages/legacy/node_modules"), npm) == nil)
+
+        // pnpm, with a real `packages:` list. One `*` is one level.
+        let pnpm = sandbox.home.appendingPathComponent("pnpm")
+        try write("pnpm/pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n  - \"libs/*\"\nallowBuilds:\n  sharp: false\n")
+        try write("pnpm/pnpm-lock.yaml", "")
+        #expect(evidence(try store("pnpm/apps/site/node_modules"), pnpm)
+            == "pnpm-lock.yaml at the workspace root")
+        #expect(evidence(try store("pnpm/apps/site/nested/node_modules"), pnpm) == nil)
+
+        // As `AnguriaStudio` has it: the file exists and declares no packages.
+        let settings = sandbox.home.appendingPathComponent("settings")
+        try write("settings/pnpm-workspace.yaml", "allowBuilds:\n  sharp: false\n")
+        try write("settings/pnpm-lock.yaml", "")
+        #expect(evidence(try store("settings/tools/x/node_modules"), settings) == nil)
+
+        // The search stops at the project: a lockfile above it is somebody else's.
+        try write("package-lock.json", "{}")
+        try write("package.json", #"{"workspaces":["**"]}"#)
+        let lone = sandbox.home.appendingPathComponent("lone")
+        #expect(evidence(try store("lone/pkg/node_modules"), lone) == nil)
+        // And a lockfile beside the store is still the first thing looked for.
+        try write("npm/packages/api/package-lock.json", "{}")
+        #expect(evidence(try store("npm/packages/api/node_modules"), npm) == "package-lock.json")
+    }
+
+    @Test("in a scan, a workspace package's store is a safe child on the root's lockfile")
+    func workspacePackageInAScan() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file("Documents/mono/package-lock.json", bytes: 4_096)
+        let manifest = sandbox.home.appendingPathComponent("Documents/mono/package.json")
+        try Data(#"{"workspaces":["packages/*"]}"#.utf8).write(to: manifest)
+        try sandbox.file("Documents/mono/packages/api/src/index.js", bytes: 2 * 1024 * 1024)
+        try sandbox.file("Documents/mono/packages/api/node_modules/dep/blob", bytes: 12 * 1024 * 1024)
+
+        let result = try await DocumentsFilesScanner(home: sandbox.home).scan(context: ScanContext())
+
+        let project = try #require(result.entries.first { $0.url.lastPathComponent == "mono" })
+        let store = try #require(project.children.first)
+        #expect(store.url.path.hasSuffix("packages/api/node_modules"))
+        #expect(store.regeneratesSafely)
+        #expect(store.parentDisplay.hasSuffix("package-lock.json at the workspace root"))
     }
 
     @Test("a dependency store becomes a removable child of its project")
@@ -278,7 +353,7 @@ struct BuildOutputTests {
         #expect(!CleanupService.alwaysMovesToTrash(row), "it is a file: the Trash setting applies")
     }
 
-    @Test("roots are found up to two levels down and not inside dependency stores")
+    @Test("roots are found up to three levels down and not inside dependency stores")
     func detectorFindsRoots() throws {
         let sandbox = try Sandbox()
         let project = try sandbox.directory("Proj")
@@ -286,15 +361,20 @@ struct BuildOutputTests {
         try sandbox.file("Proj/Core/.build/workspace-state.json")
         try sandbox.derivedData("Proj/node_modules/pkg/build/x")   // never descended
         try sandbox.derivedData("Proj/a/b/c/build/deep")            // too deep
+        // A workspace package's store: one folder further down than a plain project's.
+        try sandbox.file("Proj/packages/api/node_modules/dep/index.js")
 
         let roots = BuildOutputDetector.roots(under: project)
 
         // `node_modules` is reported as a root of its own and never entered, so
         // the derived data planted inside it is not found.
-        #expect(roots.map(\.url.lastPathComponent) == [".build", "build", "node_modules"])
+        #expect(roots.map(\.url.lastPathComponent)
+            == [".build", "build", "node_modules", "node_modules"])
         #expect(roots.map(\.kind) == [
-            .swiftPackageBuild, .xcodeDerivedData, .dependencyStore("npm dependencies"),
+            .swiftPackageBuild, .xcodeDerivedData,
+            .dependencyStore("npm dependencies"), .dependencyStore("npm dependencies"),
         ])
+        #expect(roots.last?.url.path.hasSuffix("Proj/packages/api/node_modules") == true)
     }
 
     // MARK: - Xcode scanner

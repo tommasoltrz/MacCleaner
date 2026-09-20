@@ -114,9 +114,16 @@ public enum BuildOutputDetector {
     }
 
     /// Build output found under `folder`, at most `maxDepth` levels down. A
-    /// recognised root is reported once and not descended; `.build` is the one
-    /// hidden name that is looked at.
-    public static func roots(under folder: URL, maxDepth: Int = 2) -> [Root] {
+    /// recognised root is reported once and not descended.
+    ///
+    /// Three levels, up from two on 20 Sep 2026. A workspace keeps its packages one
+    /// folder down — `project/packages/api/node_modules` — so at two levels the
+    /// commonest layout of all was never reached, and those stores stayed inside
+    /// their project's bytes with no row of their own. Measured on this Mac with
+    /// `scolo-cli scan`: 12.8–13.2 s at two levels, 12.8–12.9 s at three, the same
+    /// rows either way. Dependency stores and version control are never entered,
+    /// which is what keeps a deeper walk cheap.
+    public static func roots(under folder: URL, maxDepth: Int = 3) -> [Root] {
         var found: [Root] = []
         func walk(_ directory: URL, depth: Int) {
             guard let children = directories(in: directory, includingHidden: true) else { return }
@@ -208,14 +215,14 @@ public enum BuildOutputDetector {
     /// dependencies live in `~/.gradle`), and a Maven `target` from the `pom.xml`
     /// that recognition already required, which pins its own versions.
     ///
-    /// Only the store's own folder is searched. A workspace keeps one lockfile at
-    /// its root for every package under it; a nested `node_modules` there reads as
-    /// unpinned. That errs towards Needs Review, which is the direction to err in.
+    /// The store's own folder is searched first. For `node_modules` a workspace root
+    /// is searched next — see `workspaceLockfile(for:within:)` — and nothing above
+    /// `projectRoot`, the folder the scan is looking at, is ever consulted.
     ///
     /// The idea of asking for a lockfile is Purge's (`ReinstallSafetyEvaluator`,
     /// github.com/jithin-sabu/purge-app); the lists and the installer-wrote-it
     /// rule are this project's.
-    public static func reinstallEvidence(for url: URL) -> String? {
+    public static func reinstallEvidence(for url: URL, within projectRoot: URL? = nil) -> String? {
         let parent = url.deletingLastPathComponent()
         func firstBeside(_ names: [String]) -> String? {
             names.first { exists(parent.appendingPathComponent($0)) }
@@ -226,10 +233,8 @@ public enum BuildOutputDetector {
         }
         switch url.lastPathComponent {
         case "node_modules":
-            return firstBeside([
-                "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
-                "pnpm-lock.yaml", "bun.lock", "bun.lockb"
-            ])
+            return firstBeside(nodeLockfiles)
+                ?? projectRoot.flatMap { workspaceLockfile(for: parent, within: $0) }
         case "Pods":
             return firstBeside(["Podfile.lock"])
         case ".venv", "venv":
@@ -252,6 +257,74 @@ public enum BuildOutputDetector {
         }
     }
 
+    private static let nodeLockfiles = [
+        "package-lock.json", "npm-shrinkwrap.json", "yarn.lock",
+        "pnpm-lock.yaml", "bun.lock", "bun.lockb"
+    ]
+
+    /// The lockfile of a workspace that covers `package`, or nil.
+    ///
+    /// npm, Yarn, pnpm and Bun workspaces keep **one** lockfile at the root for every
+    /// package beneath it, so a package's own `node_modules` has none beside it and
+    /// read "no lockfile" — true of the folder, false of the dependencies.
+    ///
+    /// A lockfile somewhere above is not evidence. A repository can hold a root
+    /// lockfile for its tooling and, under `examples/`, a project installed on its
+    /// own with nothing pinning it. The root has to *declare* a workspace, and the
+    /// declaration has to name this package:
+    ///
+    /// * `package.json` → `"workspaces"`, an array of globs or `{ "packages": [...] }`
+    ///   (npm, Yarn, Bun);
+    /// * `pnpm-workspace.yaml` → a `packages:` list. The file existing is not enough:
+    ///   `AnguriaStudio`'s on this Mac holds only `allowBuilds:` and declares nothing.
+    ///
+    /// `*` is one path component and `**` any number, as the tools read them; a
+    /// pattern beginning `!` takes a package back out. The walk climbs from the
+    /// package to `projectRoot` and no higher — a lockfile above the project belongs
+    /// to something else.
+    static func workspaceLockfile(for package: URL, within projectRoot: URL) -> String? {
+        let rootPath = projectRoot.standardizedFileURL.path
+        var directory = package.standardizedFileURL.deletingLastPathComponent()
+        while directory.path == rootPath || directory.path.hasPrefix(rootPath + "/") {
+            if let lockfile = nodeLockfiles.first(where: { exists(directory.appendingPathComponent($0)) }) {
+                let relative = String(package.standardizedFileURL.path.dropFirst(directory.path.count + 1))
+                if workspaceGlobs(at: directory).covers(relative) {
+                    return "\(lockfile) at the workspace root"
+                }
+            }
+            guard directory.path != rootPath else { break }
+            directory = directory.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    private static func workspaceGlobs(at root: URL) -> [String] {
+        var globs: [String] = []
+        if let data = try? Data(contentsOf: root.appendingPathComponent("package.json")),
+           let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let list = manifest["workspaces"] as? [String] {
+                globs += list
+            } else if let object = manifest["workspaces"] as? [String: Any],
+                      let list = object["packages"] as? [String] {
+                globs += list
+            }
+        }
+        if let text = try? String(contentsOf: root.appendingPathComponent("pnpm-workspace.yaml"),
+                                  encoding: .utf8) {
+            // The one shape the file takes: a top-level `packages:` key and the
+            // `- 'glob'` items indented under it. Not a YAML parser, and it does not
+            // need to be one: anything it cannot read names no package.
+            var inPackages = false
+            for line in text.split(whereSeparator: \.isNewline).map(String.init) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if !line.hasPrefix(" "), !line.hasPrefix("-") { inPackages = trimmed == "packages:" ; continue }
+                guard inPackages, trimmed.hasPrefix("- ") else { continue }
+                globs.append(trimmed.dropFirst(2).trimmingCharacters(in: CharacterSet(charactersIn: " '\"")))
+            }
+        }
+        return globs
+    }
+
     private static func directories(in url: URL, includingHidden: Bool) -> [URL]? {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
@@ -271,5 +344,27 @@ public enum BuildOutputDetector {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
             && isDirectory.boolValue
+    }
+}
+
+private extension Array where Element == String {
+    /// Whether these workspace globs name `path`, a package folder relative to the
+    /// workspace root. Negations are read last, as the tools read them.
+    func covers(_ path: String) -> Bool {
+        func matches(_ glob: String) -> Bool {
+            var pattern = glob
+            while pattern.hasSuffix("/") { pattern.removeLast() }
+            if pattern.hasPrefix("./") { pattern.removeFirst(2) }
+            // `**` crosses path separators; a single `*` does not. `fnmatch` has no
+            // `**`, so it is spelled `*` and matched without `FNM_PATHNAME`.
+            if pattern.contains("**") {
+                let loose = pattern.replacingOccurrences(of: "**", with: "*")
+                return fnmatch(loose, path, 0) == 0
+            }
+            return fnmatch(pattern, path, FNM_PATHNAME) == 0
+        }
+        let included = filter { !$0.hasPrefix("!") }.contains(where: matches)
+        let excluded = filter { $0.hasPrefix("!") }.contains { matches(String($0.dropFirst())) }
+        return included && !excluded
     }
 }

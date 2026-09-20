@@ -162,7 +162,9 @@ public struct DocumentsFilesScanner: CategoryScanner {
                     // Without it the store is listed and removable like any other
                     // child, and is neither called safe nor ticked for the user —
                     // see `BuildOutputDetector.reinstallEvidence(for:)`.
-                    let evidence = BuildOutputDetector.reinstallEvidence(for: carved.root.url)
+                    let evidence = BuildOutputDetector.reinstallEvidence(
+                        for: carved.root.url, within: candidate.url
+                    )
                     return FileEntry(
                         url: carved.root.url,
                         parentDisplay: FileEntry.abbreviate(
