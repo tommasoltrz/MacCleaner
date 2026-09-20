@@ -272,7 +272,7 @@ public struct HiddenDataScanner: CategoryScanner {
             }
             let isFolder = (try? model.primary.resourceValues(forKeys: [.isDirectoryKey]))?
                 .isDirectory == true
-            found.entries.append(FileEntry(
+            var row = FileEntry(
                 url: model.primary,
                 displayName: model.name,
                 parentDisplay: qualifier,
@@ -282,7 +282,9 @@ public struct HiddenDataScanner: CategoryScanner {
                     ?? lastOpenedDate(for: model.primary),
                 childCount: children.isEmpty ? nil : children.count,
                 children: children
-            ))
+            )
+            row.removesAsUnit = true
+            found.entries.append(row)
         }
 
         // What else Hugging Face keeps beside the hub (its chunk cache, logs), since

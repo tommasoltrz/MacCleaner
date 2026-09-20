@@ -168,6 +168,8 @@ struct LocalModelStoresTests {
         #expect(gemma.parentDisplay.hasPrefix("Ollama model"))
         #expect(gemma.totalBytesIncludingChildren >= Int64(8 * mb))
         #expect(!gemma.isRegenerable && !gemma.isRemovalLocked)
+        // The weights without the manifest are a model Ollama lists and cannot load.
+        #expect(gemma.removesAsUnit)
         #expect(CleanupService.removalTargets(for: gemma, removeProtectedAppData: false)
             .map(\.url.lastPathComponent).sorted() == ["4b", "sha256-cfg", "sha256-weights"])
 

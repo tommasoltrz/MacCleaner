@@ -141,6 +141,17 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// `BuildOutputDetector.reinstallEvidence(for:)`.
     public var safetyCaveat: String?
 
+    /// The row and its children are one thing, removed together or not at all.
+    ///
+    /// Children are ordinarily targets in their own right: an application's cache
+    /// can go while the application stays. A model's are not. Its row is a manifest
+    /// or a folder of links, and its children are the weights and the records that
+    /// say who uses them; removing the weights alone leaves a model its runtime
+    /// still lists and cannot load, and removing a record alone leaves weights
+    /// nothing claims. The table draws such children as part of the row, with no
+    /// checkbox of their own — see `LocalModelStores`.
+    public var removesAsUnit: Bool = false
+
     /// A specialized cleanup action for this row.
     public var removalAction: RemovalAction?
 

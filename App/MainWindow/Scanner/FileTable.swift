@@ -178,7 +178,10 @@ struct FileTable: View {
                             entry: child,
                             isSelected: selection.contains(child.id),
                             hasUserDataOverride: userDataRemovalOverrides.contains(child.id),
+                            // A leftover group and a model are each one thing: their
+                            // children are shown, never ticked on their own.
                             isReadOnly: entry.removalAction != nil
+                                || entry.removesAsUnit
                                 || selection.contains(entry.id),
                             onToggle: { isOn in
                                 if isOn { selection.insert(child.id) }
@@ -606,7 +609,9 @@ private struct ChildRow: View {
 
     private var childHelp: String {
         if isReadOnly {
-            return "This item moves with its selected parent."
+            // True whether or not the parent is ticked yet: a child drawn this way
+            // has no checkbox of its own.
+            return "Part of the row above. It is removed with that row, never on its own."
         }
         if entry.protectionReason == .userData {
             return hasUserDataOverride
