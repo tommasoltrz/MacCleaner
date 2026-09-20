@@ -70,18 +70,18 @@ struct DisjointCategoriesTests {
         }
     }
 
-    /// `HiddenDataScanner` lists `~/.cache` child by child, so a package manager may
+    /// `SystemCachesScanner` lists `~/.cache` child by child, so a package manager may
     /// claim a child — and only a child, since a deeper path would sit inside one of
     /// that scanner's rows. Until 20 Sep 2026 it listed the folder as one row, and
     /// `~/.cache/yarn` and `~/.cache/ms-playwright` were taken off this list for it.
-    @Test("a package manager root under ~/.cache is an immediate child that Hidden Data skips")
-    func dotCacheRootsAreSkippedByHiddenData() {
+    @Test("a package manager root under ~/.cache is an immediate child that System Caches skips")
+    func dotCacheRootsAreSkippedBySystemCaches() {
         let roots = PackageManagerScanner.roots.map(\.components).filter { $0.first == ".cache" }
         let nested = roots.filter { $0.count != 2 }.map { $0.joined(separator: "/") }
         #expect(nested.isEmpty, "\(nested) are not immediate children of ~/.cache")
 
         let claimed = Set(roots.compactMap { $0.count == 2 ? $0[1] : nil })
-        let skipped = HiddenDataScanner.packageManagerOwnedDotCacheNames
+        let skipped = SystemCachesScanner.packageManagerOwnedDotCacheNames
         #expect(claimed.subtracting(skipped).isEmpty,
                 "\(claimed.subtracting(skipped).sorted()) would be offered by both categories")
         #expect(skipped.subtracting(claimed).isEmpty,

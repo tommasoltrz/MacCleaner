@@ -140,18 +140,26 @@ final class SettingsStore {
         static let trashFirst = true
         static let confirmBeforeCleanup = true
 
-        /// Two categories ship off, per the design.
+        /// One category ships off. Docker needs Docker Desktop running, so on by
+        /// default it would mostly render as an unavailable row.
         ///
-        /// Hidden & System Data reaches into the Trash, iOS backups and Mail
-        /// downloads — all of it personal, none of it something to start measuring
-        /// without being asked. Docker needs Docker Desktop running, so on by default
-        /// it would mostly render as an unavailable row.
+        /// Hidden & System Data shipped off too, "per the design", on the reasoning
+        /// that it reaches into the Trash, iOS backups and Mail and should not be
+        /// measured unasked. It is on since 20 Sep 2026 (the owner's call). Measuring
+        /// is not removing: the category is review-only, nothing in it is ever ticked
+        /// for the user or counted safe, and it no longer lists the Trash at all.
+        /// What switching it off actually did was hide the largest rows on the disk —
+        /// 4 GB of `~/.codex` and 1.4 GB of `~/.nvm` on this Mac — from someone who
+        /// had opened a disk cleaner to find them.
+        ///
+        /// This is a default. A Mac that has ever changed a category toggle has the
+        /// whole table stored, its old `false` included, and keeps it.
         static func categoryEnabled(_ category: CategoryID) -> Bool {
             switch category {
             case .documentsAndFiles, .applications, .applicationLeftovers,
-                    .systemCaches, .packageManagers, .xcode:
+                    .hiddenSystemData, .systemCaches, .packageManagers, .xcode:
                 true
-            case .hiddenSystemData, .docker:
+            case .docker:
                 false
             }
         }

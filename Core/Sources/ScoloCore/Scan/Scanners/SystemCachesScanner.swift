@@ -1,7 +1,8 @@
 import Foundation
 
-/// **System Caches & Logs** — the immediate children of `~/Library/Caches` and
-/// `~/Library/Logs`, everything the category subtitle promises and nothing else.
+/// **System Caches & Logs** — the immediate children of `~/Library/Caches`,
+/// `~/Library/Logs` and `~/.cache`, everything the category subtitle promises and
+/// nothing else.
 ///
 /// Ports `electron/cleaners/systemCaches.ts`. Three properties of that original are
 /// deliberately not carried over:
@@ -24,23 +25,32 @@ public struct SystemCachesScanner: CategoryScanner {
 
     let cachesRoot: URL
     let logsRoot: URL
+    /// `~/.cache`, where command-line tools keep what apps keep in
+    /// `~/Library/Caches`. It was listed by Hidden & System Data, beside iOS backups
+    /// and Mail, because the Electron predecessor put it there — a category that
+    /// shipped switched off, so on a default install nothing under it was offered at
+    /// all: 1.68 GB of `codex-runtimes` on this Mac on 20 Sep 2026. A cache belongs
+    /// with the caches.
+    let dotCacheRoot: URL?
 
     public init() {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         self.init(
             cachesRoot: home.appendingPathComponent("Library/Caches"),
-            logsRoot: home.appendingPathComponent("Library/Logs")
+            logsRoot: home.appendingPathComponent("Library/Logs"),
+            dotCacheRoot: home.appendingPathComponent(".cache")
         )
     }
 
     /// Exists so tests can aim the scan at a fixture tree; production always uses the
-    /// two real roots above.
-    init(cachesRoot: URL, logsRoot: URL) {
+    /// three real roots above.
+    init(cachesRoot: URL, logsRoot: URL, dotCacheRoot: URL? = nil) {
         self.cachesRoot = cachesRoot
         self.logsRoot = logsRoot
+        self.dotCacheRoot = dotCacheRoot
     }
 
-    private var roots: [URL] { [cachesRoot, logsRoot] }
+    private var roots: [URL] { [cachesRoot, logsRoot] + [dotCacheRoot].compactMap { $0 } }
 
     // MARK: - Rules
 
@@ -87,6 +97,28 @@ public struct SystemCachesScanner: CategoryScanner {
         "org.carthage.CarthageKit", "node-gyp", "electron", "electron-builder",
         "Cypress", "ccache"
     ]
+
+    /// Children of `~/.cache` that **Package Manager Caches** offers.
+    ///
+    /// The same bargain as the list above, for the other cache root, and held to
+    /// `PackageManagerScanner`'s `[".cache", …]` roots in both directions by
+    /// `DisjointCategoriesTests`: a name missing here is offered twice, a stale name
+    /// here is offered by nobody.
+    static let packageManagerOwnedDotCacheNames: Set<String> = [
+        "uv", "yarn", "ms-playwright"
+    ]
+
+    /// Whether a child is called regenerable.
+    ///
+    /// `~/Library/Caches` and `~/Library/Logs` are the system's own cache and log
+    /// folders: what an app puts there it has been told may be purged. `~/.cache` is
+    /// a convention with nobody enforcing it, and this Mac's held a Codex runtime
+    /// with its binaries. So a child there is regenerable on its tool's own
+    /// `CACHEDIR.TAG` — see `CacheDirectoryTag` — and is otherwise listed plainly,
+    /// which in a safe category means Needs Review, unticked.
+    private func isRegenerable(_ child: URL, under root: URL) -> Bool {
+        root == dotCacheRoot ? CacheDirectoryTag.isPresent(in: child) : true
+    }
 
     /// The ported threshold: the original emitted any child whose measured size was
     /// above zero. No larger floor is imposed, because this category's value is the
@@ -138,6 +170,10 @@ public struct SystemCachesScanner: CategoryScanner {
                    Self.packageManagerOwnedCacheNames.contains(url.lastPathComponent) {
                     continue
                 }
+                if root == dotCacheRoot,
+                   Self.packageManagerOwnedDotCacheNames.contains(url.lastPathComponent) {
+                    continue
+                }
 
                 unreadableCount += measurement.unreadableCount
 
@@ -162,10 +198,10 @@ public struct SystemCachesScanner: CategoryScanner {
                     kind: .cache,
                     allocatedBytes: measurement.allocatedBytes,
                     lastOpened: lastOpened,
-                    // Both roots hold nothing but artifacts the system rebuilds on
-                    // demand. This is what earns the category its green `safe` badge
-                    // and puts it in the Dashboard's "Safe to remove" total.
-                    isRegenerable: true,
+                    // The two Library roots hold nothing but artifacts rebuilt on
+                    // demand, which is what earns the category its green `safe` badge
+                    // and its place in "Safe to remove". `~/.cache` has to show a tag.
+                    isRegenerable: isRegenerable(url, under: root),
                     // Still regenerable, no longer *safe* while its owner runs —
                     // see `FileEntry.inUseBy`.
                     inUseBy: context.runningOwner(ofCacheNamed: url.lastPathComponent),
