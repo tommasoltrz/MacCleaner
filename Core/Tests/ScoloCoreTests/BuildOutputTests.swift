@@ -89,6 +89,48 @@ struct BuildOutputTests {
         #expect(BuildOutputDetector.kind(of: modules)?.isXcodeOutput == false)
     }
 
+    @Test("each store names the record that lets it be put back, or has none")
+    func reinstallEvidenceByStore() throws {
+        let sandbox = try Sandbox()
+        func store(_ path: String, beside files: [String] = []) throws -> URL {
+            let url = sandbox.home.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            for file in files {
+                try Data("x".utf8).write(to: url.deletingLastPathComponent().appendingPathComponent(file))
+            }
+            return url
+        }
+        let evidence = BuildOutputDetector.reinstallEvidence(for:)
+
+        #expect(evidence(try store("a/node_modules", beside: ["yarn.lock"])) == "yarn.lock")
+        #expect(evidence(try store("b/node_modules", beside: ["pnpm-lock.yaml"])) == "pnpm-lock.yaml")
+        // A manifest says what was asked for, not what was installed.
+        #expect(evidence(try store("c/node_modules", beside: ["package.json"])) == nil)
+        #expect(evidence(try store("d/Pods", beside: ["Podfile.lock"])) == "Podfile.lock")
+        #expect(evidence(try store("e/Pods", beside: ["Podfile"])) == nil)
+
+        #expect(evidence(try store("f/.venv", beside: ["uv.lock"])) == "uv.lock")
+        // Hand-kept, so it is somebody's intention and not a record.
+        #expect(evidence(try store("g/venv", beside: ["requirements.txt"])) == nil)
+
+        #expect(evidence(try store("h/target", beside: ["Cargo.toml", "Cargo.lock"])) == "Cargo.lock")
+        // A library often leaves `Cargo.lock` out of version control.
+        #expect(evidence(try store("i/target", beside: ["Cargo.toml"])) == nil)
+        // Both files: recognition calls it Cargo's, so Cargo's lockfile is the one asked for.
+        #expect(evidence(try store("j/target", beside: ["Cargo.toml", "pom.xml"])) == nil)
+        #expect(evidence(try store("k/target", beside: ["pom.xml"])) == "pom.xml")
+
+        // Rebuilt from what is beside them, with no network.
+        #expect(evidence(try store("l/__pycache__", beside: ["tool.py"])) == "Python sources")
+        #expect(evidence(try store("m/__pycache__")) == nil)
+        #expect(evidence(try store("n/.gradle", beside: ["build.gradle.kts"])) == "build.gradle.kts")
+        #expect(evidence(try store("o/.gradle")) == nil)
+
+        // No lockfile exists to find.
+        #expect(evidence(try store("p/bower_components", beside: ["bower.json"])) == nil)
+        #expect(evidence(try store("q/.tox", beside: ["tox.ini"])) == nil)
+    }
+
     @Test("a dependency store becomes a removable child of its project")
     func dependencyStoreBecomesProjectChild() async throws {
         let sandbox = try Sandbox()
@@ -105,9 +147,10 @@ struct BuildOutputTests {
             $0.url.lastPathComponent == "node_modules"
         })
 
-        #expect(modules.isRegenerable)
+        // Whether it is *regenerable* is the lockfile's question, asked below.
         #expect(modules.kind == .cache)
-        #expect(modules.parentDisplay.hasSuffix("npm dependencies"))
+        #expect(modules.parentDisplay.contains("npm dependencies"))
+        #expect(!modules.isRemovalLocked)
         #expect(modules.allocatedBytes >= 30 * 1024 * 1024)
         #expect(!result.entries.contains { $0.url == modules.url })
 
@@ -119,6 +162,40 @@ struct BuildOutputTests {
             for: project,
             removeProtectedAppData: false
         ).map(\.id) == [modules.id, project.id])
+    }
+
+    /// Regenerable children have counted as safe since 18 Sep 2026, and a dependency
+    /// store was a regenerable child on its name alone — so every `node_modules` on
+    /// the disk was promised as safe and ticked for the user, lockfile or none.
+    @Test("a dependency store is safe only beside the lockfile its installer wrote")
+    func dependencyStoreNeedsALockfileToBeSafe() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file("Documents/pinned/src/index.js", bytes: 2 * 1024 * 1024)
+        try sandbox.file("Documents/pinned/package-lock.json", bytes: 4_096)
+        try sandbox.file("Documents/pinned/node_modules/big/blob", bytes: 30 * 1024 * 1024)
+        try sandbox.file("Documents/loose/src/index.js", bytes: 2 * 1024 * 1024)
+        try sandbox.file("Documents/loose/node_modules/big/blob", bytes: 20 * 1024 * 1024)
+
+        let result = try await DocumentsFilesScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+
+        func modules(of project: String) throws -> FileEntry {
+            let row = try #require(result.entries.first { $0.url.lastPathComponent == project })
+            return try #require(row.children.first { $0.url.lastPathComponent == "node_modules" })
+        }
+        let pinned = try modules(of: "pinned")
+        let loose = try modules(of: "loose")
+
+        #expect(pinned.regeneratesSafely)
+        #expect(pinned.parentDisplay.hasSuffix("npm dependencies · package-lock.json"))
+        // Listed and removable, as before. What is withdrawn is the word *safe*.
+        #expect(!loose.regeneratesSafely)
+        #expect(!loose.isRemovalLocked)
+        #expect(loose.parentDisplay.hasSuffix("npm dependencies · no lockfile"))
+        #expect(loose.safetyCaveat == "no lockfile")
+        #expect(pinned.safetyCaveat == nil)
+        #expect(result.safeToRemoveBytes == pinned.allocatedBytes)
+        #expect(result.tileRows(safeToRemove: true).map(\.url) == [pinned.url])
     }
 
     @Test("an excluded dependency store is neither carved nor listed")

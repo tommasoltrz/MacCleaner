@@ -132,6 +132,15 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     public var inUseBy: RunningOwner?
 
+    /// Why a row that looks regenerable is not called so, in two or three words:
+    /// `no lockfile` on a dependency store nothing can put back as it was.
+    ///
+    /// For the reader, not for arithmetic. The row already carries
+    /// `isRegenerable == false`, which is what keeps it out of Safe to remove; this
+    /// says why, so a grey `node_modules` beside a green one is not a riddle. See
+    /// `BuildOutputDetector.reinstallEvidence(for:)`.
+    public var safetyCaveat: String?
+
     /// A specialized cleanup action for this row.
     public var removalAction: RemovalAction?
 
@@ -165,6 +174,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         protectionReason: ProtectionReason? = nil,
         manualRemoval: ManualRemoval? = nil,
         inUseBy: RunningOwner? = nil,
+        safetyCaveat: String? = nil,
         removalAction: RemovalAction? = nil,
         childCount: Int? = nil,
         children: [FileEntry] = []
@@ -180,6 +190,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         self.protectionReason = protectionReason
         self.manualRemoval = manualRemoval
         self.inUseBy = inUseBy
+        self.safetyCaveat = safetyCaveat
         self.removalAction = removalAction
         self.childCount = childCount
         self.children = children
