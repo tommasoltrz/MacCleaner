@@ -158,15 +158,22 @@ public struct DocumentsFilesScanner: CategoryScanner {
                     guard !carved.root.kind.isXcodeOutput,
                           !carved.measurement.containsProtectedPattern
                     else { return nil }
+                    // Regenerable only on evidence, and the evidence is named.
+                    // Without it the store is listed and removable like any other
+                    // child, and is neither called safe nor ticked for the user —
+                    // see `BuildOutputDetector.reinstallEvidence(for:)`.
+                    let evidence = BuildOutputDetector.reinstallEvidence(for: carved.root.url)
                     return FileEntry(
                         url: carved.root.url,
                         parentDisplay: FileEntry.abbreviate(
                             carved.root.url.deletingLastPathComponent().path
-                        ) + " · " + carved.root.kind.label,
+                        ) + " · " + carved.root.kind.label
+                            + " · " + (evidence ?? "no lockfile"),
                         kind: .cache,
                         allocatedBytes: carved.measurement.allocatedBytes,
                         lastOpened: lastOpenedDate(for: carved.root.url),
-                        isRegenerable: true,
+                        isRegenerable: evidence != nil,
+                        safetyCaveat: evidence == nil ? "no lockfile" : nil,
                         childCount: (try? FileManager.default.contentsOfDirectory(
                             atPath: carved.root.url.path
                         ))?.count

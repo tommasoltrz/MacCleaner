@@ -574,6 +574,8 @@ private struct ChildRow: View {
                     // copies of "Google Chrome is open" said nothing the first had not.
                     Badge(text: "regenerable", style: entry.regeneratesSafely ? .safe : .neutral)
                         .fixedSize()
+                } else if let caveat = entry.safetyCaveat {
+                    Badge(text: caveat).fixedSize()
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -619,6 +621,11 @@ private struct ChildRow: View {
             // Information, not a lock: the checkbox works.
             return "\(owner.name) is open and may be using these files, so they are "
                 + "not counted as safe. Quit it first, or let Clean Up quit it for you."
+        }
+        if entry.safetyCaveat != nil {
+            // The only caveat there is, so the sentence can be specific.
+            return "No lockfile beside it, so reinstalling may not bring back the same "
+                + "dependencies. You can still remove it. It is not counted as safe."
         }
         return "Remove only this item. Keep its parent."
     }
