@@ -233,18 +233,33 @@ struct TileArithmeticTests {
         #expect(Self.tileMatchesItsList(category))
     }
 
-    @Test("application leftovers stay wholly safe and wholly outside review")
-    func leftoversAreUnaffected() {
-        let leftover = FileEntry(
-            url: URL(fileURLWithPath: "/tmp/com.gone.app.plist"), kind: .file,
-            allocatedBytes: 90, isRegenerable: false
+    /// "Safe to remove" means removing it costs nothing. A cache qualifies: it comes
+    /// back. A leftover does not — it is a removed application's settings, saved
+    /// state, sometimes its licence, and nothing regenerates those. Whether they
+    /// matter depends on whether the user will install that application again, which
+    /// only the user knows. Until 20 Sep 2026 leftovers were counted safe and badged
+    /// green, and deliberately never ticked: one badge meaning two things.
+    @Test("application leftovers need review, whole, with their caches kept inside the group")
+    func leftoversNeedReview() {
+        let cache = Self.child("Caches/com.gone.app", bytes: 60, regenerable: true)
+        let preferences = Self.child("com.gone.app.plist", bytes: 30, regenerable: false)
+        let group = FileEntry(
+            url: cache.url, displayName: "com.gone.app", kind: .folder, allocatedBytes: 0,
+            removalAction: .orphanedApplication(bundleIdentifier: "com.gone.app"),
+            children: [cache, preferences]
         )
-        let category = ScanCategoryResult(
-            categoryID: .applicationLeftovers, entries: [leftover]
-        )
+        let category = ScanCategoryResult(categoryID: .applicationLeftovers, entries: [group])
 
-        #expect(category.safeToRemoveBytes == 90)
-        #expect(category.needsReviewBytes == 0)
+        #expect(category.safeToRemoveBytes == 0)
+        #expect(category.needsReviewBytes == 90)
+        #expect(!category.isCountedSafe(group))
+        // The cache regenerates, and is still not lifted out on its own: a leftover
+        // is removed through its group, which checks the owner and each file's
+        // identity again. Out of the group it would go the ordinary way, unchecked.
+        #expect(category.tileRows(safeToRemove: true).isEmpty)
+        #expect(category.tileRows(safeToRemove: false).first?.children.count == 2)
+        #expect(Self.isPartition(category))
+        #expect(Self.tileMatchesItsList(category))
     }
 
     @Test("a category that reports a total without rows keeps it under review")

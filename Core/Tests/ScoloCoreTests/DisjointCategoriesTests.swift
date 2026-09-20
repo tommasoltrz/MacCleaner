@@ -220,14 +220,15 @@ struct DisjointCategoriesTests {
 
     @Test("only low-risk categories are safe to remove")
     func safeCategoriesUseVerifiedLowRiskRules() {
-        // Cache files regenerate. Application leftovers have no installed owner.
-        // These rules drive the Dashboard's "Safe to Remove" tile.
-        #expect(CategoryID.applicationLeftovers.isSafe)
+        // Cache files regenerate, so removing one costs nothing. That is the only
+        // thing "safe" means. These rules drive the Dashboard's "Safe to Remove" tile.
         #expect(CategoryID.systemCaches.isSafe)
         #expect(CategoryID.packageManagers.isSafe)
         #expect(CategoryID.xcode.isSafe)
 
         #expect(!CategoryID.documentsAndFiles.isSafe)
+        // A leftover has no owner, and is still somebody's settings.
+        #expect(!CategoryID.applicationLeftovers.isSafe)
         #expect(!CategoryID.applications.isSafe)
         #expect(!CategoryID.hiddenSystemData.isSafe)
         #expect(!CategoryID.docker.isSafe)
