@@ -134,7 +134,8 @@ struct CLI {
         }
         for model in found {
             let alone = model.exclusive.reduce(Int64(0)) { $0 + size($1) }
-            print("  \(model.runtime.padding(toLength: 13, withPad: " ", startingAt: 0)) \(model.name)")
+            print("  \(model.runtime.padding(toLength: 13, withPad: " ", startingAt: 0)) "
+                  + model.memberNames.joined(separator: " + "))
             print("      \(model.primary.path.replacingOccurrences(of: home.path, with: "~"))")
             print("      \(model.exclusive.count) files only it uses · \(ByteFormatting.string(alone))"
                   + "   shared and kept · \(ByteFormatting.string(model.sharedBytes))")

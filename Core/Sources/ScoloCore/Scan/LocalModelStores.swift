@@ -2,8 +2,15 @@ import Foundation
 
 /// One locally stored machine-learning model, as its runtime's store describes it.
 public struct LocalModel: Sendable, Equatable {
-    /// The name the user pulled it by: `llama3:8b`, `org/repo`.
-    public let name: String
+    /// The name the user pulled it by: `llama3:8b`, `org/repo`. For a set of models
+    /// that share their weights, the names joined — see `LocalModelStores.grouped`.
+    public var name: String {
+        memberNames.count <= 2
+            ? memberNames.joined(separator: " + ")
+            : "\(memberNames[0]) + \(memberNames.count - 1) more"
+    }
+    /// One name, or every model in a set.
+    public let memberNames: [String]
     public let runtime: String
     /// What stands for the model in its store — Ollama's manifest, a hub repository
     /// folder. Removing it is what makes the runtime stop listing the model.
@@ -69,38 +76,34 @@ public enum LocalModelStores {
             let layers: [Layer]
         }
 
-        // Every manifest first: whether a blob is exclusive is not knowable one
-        // model at a time.
-        var parsed: [(url: URL, digests: [String])] = []
-        var references: [String: Int] = [:]
-        for url in regularFiles(under: manifests) {
+        // Exactly four levels, as Ollama itself globs them (`manifests/*/*/*/*` in its
+        // `manifest` package): host, namespace, model, tag.
+        let depth = manifests.standardizedFileURL.pathComponents.count + 4
+        var members: [Member] = []
+        var blobUsers: [String: Set<Int>] = [:]
+        for url in regularFiles(under: manifests)
+        where url.standardizedFileURL.pathComponents.count == depth {
             guard let data = try? Data(contentsOf: url),
                   let manifest = try? JSONDecoder().decode(Manifest.self, from: data)
             else { continue }
-            let digests = Array(Set(manifest.layers.map(\.digest) + [manifest.config?.digest]
-                .compactMap { $0 })).sorted()
-            parsed.append((url, digests))
-            for digest in digests { references[digest, default: 0] += 1 }
+            let index = members.count
+            members.append(Member(name: ollamaName(url, under: manifests), primary: url))
+            for digest in Set(manifest.layers.map(\.digest) + [manifest.config?.digest].compactMap { $0 }) {
+                blobUsers[digest, default: []].insert(index)
+            }
         }
 
-        return parsed.map { manifest in
-            var exclusive: [URL] = []
-            var shared: Int64 = 0
-            for digest in manifest.digests {
-                // `sha256-<hex>` on disk today; older stores kept the colon.
-                let candidates = [digest.replacingOccurrences(of: ":", with: "-"), digest]
-                guard let blob = candidates.map({ blobs.appendingPathComponent($0) })
-                    .first(where: { isRegularFile($0) })
-                else { continue }
-                if references[digest] == 1 { exclusive.append(blob) } else { shared += allocatedSize(blob) }
-            }
-            return LocalModel(
-                name: ollamaName(manifest.url, under: manifests),
-                runtime: "Ollama", primary: manifest.url,
-                exclusive: exclusive, sharedBytes: shared
-            )
+        let sharedBlobs = blobUsers.keys.sorted().compactMap { digest -> Blob? in
+            // `sha256-<hex>` on disk — Ollama's `BlobsPath` replaces the colon — and
+            // the colon itself on a store written before it did.
+            let candidates = [digest.replacingOccurrences(of: ":", with: "-"), digest]
+            guard let file = candidates.map({ blobs.appendingPathComponent($0) })
+                .first(where: { isRegularFile($0) })
+            else { return nil }
+            return Blob(files: [file], bytes: allocatedSize(file), users: blobUsers[digest] ?? [],
+                        usersAreComplete: true)
         }
-        .sorted { $0.name < $1.name }
+        return grouped(members, sharedBlobs, runtime: "Ollama")
     }
 
     /// `registry.ollama.ai/library/gemma3/4b` reads back as `gemma3:4b`, the name
@@ -137,43 +140,55 @@ public enum LocalModelStores {
             .standardizedFileURL.path
         let fm = FileManager.default
 
-        return directoryNames(hub).compactMap { folder -> LocalModel? in
-            let kinds = ["models--": "", "datasets--": "dataset ", "spaces--": "space "]
-            guard let kind = kinds.first(where: { folder.hasPrefix($0.key) }) else { return nil }
-            let repository = hub.appendingPathComponent(folder, isDirectory: true)
-            let name = kind.value + folder.dropFirst(kind.key.count)
-                .replacingOccurrences(of: "--", with: "/")
+        let kinds = ["models--": "", "datasets--": "dataset ", "spaces--": "space "]
+        var members: [Member] = []
+        var folderIndex: [String: Int] = [:]
+        for folder in directoryNames(hub) {
+            guard let kind = kinds.first(where: { folder.hasPrefix($0.key) }) else { continue }
+            folderIndex[folder] = members.count
+            members.append(Member(
+                name: kind.value + folder.dropFirst(kind.key.count).replacingOccurrences(of: "--", with: "/"),
+                primary: hub.appendingPathComponent(folder, isDirectory: true)
+            ))
+        }
 
-            var exclusive: [URL] = []
-            var shared: Int64 = 0
-            let repositoryBlobs = repository.appendingPathComponent("blobs", isDirectory: true)
+        // Who links to each blob is seen on the way, whatever its `.refs` says.
+        var targets: [String: URL] = [:]
+        var linkers: [String: Set<Int>] = [:]
+        for (folder, member) in folderIndex {
+            let repositoryBlobs = hub.appendingPathComponent(folder).appendingPathComponent("blobs", isDirectory: true)
             for blobName in directoryNames(repositoryBlobs) {
                 let link = repositoryBlobs.appendingPathComponent(blobName)
                 guard let destination = try? fm.destinationOfSymbolicLink(atPath: link.path)
                 else { continue }   // classic layout: a real file, measured with the folder
                 let target = URL(fileURLWithPath: destination, relativeTo: repositoryBlobs)
                     .standardizedFileURL
-                guard target.path.hasPrefix(sharedStore + "/"), isRegularFile(target) else { continue }
-
-                let refs = URL(fileURLWithPath: target.path + ".refs")
-                let users = ((try? String(contentsOf: refs, encoding: .utf8)) ?? "")
-                    .split(whereSeparator: \.isNewline).map(String.init)
-                // No record of who uses it is not evidence that nobody else does.
-                guard !users.isEmpty, users.allSatisfy({ $0.hasPrefix(folder + "/") }) else {
-                    shared += allocatedSize(target)
-                    continue
+                if target.path.hasPrefix(sharedStore + "/"), isRegularFile(target) {
+                    targets[target.path] = target
+                    linkers[target.path, default: []].insert(member)
                 }
-                exclusive.append(target)
-                exclusive.append(refs)
-                let lock = URL(fileURLWithPath: target.path + ".lock")
-                if fm.fileExists(atPath: lock.path) { exclusive.append(lock) }
             }
-            return LocalModel(
-                name: name, runtime: "Hugging Face", primary: repository,
-                exclusive: exclusive, sharedBytes: shared
+        }
+
+        let sharedBlobs = targets.keys.sorted().compactMap { path -> Blob? in
+            guard let target = targets[path] else { return nil }
+            let refs = URL(fileURLWithPath: path + ".refs")
+            let lines = ((try? String(contentsOf: refs, encoding: .utf8)) ?? "")
+                .split(whereSeparator: \.isNewline).map(String.init)
+            let folders = lines.compactMap { $0.split(separator: "/").first.map(String.init) }
+            let recorded = Set(folders.compactMap { folderIndex[$0] })
+            let users = recorded.union(linkers[path] ?? [])
+            var files = [target, refs]
+            let lock = URL(fileURLWithPath: path + ".lock")
+            if fm.fileExists(atPath: lock.path) { files.append(lock) }
+            return Blob(
+                files: files, bytes: allocatedSize(target), users: users,
+                // No record, or a record naming a repository that is not here, is not
+                // evidence that nobody else uses the blob.
+                usersAreComplete: !lines.isEmpty && recorded.count == Set(folders).count
             )
         }
-        .sorted { $0.name < $1.name }
+        return grouped(members, sharedBlobs, runtime: "Hugging Face")
     }
 
     // MARK: - LM Studio
@@ -190,13 +205,84 @@ public enum LocalModelStores {
                     let url = publisherURL.appendingPathComponent(repository, isDirectory: true)
                     guard isDirectory(url) else { return nil }
                     return LocalModel(
-                        name: "\(publisher)/\(repository)", runtime: "LM Studio",
+                        memberNames: ["\(publisher)/\(repository)"], runtime: "LM Studio",
                         primary: url, exclusive: [], sharedBytes: 0
                     )
                 }
             }
         }
         .sorted { $0.name < $1.name }
+    }
+
+    // MARK: - Sets
+
+    struct Member { let name: String; let primary: URL }
+
+    /// A content-addressed file and the models that refer to it.
+    struct Blob {
+        /// The blob, and any record kept beside it that goes when it goes.
+        let files: [URL]
+        let bytes: Int64
+        let users: Set<Int>
+        /// False when who uses it could not be fully read. Such a blob is never
+        /// anybody's to remove.
+        let usersAreComplete: Bool
+    }
+
+    /// Two models become one row when they share a blob at or above this size.
+    ///
+    /// It is the scan's own noise floor, `ScanCoordinator.entryNoiseFloor`, and the
+    /// line it draws is the one that matters here: weights, projectors and adapters
+    /// are megabytes to gigabytes; a licence, a template or a parameter file is
+    /// kilobytes, and nearly every Ollama model carries the same licence text. Joined
+    /// on *any* shared blob, every model on the disk becomes one row.
+    static let setThreshold: Int64 = 1024 * 1024
+
+    /// Turns models and the blobs they refer to into rows.
+    ///
+    /// As a row each, two tags of one model read a few kilobytes apiece and the
+    /// gigabytes of weights they share could be removed through neither. So models
+    /// that share a large blob are **one row**, removed together: the other members'
+    /// manifests and every blob used only inside the set go with it. What one tag
+    /// frees on its own is a template, and `ollama rm` is the tool for that.
+    ///
+    /// A blob also used outside the set stays and is counted in `sharedBytes`.
+    /// Ollama prunes what nothing refers to when it next starts (unless
+    /// `OLLAMA_NOPRUNE` is set), so a kilobyte of licence left behind does not stay
+    /// for ever.
+    static func grouped(_ members: [Member], _ blobs: [Blob], runtime: String) -> [LocalModel] {
+        var parent = Array(members.indices)
+        func root(_ index: Int) -> Int {
+            var index = index
+            while parent[index] != index { index = parent[index] }
+            return index
+        }
+        for blob in blobs where blob.usersAreComplete && blob.bytes >= setThreshold {
+            guard let first = blob.users.min() else { continue }
+            for user in blob.users { parent[root(user)] = root(first) }
+        }
+
+        var sets: [Int: [Int]] = [:]
+        for index in members.indices { sets[root(index), default: []].append(index) }
+
+        return sets.values.map { $0.sorted { members[$0].name < members[$1].name } }
+            .sorted { members[$0[0]].name < members[$1[0]].name }
+            .map { set in
+                let inside = Set(set)
+                var exclusive = set.dropFirst().map { members[$0].primary }
+                var shared: Int64 = 0
+                for blob in blobs where !blob.users.isDisjoint(with: inside) {
+                    if blob.usersAreComplete, blob.users.isSubset(of: inside) {
+                        exclusive += blob.files
+                    } else {
+                        shared += blob.bytes
+                    }
+                }
+                return LocalModel(
+                    memberNames: set.map { members[$0].name }, runtime: runtime,
+                    primary: members[set[0]].primary, exclusive: exclusive, sharedBytes: shared
+                )
+            }
     }
 
     // MARK: - Support
