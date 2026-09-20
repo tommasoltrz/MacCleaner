@@ -47,7 +47,13 @@ struct SidebarView: View {
                             }
                         } icon: {
                             Image(systemName: view.symbol)
-                                .font(.system(size: 16, weight: .medium))
+                                // 14, down from 16: after the macOS 27 update the same
+                                // 16 pt symbols measured ~22 pt across in a 218 pt
+                                // sidebar and crowded the 13 pt labels. The scale is
+                                // pinned because a sidebar list sets one through the
+                                // environment, and it multiplies whatever the font says.
+                                .font(.system(size: 14, weight: .medium))
+                                .imageScale(.medium)
                                 // The App Store fills the selected row's symbol —
                                 // outline at rest, solid when chosen — and the solid
                                 // glyph is most of why its selection reads brighter.
