@@ -18,12 +18,15 @@ import Testing
 @Suite("Categories claim disjoint paths")
 struct DisjointCategoriesTests {
 
-    /// Everything `PackageManagerScanner` claims directly under `~/Library/Caches`.
+    /// Every child of `~/Library/Caches` that `PackageManagerScanner` claims, or
+    /// claims something inside. System Caches lists those children whole, so it has
+    /// to leave each of them alone, whichever it is: Poetry's folder holds two
+    /// claimed downloads and, beside them, environments nobody should offer.
     private var packageManagerCacheChildren: Set<String> {
         Set(
             PackageManagerScanner.roots
                 .map(\.components)
-                .filter { $0.count == 3 && $0[0] == "Library" && $0[1] == "Caches" }
+                .filter { $0.count >= 3 && $0[0] == "Library" && $0[1] == "Caches" }
                 .map { $0[2] }
         )
     }

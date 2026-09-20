@@ -70,6 +70,32 @@ struct PackageManagerScanTests {
         #expect(hidden.entries.contains { $0.url.lastPathComponent == ".somebody" })
     }
 
+    /// Poetry keeps the virtual environments it creates *inside* its cache folder,
+    /// `~/Library/Caches/pypoetry/virtualenvs`. System Caches listed `pypoetry` as
+    /// one safe row, so every Poetry project's environment was offered, ticked, as a
+    /// cache — what the lockfile rule exists to refuse, by another door.
+    @Test("Poetry's download cache is offered; the environments kept beside it are offered by no one")
+    func poetryEnvironmentsAreNotACache() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file("Library/Caches/pypoetry/cache/repositories/pypi/pkg.json", bytes: 4 * 1024 * 1024)
+        try sandbox.file("Library/Caches/pypoetry/artifacts/ab/cd/wheel.whl", bytes: 3 * 1024 * 1024)
+        try sandbox.file("Library/Caches/pypoetry/virtualenvs/app-Xy12-py3.12/bin/python", bytes: 8 * 1024 * 1024)
+        try FileManager.default.createDirectory(
+            at: sandbox.home.appendingPathComponent("Library/Logs"), withIntermediateDirectories: true
+        )
+
+        let packages = try await PackageManagerScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+        let system = try await SystemCachesScanner(
+            cachesRoot: sandbox.home.appendingPathComponent("Library/Caches"),
+            logsRoot: sandbox.home.appendingPathComponent("Library/Logs")
+        ).scan(context: ScanContext())
+
+        #expect(packages.entries.map(\.displayName) == ["Poetry cache", "Poetry artifacts"])
+        let offered = (packages.entries + system.entries).map(\.url.path)
+        #expect(!offered.contains { $0.hasSuffix("/pypoetry") || $0.contains("/virtualenvs") })
+    }
+
     @Test("a cache that moved here from System Caches is offered once, under its tool's name")
     func relabelledCacheIsOfferedOnce() async throws {
         let sandbox = try Sandbox()

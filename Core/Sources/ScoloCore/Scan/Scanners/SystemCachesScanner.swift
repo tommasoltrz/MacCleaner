@@ -113,7 +113,7 @@ public struct SystemCachesScanner: CategoryScanner {
         "Yarn", "pnpm", "ms-playwright",
         // Added with the 20 Sep 2026 roots. Each was a row here, named for its
         // folder; it is a row there now, named for its tool.
-        "deno", "go-build", "Coursier", "composer", "pipenv", "org.swift.swiftpm",
+        "deno", "go-build", "Coursier", "composer", "pipenv", "pypoetry", "org.swift.swiftpm",
         "org.carthage.CarthageKit", "node-gyp", "electron", "electron-builder",
         "Cypress", "ccache"
     ]
