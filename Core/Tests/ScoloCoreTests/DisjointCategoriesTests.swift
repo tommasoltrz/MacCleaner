@@ -70,24 +70,22 @@ struct DisjointCategoriesTests {
         }
     }
 
-    /// `HiddenDataScanner` emits `~/.cache` as one entry covering the whole
-    /// directory, so no other scanner may claim anything inside it. Two roots
-    /// For this reason, the integration removed `~/.cache/yarn` and
-    /// `~/.cache/ms-playwright` from `PackageManagerScanner`.
-    @Test("no package manager root is nested inside ~/.cache, which Hidden Data owns")
-    func nothingNestedInsideDotCache() {
-        let nested = PackageManagerScanner.roots
-            .filter { $0.components.first == ".cache" && $0.components.count > 1 }
-            .map { $0.components.joined(separator: "/") }
+    /// `HiddenDataScanner` lists `~/.cache` child by child, so a package manager may
+    /// claim a child — and only a child, since a deeper path would sit inside one of
+    /// that scanner's rows. Until 20 Sep 2026 it listed the folder as one row, and
+    /// `~/.cache/yarn` and `~/.cache/ms-playwright` were taken off this list for it.
+    @Test("a package manager root under ~/.cache is an immediate child that Hidden Data skips")
+    func dotCacheRootsAreSkippedByHiddenData() {
+        let roots = PackageManagerScanner.roots.map(\.components).filter { $0.first == ".cache" }
+        let nested = roots.filter { $0.count != 2 }.map { $0.joined(separator: "/") }
+        #expect(nested.isEmpty, "\(nested) are not immediate children of ~/.cache")
 
-        #expect(
-            nested.isEmpty,
-            """
-            \(nested) sit inside ~/.cache, which HiddenDataScanner claims whole. \
-            Those bytes would be offered in both Package Manager Caches and \
-            Hidden & System Data.
-            """
-        )
+        let claimed = Set(roots.compactMap { $0.count == 2 ? $0[1] : nil })
+        let skipped = HiddenDataScanner.packageManagerOwnedDotCacheNames
+        #expect(claimed.subtracting(skipped).isEmpty,
+                "\(claimed.subtracting(skipped).sorted()) would be offered by both categories")
+        #expect(skipped.subtracting(claimed).isEmpty,
+                "\(skipped.subtracting(claimed).sorted()) would be offered by neither")
     }
 
     /// `HiddenDataScanner` lists every large dot-folder in the home whole. A package
