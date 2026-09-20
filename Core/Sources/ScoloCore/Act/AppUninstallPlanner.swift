@@ -100,6 +100,11 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     /// Package ownership is informational and a hard direct-removal gate. The
     /// package manager must remove its own receipt and app artifact together.
     public let managedPackage: ManagedPackage?
+    /// The installer package the application came from, when a receipt lists it —
+    /// see `InstallerReceipts`. Information for the review, never a gate: the
+    /// application is removed as any other, and the review says what the same
+    /// installer wrote elsewhere, which stays.
+    public var installerPackage: InstallerReceipts.Package?
     /// Candidate roots suppressed by an explicit exclusion or protected glob,
     /// plus shared group containers that cannot be attributed to one app safely.
     /// They are never included in the uninstall plan and are named in the UI.
@@ -200,6 +205,8 @@ public struct AppUninstallPlanner: Sendable {
     let darwinTemp: URL?
     private let homebrewExecutable: String?
     private let processRunner: ProcessRunner
+    /// Nil in fixture tests, which must not read this machine's receipts.
+    private let installerReceipts: InstallerReceipts?
     let protectedBundleIdentifiers: Set<String>
 
     public init() {
@@ -219,7 +226,8 @@ public struct AppUninstallPlanner: Sendable {
             protectedBundleIdentifiers: [
                 "com.tommasolaterza.Scolo",
                 Bundle.main.bundleIdentifier ?? "com.tommasolaterza.Scolo",
-            ]
+            ],
+            installerReceipts: InstallerReceipts()
         )
     }
 
@@ -232,7 +240,8 @@ public struct AppUninstallPlanner: Sendable {
         darwinTemp: URL?,
         homebrewExecutable: String? = nil,
         processRunner: ProcessRunner = ProcessRunner(),
-        protectedBundleIdentifiers: Set<String> = ["com.tommasolaterza.Scolo"]
+        protectedBundleIdentifiers: Set<String> = ["com.tommasolaterza.Scolo"],
+        installerReceipts: InstallerReceipts? = nil
     ) {
         self.home = home.standardizedFileURL
         self.userLibrary = home.appendingPathComponent("Library", isDirectory: true)
@@ -244,11 +253,23 @@ public struct AppUninstallPlanner: Sendable {
         self.homebrewExecutable = homebrewExecutable
         self.processRunner = processRunner
         self.protectedBundleIdentifiers = protectedBundleIdentifiers
+        self.installerReceipts = installerReceipts
     }
 
     public func plan(
-        applicationURL rawApplicationURL: URL,
+        applicationURL: URL,
         context: ScanContext = ScanContext()
+    ) async throws -> AppUninstallPlan {
+        var plan = try await planWithoutReceipts(applicationURL: applicationURL, context: context)
+        // Asked last, and only of an application the plan has accepted. It never
+        // refuses one: a receipt that cannot be read is a note that is not shown.
+        plan.installerPackage = await installerReceipts?.package(owning: plan.applicationURL)
+        return plan
+    }
+
+    private func planWithoutReceipts(
+        applicationURL rawApplicationURL: URL,
+        context: ScanContext
     ) async throws -> AppUninstallPlan {
         let fm = FileManager.default
         let applicationURL = rawApplicationURL.standardizedFileURL
