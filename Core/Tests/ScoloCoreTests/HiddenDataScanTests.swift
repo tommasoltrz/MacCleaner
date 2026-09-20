@@ -104,6 +104,23 @@ struct HiddenDataScanTests {
         #expect(packages.safeToRemoveBytes == packages.totalBytes)
     }
 
+    /// The Trash was a row here. Ticking it and cleaning up asked macOS to move the
+    /// Trash into the Trash, or, with that setting off, deleted `~/.Trash` outright
+    /// past Empty Trash, its confirmation, its receipts and Put Back.
+    @Test("the Trash is never a removable row; the Trash view owns it")
+    func trashIsNotOffered() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file(".Trash/old-report.pdf", bytes: 4 * 1024 * 1024)
+        // Large enough for the archive sweep, which must not walk back into the Trash.
+        try sandbox.file(".Trash/backup.dmg", bytes: 260 * 1024 * 1024)
+        try sandbox.file(".somebody/data.bin", bytes: 6 * 1024 * 1024)
+
+        let result = try await HiddenDataScanner(home: sandbox.home).scan(context: ScanContext())
+
+        #expect(result.entries.map(\.url.lastPathComponent) == [".somebody"])
+        #expect(!result.entries.contains { $0.url.path.contains("/.Trash") })
+    }
+
     @Test("an excluded child of ~/.cache is not listed, and the rest still is")
     func excludedChildIsSkipped() async throws {
         let sandbox = try Sandbox()
