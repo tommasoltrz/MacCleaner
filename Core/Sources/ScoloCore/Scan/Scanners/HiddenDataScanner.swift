@@ -265,8 +265,11 @@ public struct HiddenDataScanner: CategoryScanner {
             let total = own.allocatedBytes + children.reduce(0) { $0 + $1.allocatedBytes }
             guard total >= Threshold.any else { continue }
 
-            var qualifier = "\(model.runtime) model · "
-                + FileEntry.abbreviate(model.primary.deletingLastPathComponent().path)
+            var qualifier = model.memberNames.count == 1
+                ? "\(model.runtime) model"
+                : "\(model.memberNames.count) \(model.runtime) models that share their weights: "
+                    + model.memberNames.joined(separator: ", ")
+            qualifier += " · " + FileEntry.abbreviate(model.primary.deletingLastPathComponent().path)
             if model.sharedBytes > 0 {
                 qualifier += " · \(ByteFormatting.string(model.sharedBytes)) shared with another model stays"
             }

@@ -65,8 +65,10 @@ struct LocalModelStoresTests {
 
     // MARK: - Ollama
 
-    @Test("two Ollama tags share their weights: neither frees them, and both say so")
-    func ollamaSharedLayersAreNotOffered() throws {
+    /// Two tags of one model share the weights. As two rows, each read a few
+    /// kilobytes and the gigabytes could be removed through neither.
+    @Test("Ollama tags that share their weights are one row; a shared licence does not join models")
+    func ollamaSetsShareWeights() throws {
         let sandbox = try Sandbox()
         try sandbox.file(".ollama/models/blobs/sha256-weights", bytes: 8 * mb)
         try sandbox.file(".ollama/models/blobs/sha256-cfgA", bytes: 4096)
@@ -77,15 +79,24 @@ struct LocalModelStoresTests {
         try sandbox.ollamaManifest("registry.ollama.ai/someone/tuned/v1", config: "cfgA", layers: ["solo"])
         // The user's key lives beside the models and is nobody's to offer.
         try sandbox.file(".ollama/id_ed25519", bytes: 400)
+        // Ollama reads `manifests/*/*/*/*` and nothing else. A manifest-shaped file
+        // a level up is not a model it knows, so it is not one here.
+        try sandbox.ollamaManifest("registry.ollama.ai/library/stray", config: "cfgA", layers: ["solo"])
 
         let models = LocalModelStores.ollama(home: sandbox.home)
 
-        #expect(models.map(\.name) == ["llama3:8b", "llama3:latest", "someone/tuned:v1"])
-        let latest = try #require(models.first { $0.name == "llama3:latest" })
-        #expect(latest.exclusive.map(\.lastPathComponent) == ["sha256-cfgB"])
-        #expect(latest.sharedBytes >= Int64(8 * mb))
-        let tuned = try #require(models.first { $0.name == "someone/tuned:v1" })
-        // `cfgA` is also `llama3:8b`'s, so only the weights are this model's alone.
+        #expect(models.map(\.memberNames) == [["llama3:8b", "llama3:latest"], ["someone/tuned:v1"]])
+        let llama = try #require(models.first)
+        #expect(llama.name == "llama3:8b + llama3:latest")
+        #expect(llama.primary.lastPathComponent == "8b")
+        // The other tag's manifest, the weights the two share, and the one config
+        // that is this set's alone. `cfgA` is also `tuned`'s: it stays.
+        #expect(Set(llama.exclusive.map(\.lastPathComponent)) == ["latest", "sha256-weights", "sha256-cfgB"])
+        #expect(llama.sharedBytes > 0 && llama.sharedBytes < Int64(mb))
+
+        // `cfgA` is four kilobytes. Sharing it does not make `tuned` part of llama3:
+        // every Ollama model carries the same licence text somewhere.
+        let tuned = try #require(models.last)
         #expect(tuned.exclusive.map(\.lastPathComponent) == ["sha256-solo"])
         #expect(!models.flatMap(\.exclusive).contains { $0.lastPathComponent == "id_ed25519" })
     }
@@ -94,7 +105,7 @@ struct LocalModelStoresTests {
 
     /// The layout read off this Mac: a 261 MB model in a repository folder that
     /// measured 0 bytes.
-    @Test("a hub repository of links offers the shared-store blobs only it uses")
+    @Test("hub repositories that share a large blob are one row; a blob with no record stays")
     func hubSharedBlobsFollowTheirRefs() throws {
         let sandbox = try Sandbox()
         try sandbox.hubSharedBlob("a5only", bytes: 5 * mb, usedBy: ["models--org--alone"])
@@ -108,13 +119,17 @@ struct LocalModelStoresTests {
 
         let models = LocalModelStores.huggingFace(home: sandbox.home)
 
-        #expect(models.map(\.name) == ["org/alone", "org/other"])
-        let alone = try #require(models.first { $0.name == "org/alone" })
-        #expect(Set(alone.exclusive.map(\.lastPathComponent)) == ["a5only", "a5only.refs", "a5only.lock"])
-        #expect(alone.sharedBytes >= Int64(7 * mb))
-        let other = try #require(models.first { $0.name == "org/other" })
-        #expect(other.exclusive.isEmpty, "one blob is shared, the other has lost its record")
-        #expect(other.sharedBytes >= Int64(10 * mb))
+        let set = try #require(models.first)
+        #expect(models.count == 1)
+        #expect(set.memberNames == ["org/alone", "org/other"])
+        #expect(set.primary.lastPathComponent == "models--org--alone")
+        #expect(Set(set.exclusive.map(\.lastPathComponent)) == [
+            "models--org--other",
+            "a5only", "a5only.refs", "a5only.lock",
+            "b7both", "b7both.refs", "b7both.lock"
+        ])
+        // `c9lost` has no record of who uses it, so it is nobody's to remove.
+        #expect(set.sharedBytes >= Int64(3 * mb) && set.sharedBytes < Int64(4 * mb))
     }
 
     @Test("a classic hub repository keeps its own blobs, so the folder is the model")
@@ -173,18 +188,17 @@ struct LocalModelStoresTests {
         #expect(CleanupService.removalTargets(for: gemma, removeProtectedAppData: false)
             .map(\.url.lastPathComponent).sorted() == ["4b", "sha256-cfg", "sha256-weights"])
 
-        let alone = try #require(hidden.entries.first { $0.displayName == "org/alone" })
-        // Five megabytes of its own; the seven it shares are named and kept.
-        #expect(alone.totalBytesIncludingChildren >= Int64(5 * mb))
-        #expect(alone.totalBytesIncludingChildren < Int64(7 * mb))
-        #expect(alone.parentDisplay.contains("shared with another model stays"))
-        // `org/other` owns nothing alone: no row, since removing it would free nothing.
-        #expect(!hidden.entries.contains { $0.displayName == "org/other" })
+        // The two repositories share seven megabytes, so they are one row and the
+        // twelve go together. Apart, neither could have removed the seven.
+        let set = try #require(hidden.entries.first { $0.displayName == "org/alone + org/other" })
+        #expect(set.totalBytesIncludingChildren >= Int64(12 * mb))
+        #expect(set.parentDisplay.hasPrefix("2 Hugging Face models that share their weights"))
+        #expect(set.removesAsUnit)
 
         let offered = (hidden.entries + system.entries).flatMap { [$0] + $0.children }.map(\.url.path)
         #expect(!offered.contains { $0.hasSuffix("/.ollama") || $0.hasSuffix("id_ed25519") })
         #expect(!offered.contains { $0.hasSuffix("/.cache/huggingface") })
-        #expect(!offered.contains { $0.hasSuffix("b7both") })
+        #expect(offered.filter { $0.hasSuffix("b7both") }.count == 1, "offered once, by the set")
         #expect(hidden.entries.contains { $0.url.lastPathComponent == "xet" })
         #expect(system.entries.map(\.url.lastPathComponent) == ["sometool"])
         #expect(hidden.safeToRemoveBytes == 0)
