@@ -28,8 +28,13 @@ public struct ApplicationLeftoversScanner: CategoryScanner {
             let children = group.items.map(\.fileEntry)
             return FileEntry(
                 url: firstItem.url,
-                displayName: group.bundleIdentifier,
-                parentDisplay: "No installed application owner",
+                // The system's name for the container when it has one, and the
+                // identifier always: the name is macOS's, the identifier is what the
+                // classification rests on.
+                displayName: group.displayName ?? group.bundleIdentifier,
+                parentDisplay: group.displayName == nil
+                    ? "No installed application owner"
+                    : "\(group.bundleIdentifier) · No installed application owner",
                 kind: .folder,
                 allocatedBytes: 0,
                 removalAction: .orphanedApplication(
