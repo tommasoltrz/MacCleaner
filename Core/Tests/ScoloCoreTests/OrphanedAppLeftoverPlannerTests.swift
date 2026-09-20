@@ -158,8 +158,19 @@ struct OrphanedAppLeftoverPlannerTests {
                                   identifier: "com.apple.something")
         let silent = try container("FFFFFFFF-0000-1111-2222-333333333333", identifier: nil)
 
+        // The other layout in use: the identifier nested under `MCMMetadataInfo`.
+        let nested = sandbox.home.appendingPathComponent(
+            "Library/Containers/ABABABAB-1111-2222-3333-444444444444"
+        )
+        _ = try sandbox.write("Library/Containers/ABABABAB-1111-2222-3333-444444444444/Data/save.db")
+        try PropertyListSerialization.data(
+            fromPropertyList: ["MCMMetadataInfo": ["MCMMetadataIdentifier": "org.vendor.nested"]],
+            format: .binary, options: 0
+        ).write(to: nested.appendingPathComponent(".com.apple.containermanagerd.metadata.plist"))
+
         let plan = try await sandbox.planner().plan()
 
+        #expect(plan.groups.contains { $0.id == "org.vendor.nested" })
         let group = try #require(plan.groups.first { $0.id == "it.vendor.pokerclient" })
         #expect(group.items.map(\.url.standardizedFileURL.path) == [gone.standardizedFileURL.path])
         #expect(group.items.first?.isProtectedUserData == true)
@@ -221,6 +232,23 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(plan.groups.map(\.id) == ["net.scribus"])
         #expect(plan.groups.first?.items.map(\.url.standardizedFileURL.path)
             == [state.standardizedFileURL.path])
+    }
+
+    /// macOS gives a sandbox container the name of its application — that is why
+    /// Finder shows "PokerStars" for `~/Library/Containers/94F36404-…`. It is the
+    /// system's name for the folder, not a guess about an application that is gone.
+    /// Read off the owner's Mac on 20 Sep 2026, WhatsApp's came back with a
+    /// left-to-right mark in front of it.
+    @Test("a leftover is named by what macOS calls its container, or not at all")
+    func systemNames() {
+        let name = OrphanedAppLeftoverPlanner.usableSystemName
+        #expect(name("PokerStars", "94F36404-A18D-4D25-934C-60BF64DCB120") == "PokerStars")
+        #expect(name("\u{200E}WhatsApp", "net.whatsapp.WhatsApp") == "WhatsApp")
+        // No name of its own: the system hands back the folder's.
+        #expect(name("352FF1C8-7400-43BF-8E27-9D4C6D56748B", "352FF1C8-7400-43BF-8E27-9D4C6D56748B") == nil)
+        #expect(name("net.scribus.savedState", "net.scribus.savedState") == nil)
+        #expect(name("11111111-2222-3333-4444-555555555555", "other-folder") == nil)
+        #expect(name("  ", "folder") == nil)
     }
 
     @Test("an installed owner protects its identifier and helper identifiers")

@@ -7,6 +7,11 @@ public struct OrphanedAppLeftoverPlan: Sendable, Equatable {
         public var id: String { bundleIdentifier }
         public let bundleIdentifier: String
         public let items: [AppUninstallPlan.Item]
+        /// What macOS calls this application's container, when it calls it anything
+        /// — see `OrphanedAppLeftoverPlanner.usableSystemName`. The identifier is
+        /// always shown beside it: the name is the system's, the identifier is what
+        /// the classification rests on.
+        public var displayName: String? = nil
 
         public var totalBytes: Int64 {
             items.reduce(0) { $0 + $1.allocatedBytes }
@@ -241,7 +246,11 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
                     == .orderedAscending
             }
             return OrphanedAppLeftoverPlan.Group(
-                bundleIdentifier: identifier, items: items
+                bundleIdentifier: identifier, items: items,
+                displayName: items.lazy
+                    .filter { $0.category == .containers }
+                    .compactMap { Self.systemName(of: $0.url) }
+                    .first
             )
         }.sorted { left, right in
             if left.totalBytes != right.totalBytes { return left.totalBytes > right.totalBytes }
@@ -411,6 +420,33 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         )
     }
 
+    /// The name macOS gives a container folder, if it gives it one.
+    ///
+    /// macOS names a sandbox container after its application, which is why Finder
+    /// shows "PokerStars" for `~/Library/Containers/94F36404-…`. The application is
+    /// gone, so Scolo has no name of its own to offer and will not make one up from
+    /// an identifier; but this is the system's name for a folder that is still
+    /// here, read through `URLResourceKey.localizedNameKey`, and it needs no Full
+    /// Disk Access. Only containers have one: a saved state or a group container
+    /// comes back as its own folder name, and the row keeps its identifier.
+    static func systemName(of url: URL) -> String? {
+        guard let localized = (try? url.resourceValues(forKeys: [.localizedNameKey]))?.localizedName
+        else { return nil }
+        return usableSystemName(localized, url.lastPathComponent)
+    }
+
+    /// `nil` when the system had nothing to say: it handed back the folder's own
+    /// name, or a UUID. WhatsApp's came back with a left-to-right mark in front of
+    /// it, so invisible formatting characters are dropped.
+    static func usableSystemName(_ localized: String, _ folderName: String) -> String? {
+        let cleaned = String(localized.unicodeScalars.filter {
+            $0.properties.generalCategory != .format
+        }).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, cleaned != folderName, UUID(uuidString: cleaned) == nil
+        else { return nil }
+        return cleaned
+    }
+
     /// Group containers named `<Team ID>.<identifier>`, keyed by that identifier.
     ///
     /// Group containers were never offered, for a sound reason: the name is
@@ -500,7 +536,11 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             guard let data = try? Data(contentsOf: record),
                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
                     as? [String: Any],
-                  let raw = plist["MCMMetadataIdentifier"] as? String,
+                  // Two layouts are in use: the key at the top, as on the owner's
+                  // Mac, and nested under `MCMMetadataInfo`, which Purge's reader
+                  // also allows for. Anything else names nobody.
+                  let raw = (plist["MCMMetadataIdentifier"] as? String)
+                    ?? ((plist["MCMMetadataInfo"] as? [String: Any])?["MCMMetadataIdentifier"] as? String),
                   let identifier = AppUninstallPlanner.verifiedBundleIdentifier(raw)
             else { continue }
             found[identifier, default: []].append(folder.standardizedFileURL.path)

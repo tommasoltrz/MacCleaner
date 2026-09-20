@@ -269,16 +269,19 @@ struct AppUninstallerView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    // The identifier is what is known. The application is gone, and
-                    // a friendlier name would be a guess about something not here.
-                    Text(group.bundleIdentifier)
+                    // What macOS calls the container when it calls it anything;
+                    // otherwise the identifier, which is what is known. The
+                    // application is gone, and a name made up from its identifier
+                    // would be a guess about something that is not here.
+                    Text(group.displayName ?? group.bundleIdentifier)
                         .font(.mcBody)
                         .foregroundStyle(Token.Text.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if holdsUserData { Badge(text: "includes user data").fixedSize() }
                 }
-                Text("No installed application owner · "
+                Text((group.displayName == nil ? "" : "\(group.bundleIdentifier) · ")
+                     + "No installed application owner · "
                      + (group.items.count == 1 ? "1 file" : "\(group.items.count) files"))
                     .font(.mcMonoSmall)
                     .foregroundStyle(Token.Text.tertiary)
