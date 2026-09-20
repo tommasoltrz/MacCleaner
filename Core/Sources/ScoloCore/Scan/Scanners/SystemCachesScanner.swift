@@ -174,6 +174,11 @@ public struct SystemCachesScanner: CategoryScanner {
                    Self.packageManagerOwnedDotCacheNames.contains(url.lastPathComponent) {
                     continue
                 }
+                // Account and identity daemons' caches — see `IdentityState`. Only
+                // under the cache root: a log is a log, whoever wrote it.
+                if root == cachesRoot, IdentityState.isIdentityCache(named: url.lastPathComponent) {
+                    continue
+                }
                 // Model stores are listed model by model, by Hidden & System Data.
                 if root == dotCacheRoot,
                    LocalModelStores.dotCacheFolders.contains(url.lastPathComponent) {

@@ -130,6 +130,40 @@ struct SystemCachesScanTests {
         #expect(result.entries.map(\.url.lastPathComponent) == ["offer"])
     }
 
+    /// "Everything in ~/Library/Caches regenerates" is true, and for one family it is
+    /// the wrong question. What Apple's account and identity daemons regenerate is
+    /// an *authorization*, which they get by going back to the login keychain — the
+    /// storm of "… wants to use the login keychain" prompts. Nine of these folders
+    /// were on this Mac on 20 Sep 2026, every one offered as safe and ticked.
+    @Test("the account and identity daemons' caches are never offered")
+    func identityCachesAreNotOffered() async throws {
+        let sandbox = try Sandbox()
+        for name in [
+            "com.apple.akd", "com.apple.accountsd", "com.apple.appleaccountd",
+            "com.apple.amsaccountsd", "com.apple.itunescloudd", "com.apple.icloudwebd",
+            "com.apple.iCloudNotificationAgent",
+            "com.apple.AuthenticationServicesCore.AuthenticationServicesAgent",
+            "PassKit",
+            // macOS refuses to remove these two even with Full Disk Access.
+            "CloudKit", "FamilyCircle",
+            // Not on any list: refused for what its name says it is.
+            "com.apple.SomeFutureAuthKitHelper"
+        ] {
+            try sandbox.file("Library/Caches/\(name)/state.db")
+        }
+        try sandbox.file("Library/Caches/com.apple.helpd/index")
+        try sandbox.file("Library/Caches/com.example.app/blob")
+        // A log is a log, whoever wrote it.
+        try sandbox.file("Library/Logs/com.apple.akd/today.log")
+
+        let result = try await sandbox.scanner().scan(context: ScanContext())
+
+        #expect(Set(result.entries.map(\.url.lastPathComponent))
+            == ["com.apple.helpd", "com.example.app", "com.apple.akd"])
+        #expect(result.entries.first { $0.url.lastPathComponent == "com.apple.akd" }?
+            .url.path.contains("/Library/Logs/") == true)
+    }
+
     @Test("a Mac with no ~/.cache is an ordinary Mac")
     func missingDotCacheIsNotAnError() async throws {
         let sandbox = try Sandbox()
