@@ -621,7 +621,11 @@ public struct ApplicationsScanner: CategoryScanner {
                     url: url,
                     kind: .cache,
                     allocatedBytes: size.allocatedBytes,
-                    lastOpened: nil,
+                    // Never `nil` for want of asking. A missing date renders as the
+                    // orange "Never opened", the strongest hint the design has that
+                    // a row is safe to remove, and every carved cache wore it —
+                    // WhatsApp's, Pages', Chrome's — because no date was passed.
+                    lastOpened: lastOpenedDate(for: url),
                     isRegenerable: true
                 ))
             }
@@ -644,7 +648,7 @@ public struct ApplicationsScanner: CategoryScanner {
                 displayName: curation.remainderName,
                 kind: .folder,
                 allocatedBytes: preserveBytes,
-                lastOpened: nil,
+                lastOpened: lastOpenedDate(for: root),
                 protectionReason: .userData,
                 childCount: remaining.count
             ))

@@ -162,6 +162,12 @@ public extension CategoryScanner {
     /// *last opened*. It is the closest signal macOS still exposes without Full Disk
     /// Access, and it errs toward keeping files rather than deleting them.
     func lastOpenedDate(for url: URL) -> Date? {
+        Self.lastOpenedDate(for: url)
+    }
+
+    /// The same answer for code with no scanner instance to ask — the static
+    /// helpers that split an application's folders into rows.
+    static func lastOpenedDate(for url: URL) -> Date? {
         if let item = MDItemCreate(nil, url.path as CFString) {
             if let used = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date {
                 return used

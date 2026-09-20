@@ -204,6 +204,12 @@ struct ApplicationsScanTests {
         #expect(remainder.protectionReason == .userData)
         #expect(remainder.url.lastPathComponent == "com.example.boxed")
 
+        // A missing date renders as the orange "Never opened", the design's strongest
+        // hint that a row is safe to remove. Every carved cache wore it, because the
+        // split passed no date at all — seen on WhatsApp's caches on 20 Sep 2026.
+        #expect(caches.allSatisfy { $0.lastOpened != nil })
+        #expect(remainder.lastOpened != nil)
+
         // Arithmetic, not an estimate: the two halves are the container, once.
         let whole = try await AllocatedSizeMeasurer()
             .measure(sandbox.home.appendingPathComponent("Library/Containers/com.example.boxed"))
