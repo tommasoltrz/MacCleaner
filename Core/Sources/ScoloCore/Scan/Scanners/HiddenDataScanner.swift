@@ -144,6 +144,10 @@ public struct HiddenDataScanner: CategoryScanner {
         // put it here. Claiming it keeps the archive sweep out.
         claimed.append(url(Root.dotCache).path)
 
+        // 4b. Locally stored models, one row for each, offering what only that model
+        // refers to — see `LocalModelStores`. Their stores are claimed whole.
+        try await appendLocalModels(context: context, to: &found, claiming: &claimed)
+
         // 5/6. Local cloud mirrors. Not marked regenerable: a file that has not
         // finished uploading exists only here.
         for components in [Root.mobileDocuments, Root.cloudKit] {
@@ -224,6 +228,73 @@ public struct HiddenDataScanner: CategoryScanner {
         }
     }
 
+    /// One row for each model in Ollama's, Hugging Face's and LM Studio's stores.
+    ///
+    /// The row is what stands for the model in its store; its children are the files
+    /// only that model refers to, which clean-up removes with it. A blob shared with
+    /// another model is not a child: it stays, and the row says how much stays.
+    ///
+    /// Never regenerable. A model is a download of gigabytes that its publisher may
+    /// since have withdrawn or gated, so this is the user's to judge, and the
+    /// category is review-only in any case.
+    private func appendLocalModels(
+        context: ScanContext, to found: inout Found, claiming claimed: inout [String]
+    ) async throws {
+        for folder in LocalModelStores.homeDotFolders {
+            claimed.append(home.appendingPathComponent(folder).path)
+        }
+        let huggingFace = home.appendingPathComponent(".cache/huggingface")
+
+        for model in LocalModelStores.all(home: home) {
+            try Task.checkCancellation()
+            guard !context.isExcluded(model.primary) else { continue }
+            let own = try await context.measurer.measure(model.primary)
+            found.unreadableCount += own.unreadableCount
+            guard !own.containsProtectedPattern else { continue }
+
+            var children: [FileEntry] = []
+            for url in model.exclusive where !context.isExcluded(url) {
+                let size = try await context.measurer.measure(url)
+                children.append(FileEntry(
+                    url: url, kind: .file, allocatedBytes: size.allocatedBytes,
+                    lastOpened: lastOpenedDate(for: url)
+                ))
+            }
+            // A model whose every byte is shared frees nothing, and a row reading
+            // "0 B" offers nothing.
+            let total = own.allocatedBytes + children.reduce(0) { $0 + $1.allocatedBytes }
+            guard total >= Threshold.any else { continue }
+
+            var qualifier = "\(model.runtime) model · "
+                + FileEntry.abbreviate(model.primary.deletingLastPathComponent().path)
+            if model.sharedBytes > 0 {
+                qualifier += " · \(ByteFormatting.string(model.sharedBytes)) shared with another model stays"
+            }
+            let isFolder = (try? model.primary.resourceValues(forKeys: [.isDirectoryKey]))?
+                .isDirectory == true
+            found.entries.append(FileEntry(
+                url: model.primary,
+                displayName: model.name,
+                parentDisplay: qualifier,
+                kind: isFolder ? .folder : .file,
+                allocatedBytes: own.allocatedBytes,
+                lastOpened: children.compactMap(\.lastOpened).max()
+                    ?? lastOpenedDate(for: model.primary),
+                childCount: children.isEmpty ? nil : children.count,
+                children: children
+            ))
+        }
+
+        // What else Hugging Face keeps beside the hub (its chunk cache, logs), since
+        // System Caches leaves the folder to this scanner.
+        let others = try await context.measurer.measureChildren(of: huggingFace)
+        for (child, measurement) in others where child.lastPathComponent != "hub" {
+            append(child, kind: .cache, measurement: measurement,
+                   lastOpened: lastOpenedDate(for: child), minimumBytes: Threshold.any,
+                   context: context, to: &found)
+        }
+    }
+
     private func appendHiddenDirectories(
         context: ScanContext,
         to found: inout Found,
@@ -235,7 +306,9 @@ public struct HiddenDataScanner: CategoryScanner {
 
         for child in contents.sorted(by: { $0.path < $1.path }) {
             let name = child.lastPathComponent
-            guard name.hasPrefix("."), !Self.dotDirectorySkipList.contains(name) else { continue }
+            guard name.hasPrefix("."), !Self.dotDirectorySkipList.contains(name),
+                  !LocalModelStores.homeDotFolders.contains(name)
+            else { continue }
             guard (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
             else { continue }
 
