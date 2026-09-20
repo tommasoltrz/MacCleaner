@@ -15,6 +15,7 @@ import ScoloCore
 //     swift run scolo-cli measure <path>
 //     swift run scolo-cli apps
 //     swift run scolo-cli uninstallable
+//     swift run scolo-cli models
 //
 // `snapshot` and `growth` write to and read from the same measurement history the
 // app keeps. A snapshot taken here is tagged `cli`, so it is easy to see — and to
@@ -42,6 +43,8 @@ struct CLI {
                 try await apps()
             case "uninstallable":
                 uninstallable()
+            case "models":
+                models()
             case "measure":
                 guard arguments.count > 1 else {
                     throw CLIError.usage("measure needs a path")
@@ -55,7 +58,7 @@ struct CLI {
             default:
                 print("scolo-cli — ScoloCore engine harness")
                 print("commands: volume | snapshots | breakdown | snapshot"
-                      + " | growth [previous|7d|cleanup] | scan | apps | uninstallable"
+                      + " | growth [previous|7d|cleanup] | scan | apps | uninstallable | models"
                       + " | measure <path>"
                       + " | reclaim <path>")
             }
@@ -99,6 +102,24 @@ struct CLI {
                       + "\(child.displayName)  (\(FileEntry.abbreviate(child.url.path)))"
                       + (child.childCount.map { " · \($0) items" } ?? ""))
             }
+        }
+    }
+
+    /// Locally stored models: what each occupies alone, and what it shares and keeps.
+    static func models() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let found = LocalModelStores.all(home: home)
+        if found.isEmpty { print("  no Ollama, Hugging Face or LM Studio models found") }
+        func size(_ url: URL) -> Int64 {
+            let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+            return Int64(values?.totalFileAllocatedSize ?? 0)
+        }
+        for model in found {
+            let alone = model.exclusive.reduce(Int64(0)) { $0 + size($1) }
+            print("  \(model.runtime.padding(toLength: 13, withPad: " ", startingAt: 0)) \(model.name)")
+            print("      \(model.primary.path.replacingOccurrences(of: home.path, with: "~"))")
+            print("      \(model.exclusive.count) files only it uses · \(ByteFormatting.string(alone))"
+                  + "   shared and kept · \(ByteFormatting.string(model.sharedBytes))")
         }
     }
 

@@ -174,6 +174,11 @@ public struct SystemCachesScanner: CategoryScanner {
                    Self.packageManagerOwnedDotCacheNames.contains(url.lastPathComponent) {
                     continue
                 }
+                // Model stores are listed model by model, by Hidden & System Data.
+                if root == dotCacheRoot,
+                   LocalModelStores.dotCacheFolders.contains(url.lastPathComponent) {
+                    continue
+                }
 
                 unreadableCount += measurement.unreadableCount
 
