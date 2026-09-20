@@ -160,6 +160,36 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
         }
     }
 
+    /// This category as one of the Scanner's tabs shows it: the same category, holding
+    /// only the rows that tab counts.
+    ///
+    /// The Scanner's three tabs are one outline. "Safe to Remove" and "Needs Review"
+    /// used to be a flat list with the categories thrown away, which answered "what
+    /// can I act on" and lost "where is it" — the first thing anybody asks of a row
+    /// called `com.apple.helpd`. The rows are `tileRows`, so a category's figure
+    /// under a tab is exactly that tab's share of the tile, and the two filtered
+    /// copies of a category are the category, once.
+    public func filtered(safeToRemove wantSafe: Bool) -> ScanCategoryResult {
+        var copy = self
+        copy.entries = tileRows(safeToRemove: wantSafe)
+        copy.totalBytes = copy.entries.reduce(0) { $0 + $1.displayBytes }
+        copy.holdsOnlySafeRows = wantSafe
+        if copy.entries.isEmpty, availability == .available { copy.availability = .empty }
+        return copy
+    }
+
+    /// Set on the copy `filtered(safeToRemove: true)` returns. Its rows are safe by
+    /// construction, and one of them can be a cache lifted out of an application,
+    /// whose category is not a safe one — so the category cannot answer for it.
+    public private(set) var holdsOnlySafeRows = false
+
+    /// Whether a top-level row of this category is counted under Safe to remove,
+    /// which is what its green badge says. A child's badge asks
+    /// `FileEntry.regeneratesSafely`.
+    public func isCountedSafe(_ entry: FileEntry) -> Bool {
+        holdsOnlySafeRows || countsAsSafe(entry)
+    }
+
     /// A child the parent's own row does not speak for — see
     /// `FileEntry.regeneratesSafely`, which the Scanner's badge reads too.
     private static func isSafeChild(_ child: FileEntry) -> Bool {

@@ -27,12 +27,14 @@ struct ScannerView: View {
                     // A scan that found nothing has nothing to filter, and the
                     // outline is the only one of the three that still has something
                     // to say — a category's own message, including why it is empty.
-                    switch results.totalBytes > 0 ? model.scanFilter : .all {
-                    case .all:
-                        categoryOutline(results)
-                    case .safeToRemove, .needsReview:
-                        FilteredEntryList(model: model, filter: model.scanFilter)
+                    let filter = results.totalBytes > 0 ? model.scanFilter : .all
+                    if filter != .all {
+                        FilteredSummary(model: model, filter: filter)
                     }
+                    // One outline for all three tabs. The other two are this one
+                    // with the rows that tab does not count taken out of each
+                    // category, and the categories left empty taken out with them.
+                    categoryOutline(categories(of: results, for: filter))
                 } else {
                     emptyState
                 }
@@ -91,10 +93,35 @@ struct ScannerView: View {
 
     // MARK: - Sections
 
-    private func categoryOutline(_ results: ScanResults) -> some View {
+    /// The scan's categories as one tab shows them — see
+    /// `ScanCategoryResult.filtered(safeToRemove:)`. `All` keeps every category,
+    /// an empty or unavailable one included, because its message is the point there.
+    private func categories(
+        of results: ScanResults, for filter: AppModel.ScanFilter
+    ) -> [ScanCategoryResult] {
+        guard filter != .all else { return results.categories }
+        return results.categories
+            .map { $0.filtered(safeToRemove: filter == .safeToRemove) }
+            .filter { !$0.entries.isEmpty }
+    }
+
+    @ViewBuilder
+    private func categoryOutline(_ categories: [ScanCategoryResult]) -> some View {
+        if categories.isEmpty {
+            Text("The last scan found nothing in this group.")
+                .font(.mcBody)
+                .foregroundStyle(Token.Text.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 20)
+        } else {
+            outline(categories)
+        }
+    }
+
+    private func outline(_ categories: [ScanCategoryResult]) -> some View {
         GroupedBox {
             VStack(spacing: 0) {
-                ForEach(Array(results.categories.enumerated()), id: \.element.id) { index, category in
+                ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
                     if index > 0 {
                         Divider().foregroundStyle(Token.Fill.boxBorder)
                     }
@@ -122,6 +149,7 @@ struct ScannerView: View {
             if isExpanded, !category.entries.isEmpty {
                 FileTable(
                     entries: category.entries,
+                    isSafeToRemove: category.isCountedSafe,
                     selection: $model.scannerSelection,
                     userDataRemovalOverrides: $model.userDataRemovalOverrides,
                     onUninstallApplication: { model.planAppUninstall($0.url) }
