@@ -413,3 +413,69 @@ struct WindowDragDisabled: NSViewRepresentable {
         override var mouseDownCanMoveWindow: Bool { false }
     }
 }
+
+/// Centres the window's traffic lights in the header band.
+///
+/// They are laid out for the 28pt title bar this window does not draw, which puts
+/// them across the sidebar panel's top-left corner — the panel is inset 8pt and its
+/// radius is 14, so the close button lands on the curve. Centring them in the band
+/// clears it and lines them up with the title and actions beside them.
+///
+/// Positioned in window coordinates and converted into whichever view AppKit has
+/// made their parent, so this does not depend on the private view hierarchy being
+/// shaped any particular way. Re-applied on resize, because AppKit lays them out
+/// again each time.
+struct TrafficLightAlignment: NSViewRepresentable {
+    let bandHeight: CGFloat
+
+    func makeNSView(context: Context) -> NSView { Aligner(bandHeight: bandHeight) }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? Aligner)?.align()
+    }
+
+    private final class Aligner: NSView {
+        private let bandHeight: CGFloat
+        private var observer: NSObjectProtocol?
+
+        init(bandHeight: CGFloat) {
+            self.bandHeight = bandHeight
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        // No `deinit`: the observer is torn down when the view leaves its window,
+        // which is the same moment and is main-actor isolated, where a deinit is
+        // not — it cannot touch this property at all under strict concurrency.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+                self.observer = nil
+            }
+            guard let window else { return }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.align() }
+            }
+            align()
+        }
+
+        func align() {
+            guard let window else { return }
+            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
+                .compactMap { window.standardWindowButton($0) }
+            // AppKit is y-up, so the band's centre is measured down from the top.
+            let centreInWindow = window.frame.height - bandHeight / 2
+            for button in buttons {
+                guard let parent = button.superview else { continue }
+                let centre = parent.convert(NSPoint(x: 0, y: centreInWindow), from: nil).y
+                let target = centre - button.frame.height / 2
+                guard abs(button.frame.origin.y - target) > 0.5 else { continue }
+                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: target))
+            }
+        }
+    }
+}

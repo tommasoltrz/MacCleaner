@@ -36,8 +36,16 @@ struct MainWindow: View {
             contentColumn
         }
         .animation(.smooth(duration: 0.22), value: isSidebarExpanded)
+        // The whole layout reaches the top of the window, not just the background
+        // behind it. Without this SwiftUI keeps the hidden title bar's height as
+        // safe area, so the sidebar panel began about 36pt down and the traffic
+        // lights sat above it on the shell rather than on the panel.
+        .ignoresSafeArea(.container, edges: .top)
         // Under everything, through the title bar: the shell is the window.
         .background(Token.shell.ignoresSafeArea())
+        // The lights are laid out for a 28pt title bar and would land on the
+        // panel's rounded corner. This centres them in the 52pt band instead.
+        .background(TrafficLightAlignment(bandHeight: Token.Size.headerBand))
         // Over the whole content area, inside the safe area, so the toolbar above
         // keeps its glass and its controls. `.disabled` on the detail pane used to
         // do this job, and it reached the toolbar through the environment.
