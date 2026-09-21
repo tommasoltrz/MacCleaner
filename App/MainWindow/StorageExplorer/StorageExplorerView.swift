@@ -56,6 +56,21 @@ struct StorageExplorerView: View {
                 .frame(minWidth: 260, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
                 .disabled(isMeasurementBlocked || model.isLoading)
 
+            // The selection's readout and its undo, from the window's footer, which
+            // is gone. Only while there is a selection: this bar is already full.
+            if !model.selectedItems.isEmpty {
+                Text("\(model.selectedItems.count) selected · "
+                     + ByteFormatting.string(model.selectedBytes))
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                Button("Deselect All") { model.selection.removeAll() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .fixedSize()
+                    .disabled(isMeasurementBlocked)
+            }
+
             Picker("Presentation", selection: $presentation) {
                 ForEach(StorageExplorerPresentation.allCases) { presentation in
                     Text(presentation.rawValue).tag(presentation)

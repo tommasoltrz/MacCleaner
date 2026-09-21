@@ -158,12 +158,28 @@ struct PhotoDuplicatesView: View {
     private var groups: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
-                if let results = model.photoResults, results.skippedCount > 0 {
-                    Text(summary(results))
-                        .font(.mcSubtitle)
-                        .foregroundStyle(Token.Text.tertiary)
-                        .padding(.horizontal, 2)
+                // The selection buttons, from the window's footer, which is gone.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let results = model.photoResults, results.skippedCount > 0 {
+                        Text(summary(results))
+                            .font(.mcSubtitle)
+                            .foregroundStyle(Token.Text.tertiary)
+                    }
+                    Spacer()
+                    Button("Select All") { model.selectAllRemovablePhotos() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.photoGroups.isEmpty)
+                    // This action excludes groups that need manual review.
+                    Button("Certain Only (\(model.certainRemovableCount))") {
+                        model.selectCertainPhotosOnly()
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.certainRemovableCount == 0)
+                    Button("Deselect All") { model.deselectAllPhotos() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.photoSelection.isEmpty)
                 }
+                .padding(.horizontal, 2)
                 ForEach(model.photoGroups) { group in
                     groupCard(group)
                 }

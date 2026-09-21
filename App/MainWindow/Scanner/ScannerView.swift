@@ -49,10 +49,25 @@ struct ScannerView: View {
     // MARK: - Header line
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 10) {
             Text(summaryText)
             Spacer(minLength: 12)
             Text(selectionText)
+            // Beside the readout they change. They were in the window's footer, a
+            // window away from the rows; the footer is gone, and what removes the
+            // selection is in the toolbar.
+            //
+            // A filtered tab promises a sweep — "safe to remove" especially — and a
+            // sweep should not mean ticking every row by hand. The unfiltered outline
+            // is for browsing, so it offers Deselect All alone.
+            if model.scanFilter != .all {
+                Button("Select All") { model.selectAllInCurrentView() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(!model.canSelectAllInCurrentView || model.isCleaningUp)
+            }
+            Button("Deselect All") { model.deselectAll() }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(!model.hasSelection || model.isCleaningUp)
         }
         .font(.mcControlLabel)
         .foregroundStyle(Token.Text.tertiary)

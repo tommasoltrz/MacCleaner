@@ -22,15 +22,23 @@ struct CapacityCard: View {
     private let freeBytes: Int64
     private let breakdown: StorageBreakdown?
     private let isMeasuring: Bool
+    /// Absent in previews, and on any surface that does not own the measurement.
+    private let onMeasureAgain: (() -> Void)?
 
-    init(volume: VolumeInfo, breakdown: StorageBreakdown?, isMeasuring: Bool = false) {
+    init(
+        volume: VolumeInfo,
+        breakdown: StorageBreakdown?,
+        isMeasuring: Bool = false,
+        onMeasureAgain: (() -> Void)? = nil
+    ) {
         self.init(
             eyebrow: volume.eyebrow,
             capacityBytes: volume.capacityBytes,
             usedBytes: volume.usedBytes,
             freeBytes: volume.freeBytes,
             breakdown: breakdown,
-            isMeasuring: isMeasuring
+            isMeasuring: isMeasuring,
+            onMeasureAgain: onMeasureAgain
         )
     }
 
@@ -42,7 +50,8 @@ struct CapacityCard: View {
         usedBytes: Int64,
         freeBytes: Int64,
         breakdown: StorageBreakdown?,
-        isMeasuring: Bool = false
+        isMeasuring: Bool = false,
+        onMeasureAgain: (() -> Void)? = nil
     ) {
         self.eyebrow = eyebrow
         self.capacityBytes = capacityBytes
@@ -50,13 +59,29 @@ struct CapacityCard: View {
         self.freeBytes = freeBytes
         self.breakdown = breakdown
         self.isMeasuring = isMeasuring
+        self.onMeasureAgain = onMeasureAgain
     }
 
     var body: some View {
         GroupedBox(radius: Token.Radius.card) {
             VStack(alignment: .leading, spacing: 0) {
-                Text(eyebrow)
-                    .mcEyebrowStyle()
+                // The eyebrow line is this card's header, and "Measure Again" acts
+                // on this card alone — it used to sit in the window's footer, a
+                // corner away from the figures it replaces.
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(eyebrow)
+                        .mcEyebrowStyle()
+
+                    if let onMeasureAgain {
+                        Spacer(minLength: 12)
+                        // Same lifecycle as the card: startup preparation is already
+                        // a measurement, before the disk walk itself begins.
+                        Button(isMeasuring ? "Measuring…" : "Measure Again", action: onMeasureAgain)
+                            .buttonStyle(SecondaryButtonStyle())
+                            .disabled(isMeasuring)
+                            .fixedSize()
+                    }
+                }
 
                 // No gap: SwiftUI's line boxes already carry the leading that the
                 // design's `line-height: 1.0` boxes leave out, which is the 7px the
