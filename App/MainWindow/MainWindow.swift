@@ -43,9 +43,9 @@ struct MainWindow: View {
         .ignoresSafeArea(.container, edges: .top)
         // Under everything, through the title bar: the shell is the window.
         .background(Token.shell.ignoresSafeArea())
-        // The lights are laid out for a 28pt title bar and would land on the
-        // panel's rounded corner. This centres them in the 52pt band instead.
-        .background(TrafficLightAlignment(bandHeight: Token.Size.headerBand))
+        // Traffic-light geometry, and the window's drag turned off — see
+        // `WindowChrome`, which explains why a nested opt-out cannot do it.
+        .background(WindowChrome(headerBand: Token.Size.headerBand))
         // Over the whole content area, inside the safe area, so the toolbar above
         // keeps its glass and its controls. `.disabled` on the detail pane used to
         // do this job, and it reached the toolbar through the environment.
@@ -105,9 +105,6 @@ struct MainWindow: View {
         )
             .frame(width: Token.Size.sidebarWidth)
             .background(Token.chrome)
-            // The panel reaches the top of the window, where the hidden title bar
-            // would otherwise make every empty spot a drag handle.
-            .background(WindowDragDisabled())
             .clipShape(RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous)
@@ -136,9 +133,14 @@ struct MainWindow: View {
     }
 
     /// Clear of the traffic lights. With the sidebar expanded they sit on its
-    /// panel; collapsed, they are in this band and the title would land under them.
+    /// panel and the band starts at its own gutter; collapsed, they are in this
+    /// band and the title would land under them.
+    ///
+    /// The lights end at 79pt — the third one's centre is at 72 and it is 14
+    /// across — and 16pt of clearance after that is what the reference leaves.
     private var headerLeadingInset: CGFloat {
-        isSidebarExpanded ? Token.Size.shellGutter + 6 : 76
+        guard !isSidebarExpanded else { return Token.Size.shellGutter }
+        return max(0, Token.Size.trafficLightsTrailingEdge + 16)
     }
 
     /// The header band: the view's name and its actions, level with the traffic
@@ -163,8 +165,11 @@ struct MainWindow: View {
             }
         }
         .padding(.leading, headerLeadingInset)
-        .padding(.trailing, Token.Size.shellGutter + 6)
+        .padding(.trailing, Token.Size.shellGutter)
         .frame(height: Token.Size.headerBand)
+        // The window moves from here and nowhere else. Behind the controls, so a
+        // press on one of them is a press on it rather than the start of a drag.
+        .background(WindowDragHandle())
     }
 
     @ViewBuilder

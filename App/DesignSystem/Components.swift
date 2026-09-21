@@ -399,82 +399,107 @@ struct SidebarToggleButton: View {
     }
 }
 
-/// Stops a region from dragging the window.
+/// Configures the window's chrome: the traffic lights' geometry, and who may drag.
 ///
-/// The window hides its title bar so the shell can run up behind the traffic
-/// lights, and everything drawn in that strip inherits the title bar's drag
-/// behaviour — including the sidebar panel, which reaches the top of the window.
-/// Pressing the panel's empty space would move the window instead of doing nothing.
-struct WindowDragDisabled: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Blocker() }
+/// **The lights.** They are laid out for the 28pt title bar this window does not
+/// draw, which puts them across the sidebar panel's rounded corner. A stock
+/// unified toolbar puts the first light's centre at (26, 26) with a 23pt gap
+/// between centres, so that is what this applies — the same public AppKit frames,
+/// without adding a toolbar surface to get them. (Values and approach taken from
+/// Paguro, the app this window's structure follows.)
+///
+/// AppKit lays the buttons out again after a resize and after entering or leaving
+/// full screen, and it does so *after* those notifications, so each one re-applies
+/// on the next turn of the run loop rather than immediately.
+///
+/// **Dragging.** With a hidden title bar the top strip of the window is a drag
+/// band whatever is drawn there, and the sidebar panel reaches into it. A nested
+/// view answering false to `mouseDownCanMoveWindow` does not help: a SwiftUI
+/// `ScrollView` short-circuits AppKit's hit-testing and the nested view is never
+/// consulted, so a press on the sidebar's list would still slide the window. The
+/// window's own drag is therefore off, and `WindowDragHandle` hands it back to the
+/// one place that should have it — the header band.
+struct WindowChrome: NSViewRepresentable {
+    let headerBand: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        let band = headerBand
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            context.coordinator.configure(window: window, headerBand: band)
+        }
+        return view
+    }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
-    private final class Blocker: NSView {
-        override var mouseDownCanMoveWindow: Bool { false }
+    @MainActor
+    final class Coordinator {
+        private weak var configured: NSWindow?
+        private var tokens: [NSObjectProtocol] = []
+
+        func configure(window: NSWindow, headerBand: CGFloat) {
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.isMovable = false
+            Self.placeTrafficLights(in: window, headerBand: headerBand)
+
+            guard configured !== window else { return }
+            configured = window
+            for token in tokens { NotificationCenter.default.removeObserver(token) }
+            tokens = [
+                NSWindow.didResizeNotification,
+                NSWindow.didEnterFullScreenNotification,
+                NSWindow.didExitFullScreenNotification,
+            ].map { name in
+                NotificationCenter.default.addObserver(
+                    forName: name, object: window, queue: .main
+                ) { [weak window] _ in
+                    DispatchQueue.main.async {
+                        guard let window else { return }
+                        MainActor.assumeIsolated {
+                            Self.placeTrafficLights(in: window, headerBand: headerBand)
+                        }
+                    }
+                }
+            }
+        }
+
+        private static func placeTrafficLights(in window: NSWindow, headerBand: CGFloat) {
+            let firstCentreX: CGFloat = 26
+            let centreGap: CGFloat = 23
+            let centreY = headerBand / 2
+            let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+
+            for (index, type) in buttons.enumerated() {
+                guard let button = window.standardWindowButton(type),
+                      let container = button.superview
+                else { continue }
+                button.setFrameOrigin(NSPoint(
+                    x: firstCentreX + CGFloat(index) * centreGap - button.frame.width / 2,
+                    y: container.bounds.height - centreY - button.frame.height / 2
+                ))
+            }
+        }
     }
 }
 
-/// Centres the window's traffic lights in the header band.
-///
-/// They are laid out for the 28pt title bar this window does not draw, which puts
-/// them across the sidebar panel's top-left corner — the panel is inset 8pt and its
-/// radius is 14, so the close button lands on the curve. Centring them in the band
-/// clears it and lines them up with the title and actions beside them.
-///
-/// Positioned in window coordinates and converted into whichever view AppKit has
-/// made their parent, so this does not depend on the private view hierarchy being
-/// shaped any particular way. Re-applied on resize, because AppKit lays them out
-/// again each time.
-struct TrafficLightAlignment: NSViewRepresentable {
-    let bandHeight: CGFloat
+/// A transparent strip that moves the window on click-drag, and zooms on a
+/// double-click, the way a title bar does. The window's own drag is off — see
+/// `WindowChrome` — so this is how it is given back, deliberately, to the header
+/// band and to nothing else.
+struct WindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 
-    func makeNSView(context: Context) -> NSView { Aligner(bandHeight: bandHeight) }
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? Aligner)?.align()
-    }
-
-    private final class Aligner: NSView {
-        private let bandHeight: CGFloat
-        private var observer: NSObjectProtocol?
-
-        init(bandHeight: CGFloat) {
-            self.bandHeight = bandHeight
-            super.init(frame: .zero)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("not used") }
-
-        // No `deinit`: the observer is torn down when the view leaves its window,
-        // which is the same moment and is main-actor isolated, where a deinit is
-        // not — it cannot touch this property at all under strict concurrency.
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if let observer {
-                NotificationCenter.default.removeObserver(observer)
-                self.observer = nil
-            }
+    private final class DragView: NSView {
+        override func mouseDown(with event: NSEvent) {
             guard let window else { return }
-            observer = NotificationCenter.default.addObserver(
-                forName: NSWindow.didResizeNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.align() }
-            }
-            align()
-        }
-
-        func align() {
-            guard let window else { return }
-            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
-                .compactMap { window.standardWindowButton($0) }
-            // AppKit is y-up, so the band's centre is measured down from the top.
-            let centreInWindow = window.frame.height - bandHeight / 2
-            for button in buttons {
-                guard let parent = button.superview else { continue }
-                let centre = parent.convert(NSPoint(x: 0, y: centreInWindow), from: nil).y
-                let target = centre - button.frame.height / 2
-                guard abs(button.frame.origin.y - target) > 0.5 else { continue }
-                button.setFrameOrigin(NSPoint(x: button.frame.origin.x, y: target))
+            if event.clickCount == 2 {
+                window.performZoom(nil)
+            } else {
+                window.performDrag(with: event)
             }
         }
     }
