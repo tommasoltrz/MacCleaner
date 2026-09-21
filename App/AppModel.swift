@@ -2346,26 +2346,27 @@ final class AppModel {
     ///
     /// Persisted: it is a calibration against this library, not a per-session
     /// choice, and the user arrives at it by looking at the distances on the groups
-    /// it produced. Changing it never re-sweeps on its own — a sweep costs the
-    /// comparing phase even with every fingerprint cached, so it waits to be asked.
+    /// it produced.
+    ///
+    /// Changing it re-groups the sweep already in hand — see `regroupPhotos`. It
+    /// does not sweep: the library fetch and the fingerprinting are the same work
+    /// whatever the number is, and they are the half that goes to iCloud.
     var photoSimilarity: PhotoSimilarity = UserDefaults.standard
         .string(forKey: "photoSimilarity")
         .flatMap(PhotoSimilarity.init(rawValue:)) ?? .default {
         didSet {
             guard photoSimilarity != oldValue else { return }
             UserDefaults.standard.set(photoSimilarity.rawValue, forKey: "photoSimilarity")
+            regroupPhotos()
         }
     }
 
-    /// Whether what is on screen was produced by the setting now showing.
-    ///
-    /// The results outlive the picker, so without this the view would silently
-    /// present groups formed at one threshold under the name of another.
-    private(set) var photoResultsSimilarity: PhotoSimilarity?
-    var photoResultsAreStale: Bool {
-        guard let photoResultsSimilarity else { return false }
-        return photoResultsSimilarity != photoSimilarity
-    }
+    /// Re-grouping in progress. Distinct from `isSweepingPhotos`, which replaces the
+    /// page with its own progress screen: this keeps the groups on screen, because
+    /// they are about to be replaced rather than thrown away, and the phase is
+    /// seconds rather than the length of a sweep.
+    private(set) var isRegroupingPhotos = false
+    @ObservationIgnored private var photoRegroupTask: Task<Void, Never>?
 
     /// Groups in date order, newest first.
     ///
@@ -2419,13 +2420,7 @@ final class AppModel {
                     }
                 )
                 self.photoResults = results
-                self.photoResultsSimilarity = similarity
-                // Everything removable arrives selected, so the review is a matter of
-                // unticking what should stay rather than ticking 990 things that
-                // should go. Keepers are still unreachable — the set is built from
-                // `removable` alone — and the `Looks similar` badge marks the groups
-                // that deserve a second look before the Delete button is pressed.
-                self.photoSelection = Set(results.groups.flatMap(\.removable).map(\.id))
+                self.photoSelection = Self.defaultSelection(for: results)
                 // The results page counts the sets, the photos and what was skipped.
             } catch let unavailable as PhotoSweepUnavailable {
                 // Shown on the page, with what to do about it.
@@ -2437,6 +2432,48 @@ final class AppModel {
                     "The Photo Sweep Did Not Finish",
                     "Scolo could not finish comparing the library. Nothing was deleted; "
                         + "try again."
+                )
+            }
+        }
+    }
+
+    /// Re-groups the last sweep at the current setting.
+    ///
+    /// Silent when there is nothing to re-group: `regroup` returns nil before any
+    /// sweep has run, and the page is showing its intro in that case, so the new
+    /// setting simply applies to the sweep the user starts next.
+    private func regroupPhotos() {
+        guard photoResults != nil, !isSweepingPhotos else { return }
+        photoRegroupTask?.cancel()
+        let similarity = photoSimilarity
+        isRegroupingPhotos = true
+
+        photoRegroupTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isRegroupingPhotos = false
+                self.photoRegroupTask = nil
+            }
+            do {
+                guard let results = try await photoService.regroup(similarity: similarity) else {
+                    return
+                }
+                // A setting changed again while this ran: that later change owns the
+                // page, and this result is for a threshold nobody is asking about.
+                guard similarity == self.photoSimilarity else { return }
+                self.photoResults = results
+                // Re-seeded, never carried over. The selection is ids from the old
+                // grouping, and an id that was removable in one grouping can be a
+                // keeper in the next — which is the one thing the selection must
+                // never contain.
+                self.photoSelection = Self.defaultSelection(for: results)
+            } catch is CancellationError {
+                // Superseded by a later change, or the user left.
+            } catch {
+                self.report(
+                    "The Photos Could Not Be Regrouped",
+                    "Scolo could not apply that setting to the sweep it has. "
+                        + "Scan again to use it."
                 )
             }
         }
@@ -2458,34 +2495,37 @@ final class AppModel {
         }
     }
 
-    /// Restores the default: everything the sweep judged removable.
+    /// Ticks everything, judgement calls included — no longer the default, and a
+    /// deliberate act. See `defaultSelection(for:)`.
     func selectAllRemovablePhotos() {
         photoSelection = Set(photoGroups.flatMap(\.removable).map(\.id))
     }
 
-    /// Narrows the selection to the **certain** tiers only.
+    /// What a finished grouping arrives with ticked: the **certain** tiers, and
+    /// nothing that a threshold decided.
     ///
-    /// Bursts come from Photos' own grouping and `exact` is a metadata match that the
+    /// Bursts come from Photos' own grouping and `exact` is a metadata match the
     /// feature prints then confirmed; both are safe to take in bulk. `similar` is a
-    /// judgement call, and on a real library it accounted for 1,050 of 1,058 groups —
-    /// so a select-all that included it would hand the user 1,619 photographs to
-    /// delete on the strength of a threshold, which is the exact shape of the bug
-    /// that proposed deleting 1,075 distinct photos earlier. Those groups are
-    /// selected per group, after looking at them.
+    /// judgement call, and on a real library it accounted for 1,050 of 1,058 groups
+    /// — so arriving with those ticked handed the user 1,619 photographs to delete
+    /// on the strength of a threshold, which is the exact shape of the bug that
+    /// proposed deleting 1,075 distinct photos earlier.
+    ///
+    /// This used to be the "Certain Only" button, with everything ticked by default
+    /// and one click back to safety. It is the default now, and Select All is the
+    /// deliberate act instead — the safe state should not be something the user has
+    /// to know to ask for. The similarity picker took the button's place: it is the
+    /// same question, "show me only what you are sure of", with the line where the
+    /// user puts it rather than fixed at the tier boundary.
     ///
     /// Keepers are unreachable regardless: the set is built from `removable` alone.
-    func selectCertainPhotosOnly() {
-        photoSelection = Set(
-            photoGroups
+    private static func defaultSelection(for results: PhotoDuplicateResults) -> Set<String> {
+        Set(
+            results.groups
                 .filter { $0.kind != .similar }
                 .flatMap(\.removable)
                 .map(\.id)
         )
-    }
-
-    /// How many photos `selectAllRemovablePhotos` would take, for the button's label.
-    var certainRemovableCount: Int {
-        photoGroups.filter { $0.kind != .similar }.reduce(0) { $0 + $1.removable.count }
     }
 
     func deselectAllPhotos() { photoSelection.removeAll() }
