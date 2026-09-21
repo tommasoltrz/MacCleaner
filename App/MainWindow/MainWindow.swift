@@ -28,6 +28,17 @@ struct MainWindow: View {
                 // is applied here: that file has another session's work in it.
                 .scrollContentBackground(.hidden)
                 .background(Token.chrome)
+                // The sidebar and the margin around the content pane are the same
+                // surface, so without this there is nothing to say where one ends:
+                // painting our own background also covered the divider the split
+                // view would have drawn. It runs the full height of the window,
+                // past the toolbar, because the surface it divides does too.
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Token.separator)
+                        .frame(width: Token.hairline)
+                        .ignoresSafeArea()
+                }
         } detail: {
             detail
                 .navigationTitle(model.view.title)
