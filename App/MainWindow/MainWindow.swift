@@ -12,30 +12,30 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     var settings: SettingsStore?
     @Environment(\.scenePhase) private var scenePhase
+    /// Collapsible again, and open to begin with. It was pinned open on 21 Sep on
+    /// the argument that hiding the app's only navigation strands the user; the
+    /// owner's call is that a window this size should be able to give the content
+    /// its full width, and the toggle sits where macOS puts it.
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
-        // The sidebar is always there and cannot be collapsed. It is the whole of
-        // this app's navigation — seven sections, all of them visible — so hiding
-        // it only ever strands the user somewhere with no way back, and the toolbar
-        // control for hiding it is a control whose best outcome is nothing.
-        NavigationSplitView(columnVisibility: .constant(.all)) {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
-                .toolbar(removing: .sidebarToggle)
                 // Opaque, so the sidebar has a colour of its own instead of a wash
                 // of whatever the window happens to sit over. The modifier reaches
                 // the `List` inside through the environment, which is also why it
                 // is applied here: that file has another session's work in it.
                 .scrollContentBackground(.hidden)
-                .background(Token.sidebarSurface)
+                .background(Token.chrome)
         } detail: {
             detail
                 .navigationTitle(model.view.title)
                 .toolbar { toolbarContent }
-                // The toolbar takes the page's own dark rather than the window
-                // material, which lightened whenever the window was key and
-                // tinted itself with the desktop the rest of the time.
-                .toolbarBackground(Token.pageBackground, for: .windowToolbar)
+                // The toolbar is part of the window's surface, continuous with the
+                // sidebar and with the margin around the content pane — not part of
+                // the page, which is the inset thing below it.
+                .toolbarBackground(Token.chrome, for: .windowToolbar)
                 .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         }
         // Over the whole content area, inside the safe area, so the toolbar above
@@ -109,7 +109,16 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
+        // The page is a rounded pane inset into the window rather than content
+        // filling it edge to edge. The margin around it is the window's own
+        // surface, continuous with the sidebar and the toolbar, so the pane reads
+        // as a sheet laid on the app rather than as the app itself.
         .background(Token.pageBackground)
+        .clipShape(RoundedRectangle(cornerRadius: Token.Radius.window))
+        .padding(Token.Size.contentInset)
+        // Behind the pane and out through the safe area, so the strip under the
+        // toolbar is the same surface as the margin.
+        .background(Token.chrome)
         // No footer. It held a status line and each view's buttons. The buttons that
         // remove things are in the toolbar now, beside Scan, where the window's other
         // primary action already was; the ones that only choose rows (Select All,
