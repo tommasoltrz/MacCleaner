@@ -392,10 +392,11 @@ final class AppModel {
 
     private(set) var pendingStorageExplorerItems: [StorageExplorerItem] = []
 
-    var storageExplorerSelectionLabel: String {
+    var storageExplorerRemoveLabel: String {
         let count = storageExplorer.selectedItems.count
-        guard count > 0 else { return "Move to Trash" }
-        return "Move \(count) \(count == 1 ? "Item" : "Items") to Trash"
+        guard count > 0 else { return "Remove" }
+        let noun = count == 1 ? "item" : "items"
+        return "Remove \(count) \(noun) (\(ByteFormatting.string(storageExplorer.selectedBytes)))"
     }
 
     func requestStorageExplorerRemoval() async {
@@ -542,9 +543,27 @@ final class AppModel {
         !selectedEntries.isEmpty || !selectedOrphanApplicationEntries.isEmpty
     }
 
-    /// `Clean Up 4.2 GB` when something is selected, plain `Clean Up` otherwise.
-    var cleanUpLabel: String {
-        hasSelection ? "Clean Up \(ByteFormatting.string(selectedBytes))" : "Clean Up"
+    /// The toolbar's remove button, on every view that removes something.
+    ///
+    /// One shape: the verb, what goes, and how much. The Scanner's selection is a
+    /// mixture of caches, folders and application data with no useful noun between
+    /// them, so it states the size alone; the others can name what they are about
+    /// to take, which is the part the user is agreeing to.
+    var removeLabel: String {
+        switch view {
+        case .scanner:
+            hasSelection ? "Remove (\(ByteFormatting.string(selectedBytes)))" : "Remove"
+        case .duplicates:
+            duplicateKind == .files ? fileDuplicateRemoveLabel : photoRemoveLabel
+        case .uninstaller:
+            uninstallerRemoveLabel
+        case .storageExplorer:
+            storageExplorerRemoveLabel
+        case .trash:
+            "Empty Trash"
+        case .dashboard, .history:
+            "Remove"
+        }
     }
 
     var boot: SnapshotInfo? { snapshots.first(where: \.isBootSnapshot) }
@@ -1108,6 +1127,37 @@ final class AppModel {
     // MARK: Several applications at once
 
     /// Ticked cards, by path. Survives a trip into one application's review and back.
+    /// Which half of the Uninstaller is showing.
+    ///
+    /// On the model rather than in the view because the toolbar's remove button
+    /// has to say what it would remove, and "3 apps" and "2 leftovers" are
+    /// different sentences with different actions behind them.
+    enum UninstallerTab: String, CaseIterable {
+        case installed = "Installed"
+        case leftovers = "Leftovers"
+    }
+    var uninstallerTab: UninstallerTab = .installed
+
+    /// The grid of applications is what the toolbar's button acts on. Every other
+    /// state of this view — planning, a review, a done page — carries its own
+    /// buttons, because each is a step in a sequence rather than a list.
+    var isShowingUninstallerLibrary: Bool {
+        appUninstallPlan == nil && batchUninstallReview == nil
+            && appUninstallOutcome == nil && batchUninstallOutcome == nil
+            && !isPlanningAppUninstall
+    }
+
+    /// The bundles of the ticked applications. Nil until every card has a figure:
+    /// a sum over the ones measured so far would read as the whole and grow.
+    var selectedApplicationBytes: Int64? {
+        var total: Int64 = 0
+        for id in selectedApplicationIDs {
+            guard let bytes = installedApplicationBytes[id] else { return nil }
+            total += bytes
+        }
+        return total
+    }
+
     private(set) var selectedApplicationIDs: Set<String> = []
 
     func toggleApplicationSelection(_ application: InstalledApplication) {
@@ -2119,10 +2169,11 @@ final class AppModel {
             .reduce(0) { $0 + $1.allocatedBytes }
     }
 
-    var fileDuplicateSelectionLabel: String {
-        guard !fileDuplicateSelection.isEmpty else { return "Move to Trash" }
-        let files = fileDuplicateSelection.count == 1 ? "File" : "Files"
-        return "Move \(fileDuplicateSelection.count) \(files) to Trash"
+    var fileDuplicateRemoveLabel: String {
+        let count = fileDuplicateSelection.count
+        guard count > 0 else { return "Remove" }
+        let noun = count == 1 ? "duplicate" : "duplicates"
+        return "Remove \(count) \(noun) (\(ByteFormatting.string(fileDuplicateSelectionBytes)))"
     }
 
     func chooseFileDuplicateFolders() {
@@ -2360,10 +2411,32 @@ final class AppModel {
         }
     }
 
-    var photoSelectionLabel: String {
-        photoSelection.isEmpty
-            ? "Delete"
-            : "Delete \(photoSelection.count) \(photoSelection.count == 1 ? "Photo" : "Photos")"
+    /// No size, and this is the one label that cannot have one. `PHAssetResource`
+    /// exposes no byte figure without downloading the original, so the whole photo
+    /// feature counts photographs and never claims bytes. A figure here would be
+    /// the only invented number in the app.
+    var photoRemoveLabel: String {
+        let count = photoSelection.count
+        guard count > 0 else { return "Remove" }
+        return "Remove \(count) \(count == 1 ? "photo" : "photos")"
+    }
+
+    var uninstallerRemoveLabel: String {
+        switch uninstallerTab {
+        case .installed:
+            let count = selectedApplicationIDs.count
+            guard count > 0 else { return "Remove" }
+            let noun = count == 1 ? "app" : "apps"
+            // The size waits for every card to be measured, rather than showing a
+            // total that would grow while the user reads it.
+            guard let bytes = selectedApplicationBytes else { return "Remove \(count) \(noun)" }
+            return "Remove \(count) \(noun) (\(ByteFormatting.string(bytes)))"
+        case .leftovers:
+            let count = selectedLeftoverIdentifiers.count
+            guard count > 0 else { return "Remove" }
+            let noun = count == 1 ? "leftover" : "leftovers"
+            return "Remove \(count) \(noun) (\(ByteFormatting.string(selectedLeftoverBytes)))"
+        }
     }
 
     func startPhotoSweep() {

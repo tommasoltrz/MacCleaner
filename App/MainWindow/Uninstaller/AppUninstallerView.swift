@@ -28,11 +28,9 @@ struct AppUninstallerView: View {
     /// The page's two lists. Leftovers are here as well as in the Scanner because
     /// this is where the question gets asked: whoever came to uninstall an
     /// application is the person who wants to know what the last one left behind.
-    private enum Tab: String, CaseIterable {
-        case installed = "Installed"
-        case leftovers = "Leftovers"
-    }
-    @State private var tab: Tab = .installed
+    /// On the model, not here: the toolbar's remove button has to name what it
+    /// would take, and "3 apps" and "2 leftovers" are different sentences.
+    private var tab: AppModel.UninstallerTab { model.uninstallerTab }
     /// Removed applications whose files are disclosed, by bundle identifier.
     @State private var expandedLeftovers: Set<String> = []
 
@@ -179,17 +177,8 @@ struct AppUninstallerView: View {
 
     @ViewBuilder
     private var leftoversActions: some View {
-        if !model.selectedLeftoverIdentifiers.isEmpty {
-            // The ellipsis is the promise: the sheet says how many items, and that
-            // they move to the Trash, before anything does.
-            Button("Remove \(model.selectedLeftoverIdentifiers.count)…",
-                   action: model.requestLeftoverRemoval)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-                .disabled(model.activity != nil)
-                .fixedSize()
-        }
+        // Nothing: removing is the toolbar's button now, beside every other view's.
+        EmptyView()
     }
 
     private var leftoversSummary: String {
@@ -305,8 +294,10 @@ struct AppUninstallerView: View {
 
     private var libraryHeader: some View {
         PageHeader {
-            Picker("Show", selection: $tab) {
-                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            Picker("Show", selection: $model.uninstallerTab) {
+                ForEach(AppModel.UninstallerTab.allCases, id: \.self) {
+                    Text($0.rawValue).tag($0)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -356,17 +347,6 @@ struct AppUninstallerView: View {
         FindField(text: $searchText, findRequest: model.findRequest)
             .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
 
-        if !model.selectedApplicationIDs.isEmpty {
-            // The ellipsis is the promise: related files are found and shown
-            // before anything is asked.
-            Button("Uninstall \(model.selectedApplicationIDs.count)…",
-                   action: model.reviewSelectedApplications)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-                .disabled(model.activity != nil)
-                .fixedSize()
-        }
     }
 
     /// Tall enough for the header's tallest control, a regular bordered button.

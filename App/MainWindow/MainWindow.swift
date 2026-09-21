@@ -213,68 +213,65 @@ struct MainWindow: View {
 
     // MARK: - The toolbar's removal action
 
-    /// Whether the current view has something to remove. The Uninstaller is not
-    /// here: which of its four buttons applies depends on the page and tab it is
-    /// showing, which is that view's own state, so its actions stay in its header.
+    /// Whether the current view has something to remove.
+    ///
+    /// The Dashboard and History describe; they take nothing away, so a button
+    /// there could never become enabled, and a control whose best outcome is
+    /// nothing is worse than no control. Everywhere else it is always present and
+    /// disabled until there is something to act on — its place should not move
+    /// about as a scan finishes or a row is ticked.
     private var hasRemovalAction: Bool {
         switch model.view {
         case .scanner, .duplicates, .storageExplorer, .trash: true
-        case .dashboard, .uninstaller, .history: false
+        // Only over the grid of applications. The review and done pages are steps
+        // in a sequence and carry their own buttons.
+        case .uninstaller: model.isShowingUninstallerLibrary
+        case .dashboard, .history: false
         }
     }
 
-    /// The one button that removes things, for the view on screen. Inert rather
-    /// than hidden when nothing is selected, so its place beside Scan is stable.
-    @ViewBuilder
-    private var removalButton: some View {
+    private var canRemove: Bool {
+        guard model.activity == nil else { return false }
         switch model.view {
-        case .scanner:
-            Button { model.requestCleanUp() } label: {
-                HStack(spacing: 7) {
-                    if model.isCleaningUp { ProgressView().controlSize(.small) }
-                    Text(model.isCleaningUp ? "Moving to Trash…" : model.cleanUpLabel)
-                }
-            }
-            .disabled(!model.hasSelection || model.isCleaningUp)
-
-        case .duplicates:
-            switch model.duplicateKind {
-            case .files:
-                Button { model.activeSheet = .deleteDuplicateFiles } label: {
-                    HStack(spacing: 7) {
-                        if model.isRemovingDuplicateFiles { ProgressView().controlSize(.small) }
-                        Text(model.isRemovingDuplicateFiles
-                             ? "Moving to Trash…" : model.fileDuplicateSelectionLabel)
-                    }
-                }
-                .disabled(
-                    model.fileDuplicateSelection.isEmpty || model.isRemovingDuplicateFiles
-                        || model.isScanningDuplicateFiles
-                )
-            case .photos:
-                Button(model.photoSelectionLabel) { model.activeSheet = .deletePhotos }
-                    .disabled(model.photoSelection.isEmpty)
-            }
-
-        case .storageExplorer:
-            let explorer = model.storageExplorer
-            Button(model.storageExplorerSelectionLabel) {
-                Task { await model.requestStorageExplorerRemoval() }
-            }
-            .disabled(!explorer.canRemoveSelection || model.isStorageExplorerMeasurementBlocked)
-            .help(
-                explorer.canRemoveSelection
-                    ? "Review the selected items before they move to the Trash."
-                    : "Select only unlocked items to continue."
-            )
-
-        case .trash:
-            Button("Empty Trash") { model.activeSheet = .emptyTrash }
-                .disabled((model.trashSummary?.itemCount ?? 0) == 0 || model.activity != nil)
-
-        case .dashboard, .uninstaller, .history:
-            EmptyView()
+        case .scanner:         return model.hasSelection
+        case .duplicates:      return model.duplicateKind == .files
+            ? !model.fileDuplicateSelection.isEmpty && !model.isScanningDuplicateFiles
+            : !model.photoSelection.isEmpty
+        case .uninstaller:     return model.uninstallerTab == .installed
+            ? !model.selectedApplicationIDs.isEmpty
+            : !model.selectedLeftoverIdentifiers.isEmpty
+        case .storageExplorer: return model.storageExplorer.canRemoveSelection
+            && !model.isStorageExplorerMeasurementBlocked
+        case .trash:           return (model.trashSummary?.itemCount ?? 0) > 0
+        case .dashboard, .history: return false
         }
+    }
+
+    private func removeTapped() {
+        switch model.view {
+        case .scanner:    model.requestCleanUp()
+        case .duplicates: model.activeSheet = model.duplicateKind == .files
+            ? .deleteDuplicateFiles : .deletePhotos
+        case .uninstaller: model.uninstallerTab == .installed
+            ? model.reviewSelectedApplications()
+            : model.requestLeftoverRemoval()
+        case .storageExplorer: Task { await model.requestStorageExplorerRemoval() }
+        case .trash:      model.activeSheet = .emptyTrash
+        case .dashboard, .history: break
+        }
+    }
+
+    /// The one button that removes things, for the view on screen.
+    private var removeButton: some View {
+        Button(action: removeTapped) {
+            HStack(spacing: 7) {
+                if model.isCleaningUp || model.isRemovingDuplicateFiles {
+                    ProgressView().controlSize(.small)
+                }
+                Text(model.removeLabel)
+            }
+        }
+        .disabled(!canRemove)
     }
 
     @ToolbarContentBuilder
@@ -322,13 +319,28 @@ struct MainWindow: View {
             }
         }
 
-        // What this view removes, to the left of Scan. Red, since Scan is the accent
-        // and two accent capsules side by side would read as one choice; sized like
-        // Scan so the pair sits on one line.
+        // Scan comes first and quietly. It used to be the window's one filled
+        // capsule, which made starting a measurement look like the point of the
+        // app; what the user came to do is remove something, and that is the
+        // button that should carry the weight.
+        ToolbarItem(placement: .primaryAction) {
+            scanButton.buttonStyle(.bordered)
+        }
+
+        // Then what this view removes, on the right, filled and red. Always there
+        // on a view that can remove anything, disabled until it can — see
+        // `hasRemovalAction`.
+        //
+        // Two spellings of one button. On macOS 26 it supplies its own Liquid
+        // Glass capsule, and the toolbar item's shared background has to be hidden
+        // or a second capsule appears behind it. Earlier systems have neither, and
+        // `.borderedProminent` is the filled capsule those releases draw for
+        // exactly this button. The branch is at the item, not inside the label,
+        // because `sharedBackgroundVisibility` is a toolbar modifier.
         if hasRemovalAction {
             if #available(macOS 26, *) {
                 ToolbarItem(placement: .primaryAction) {
-                    removalButton
+                    removeButton
                         .buttonStyle(.glassProminent)
                         .tint(Token.color(.red))
                         .controlSize(.large)
@@ -336,29 +348,11 @@ struct MainWindow: View {
                 .sharedBackgroundVisibility(.hidden)
             } else {
                 ToolbarItem(placement: .primaryAction) {
-                    removalButton
+                    removeButton
                         .buttonStyle(.borderedProminent)
                         .tint(Token.color(.red))
                         .controlSize(.large)
                 }
-            }
-        }
-
-        // Two spellings of one button. On macOS 26 it supplies its own Liquid
-        // Glass capsule, and the toolbar item's shared background has to be
-        // hidden or a second capsule appears behind it. Earlier systems have
-        // neither: `.borderedProminent` is the accent-filled capsule those
-        // releases draw for exactly this button, and there is no shared
-        // background to hide. The branch is at the item, not inside the label,
-        // because `sharedBackgroundVisibility` is a toolbar modifier.
-        if #available(macOS 26, *) {
-            ToolbarItem(placement: .primaryAction) {
-                scanButton.buttonStyle(.glassProminent)
-            }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .primaryAction) {
-                scanButton.buttonStyle(.borderedProminent)
             }
         }
     }
@@ -371,13 +365,10 @@ struct MainWindow: View {
             // baseline and dragged the whole line optically off-centre in the
             // capsule. The App Store's offer button it is modelled on is
             // text-only too.
-            Text("Scan for Junk")
-                .fontWeight(.semibold)
+            Text("Scan")
                 .padding(.vertical, 1)
                 .padding(.horizontal, 8)
         }
-        // Large, like the App Store's offer button: a filled capsule at regular
-        // size read as an afterthought next to the 52pt bar.
         .controlSize(.large)
         .disabled(model.isBusyWithDisk)
         .help("Scan for reclaimable files")
