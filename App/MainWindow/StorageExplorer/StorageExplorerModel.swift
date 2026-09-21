@@ -42,7 +42,6 @@ final class StorageExplorerModel {
     var progress = SizeMeasurement.zero
     var error: StorageExplorerError?
     var wasCancelled = false
-    var statusMessage = "Choose a folder or volume."
     var locations: [StorageExplorerLocation] = []
 
     private var history: [URL] = []
@@ -137,17 +136,14 @@ final class StorageExplorerModel {
         load(target)
     }
 
-    func refresh(
-        statusAfterLoad: String? = nil,
-        clearAllCachedFolders: Bool = false
-    ) {
+    func refresh(clearAllCachedFolders: Bool = false) {
         guard let currentURL else { return }
         if clearAllCachedFolders {
             clearCache()
         } else {
             removeCachedSnapshot(for: currentURL)
         }
-        load(currentURL, useCache: false, statusAfterLoad: statusAfterLoad)
+        load(currentURL, useCache: false)
     }
 
     func cancel() {
@@ -156,7 +152,6 @@ final class StorageExplorerModel {
         scanTask = nil
         isLoading = false
         wasCancelled = true
-        statusMessage = "Measurement stopped."
     }
 
     func remove(_ items: [StorageExplorerItem], keepReceipt: Bool) async throws -> CleanupOutcome {
@@ -182,20 +177,12 @@ final class StorageExplorerModel {
         store(review.snapshot)
         selection = selection.intersection(Set(review.snapshot.items.map(\.id)))
 
-        if !review.changedPaths.isEmpty {
-            statusMessage = "The selection changed. Review the updated items and try again."
-        } else if !review.protectedPaths.isEmpty {
-            statusMessage = "Some selected items are now protected. Review them and try again."
-        } else {
-            statusMessage = Self.measurementStatus(review.snapshot)
-        }
         return review
     }
 
     private func load(
         _ url: URL,
         useCache: Bool = true,
-        statusAfterLoad: String? = nil,
         revealing item: URL? = nil
     ) {
         scanGeneration += 1
@@ -214,7 +201,6 @@ final class StorageExplorerModel {
             snapshot = cached
             isLoading = false
             scanTask = nil
-            statusMessage = statusAfterLoad ?? Self.measurementStatus(cached)
             applyPendingSelection()
             return
         }
@@ -222,8 +208,6 @@ final class StorageExplorerModel {
         currentURL = url
         snapshot = nil
         isLoading = true
-        let folderName = url.lastPathComponent.nonEmpty ?? "the selected folder"
-        statusMessage = "Measuring " + folderName + "…"
 
         let excludedPaths = settings?.excludedFolderPaths ?? []
         let excludedPatterns = settings?.excludedPatterns ?? []
@@ -235,8 +219,12 @@ final class StorageExplorerModel {
                     excludedPaths: excludedPaths,
                     excludedPatterns: excludedPatterns,
                     progress: { measurement in
-                        Task { @MainActor [weak self] in
-                            guard let self, self.scanGeneration == generation else { return }
+                        // Strong `self`: the task above already holds it for the
+                        // whole scan, so a second weak capture only looked like it
+                        // was releasing something. A later navigation is ruled out
+                        // by the generation, not by the reference.
+                        Task { @MainActor in
+                            guard self.scanGeneration == generation else { return }
                             self.progress = measurement
                         }
                     }
@@ -247,7 +235,6 @@ final class StorageExplorerModel {
                 currentURL = snapshot.directory
                 isLoading = false
                 scanTask = nil
-                statusMessage = statusAfterLoad ?? Self.measurementStatus(snapshot)
                 applyPendingSelection()
             } catch is CancellationError {
                 guard scanGeneration == generation else { return }
@@ -258,13 +245,11 @@ final class StorageExplorerModel {
                 error = explorerError
                 isLoading = false
                 scanTask = nil
-                statusMessage = "The folder could not be read."
             } catch {
                 guard scanGeneration == generation else { return }
                 self.error = .unavailable(url.path)
                 isLoading = false
                 scanTask = nil
-                statusMessage = "The folder could not be read."
             }
         }
     }
@@ -282,15 +267,6 @@ final class StorageExplorerModel {
             where: { $0.url.standardizedFileURL.path == path }
         ) else { return }
         selection = [item.id]
-    }
-
-    private static func measurementStatus(_ snapshot: StorageExplorerSnapshot) -> String {
-        let itemClause = snapshot.items.count == 1 ? "item contains" : "items contain"
-        let fileNoun = snapshot.fileCount == 1 ? "file" : "files"
-        let useVerb = snapshot.items.count == 1 ? "uses" : "use"
-        return "\(snapshot.items.count.formatted()) \(itemClause) "
-            + "\(snapshot.fileCount.formatted()) \(fileNoun) and \(useVerb) "
-            + "\(ByteFormatting.string(snapshot.allocatedBytes))."
     }
 
     private func cachedSnapshot(for url: URL) -> StorageExplorerSnapshot? {
@@ -346,8 +322,4 @@ final class StorageExplorerModel {
             return $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }
-}
-
-private extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
 }

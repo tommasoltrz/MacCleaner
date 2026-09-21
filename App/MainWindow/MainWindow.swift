@@ -52,6 +52,21 @@ struct MainWindow: View {
                     + "Allow access to other application data. Then try again."
             )
         }
+        // What the footer's status line used to carry, minus the routine
+        // successes — see `AppModel.Notice`. An alert waits to be read; the
+        // caption it replaces was overwritten by whatever happened next.
+        .alert(
+            model.notice?.title ?? "",
+            isPresented: Binding(
+                get: { model.notice != nil },
+                set: { if !$0 { model.notice = nil } }
+            ),
+            presenting: model.notice
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { notice in
+            Text(notice.message)
+        }
     }
 
     @ViewBuilder
