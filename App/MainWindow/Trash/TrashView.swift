@@ -172,23 +172,14 @@ private struct TrashContent: View {
     // MARK: Summary header
 
     private var summaryHeader: some View {
-        HStack(alignment: .top, spacing: 12) {
+        PageHeader {
             summaryFigures
-                .frame(maxWidth: .infinity, alignment: .leading)
-
+        } trailing: {
             // Disabled over an empty Trash: a field with nothing to search is a
             // control that answers every query with "no results".
             FindField(text: $searchText, findRequest: findRequest)
                 .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
                 .disabled(summary.items.isEmpty)
-        }
-        .padding(.vertical, 16)
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Token.separator)
-                .frame(height: Token.hairline)
         }
     }
 

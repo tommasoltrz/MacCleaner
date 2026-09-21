@@ -268,6 +268,13 @@ enum Token {
         static let sidebarWidth: CGFloat = 218
         static let sidebarRow: CGFloat = 28
         static let control: CGFloat = 24
+        /// The side inset every page uses, header and content alike. The headers
+        /// had drifted to 18, 16 and 14 while the rows beneath them stayed at 14,
+        /// so each title sat out of line with what it described.
+        static let pageGutter: CGFloat = 14
+        /// Tall enough for the tallest thing a header carries — the Explorer's
+        /// 26pt path control — with the 10pt of breathing room above and below.
+        static let pageHeader: CGFloat = 46
         static let fileRow: CGFloat = 38
         static let largeFileRow: CGFloat = 36
         static let trashRow: CGFloat = 40

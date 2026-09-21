@@ -55,21 +55,12 @@ struct CleanupHistoryView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        PageHeader {
             headerText
-                .frame(maxWidth: .infinity, alignment: .leading)
-
+        } trailing: {
             FindField(text: $searchText, findRequest: model.findRequest)
                 .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
                 .disabled(items.isEmpty)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Token.separator)
-                .frame(height: Token.hairline)
         }
     }
 
