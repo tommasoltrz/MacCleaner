@@ -290,7 +290,34 @@ final class AppModel {
     var userDataRemovalOverrides: Set<FileEntry.ID> = []
     var activeSheet: Sheet?
 
-    var statusMessage: String = "Ready to scan"
+    /// What is left to say when an operation did not simply do what it said.
+    ///
+    /// Two kinds of thing reach here: a failure or a partial failure, and a
+    /// success that leaves the user something to do somewhere else — deleting
+    /// photos frees nothing until Recently Deleted is emptied in Photos, and no
+    /// part of this app could say so.
+    ///
+    /// Until 21 Sep 2026 all of these were a line in the window's footer, next to
+    /// the ordinary reports of things going right. That made a failure look
+    /// exactly like a success, and the next operation overwrote it before it had
+    /// been read. The footer is gone, and the plain successes went with it: each
+    /// view shows its own result — rows leave the list, figures change, a done
+    /// page says what it did. What is here cannot show itself that way, so it
+    /// waits to be dismissed.
+    ///
+    /// Never a cancellation: the user stopped it and knows.
+    struct Notice: Identifiable, Equatable {
+        let id = UUID()
+        var title: String
+        var message: String
+    }
+
+    var notice: Notice?
+
+    func report(_ title: String, _ message: String) {
+        notice = Notice(title: title, message: message)
+    }
+
     /// The disk operation in progress, if any. The window is covered while it
     /// runs. See `ActivityOverlay`.
     ///
@@ -378,10 +405,6 @@ final class AppModel {
     }
     var isShowingAppDataAccessAlert = false
 
-    var currentStatusMessage: String {
-        view == .storageExplorer ? storageExplorer.statusMessage : statusMessage
-    }
-
     var isStorageExplorerMeasurementBlocked: Bool {
         isScanning || isScanningDuplicateFiles || isSweepingPhotos || activity != nil
     }
@@ -411,15 +434,44 @@ final class AppModel {
         do {
             let review = try await storageExplorer.reviewSelectionForRemoval(selectedItems)
             activity = nil
-            guard let review, review.isReady else { return }
+            guard let review else { return }
+            // A refusal has to say so. Pressing the button and getting no sheet,
+            // no message and a quietly rewritten list is indistinguishable from a
+            // button that does not work.
+            guard review.isReady else {
+                if !review.changedPaths.isEmpty {
+                    report(
+                        "The Selection Changed",
+                        "Some of those items are not what they were when you picked them. "
+                            + "Review the updated list and try again."
+                    )
+                } else if !review.protectedPaths.isEmpty {
+                    report(
+                        "Some Items Are Protected",
+                        "Scolo will not remove some of the selected items. "
+                            + "Review the list and try again."
+                    )
+                } else {
+                    // The third way a review is not ready: nothing selected is
+                    // still there to remove.
+                    report(
+                        "Nothing Left to Remove",
+                        "The selected items are no longer in this folder."
+                    )
+                }
+                return
+            }
             pendingStorageExplorerItems = review.items
             activeSheet = .removeStorageItems
         } catch is CancellationError {
             activity = nil
-            storageExplorer.statusMessage = "Storage review stopped."
         } catch {
             activity = nil
-            storageExplorer.statusMessage = "Scolo could not verify the selected items."
+            report(
+                "The Selection Could Not Be Checked",
+                "Scolo re-reads every selected item before it offers to remove anything, "
+                    + "and this time it could not. Nothing was removed."
+            )
         }
     }
 
@@ -438,42 +490,31 @@ final class AppModel {
             totalBytes: items.reduce(0) { $0 + $1.allocatedBytes }
         )
 
-        let completionMessage: String
         do {
             let outcome = try await storageExplorer.remove(items, keepReceipt: keepReceipt)
-            completionMessage = Self.storageExplorerRemovalStatus(outcome)
+            // Success needs no announcement: the rows are gone from the folder the
+            // user is looking at, which is the measurement being redone below.
+            if !outcome.failed.isEmpty {
+                let count = outcome.failed.count
+                report(
+                    outcome.removedCount == 0
+                        ? "Nothing Was Removed" : "Some Items Could Not Be Moved",
+                    "\(count) \(count == 1 ? "item" : "items") could not move to the Trash. "
+                        + "\(outcome.removedCount) of \(items.count) did."
+                )
+            }
         } catch is CancellationError {
-            completionMessage = "Storage removal stopped."
+            // The user stopped it.
         } catch {
-            completionMessage = "The selected items could not move to the Trash."
+            report(
+                "The Items Could Not Be Moved",
+                "The selected items could not move to the Trash. Nothing was removed."
+            )
         }
-        statusMessage = completionMessage
 
         activity = nil
-        storageExplorer.refresh(
-            statusAfterLoad: completionMessage,
-            clearAllCachedFolders: true
-        )
+        storageExplorer.refresh(clearAllCachedFolders: true)
         await refreshAfterRemoval()
-    }
-
-    private static func storageExplorerRemovalStatus(_ outcome: CleanupOutcome) -> String {
-        var message = "Moved \(outcome.removedCount) "
-            + "\(outcome.removedCount == 1 ? "item" : "items") to the Trash."
-        if outcome.removedBytes > 0 {
-            message += " The items used \(ByteFormatting.string(outcome.removedBytes))."
-            // "Used" is exactly right for occupied bytes; what the disk gained is a
-            // separate claim, and only worth making when it is a smaller one.
-            if outcome.unreportedFreedCount == 0, outcome.sharedBytes > 0 {
-                message += " \(ByteFormatting.string(outcome.freedBytes)) was freed — "
-                    + "other copies still hold the rest."
-            }
-        }
-        if !outcome.failed.isEmpty {
-            message += " \(outcome.failed.count) "
-                + "\(outcome.failed.count == 1 ? "item could" : "items could") not be moved."
-        }
-        return message
     }
 
     // MARK: - Derived
@@ -804,18 +845,11 @@ final class AppModel {
                 )
                 try Task.checkCancellation()
                 self.appUninstallPlan = plan
-                if plan.isApplicationOnly {
-                    self.statusMessage = "Prepared an application-only uninstall for "
-                        + "\(plan.applicationName)."
-                } else {
-                    self.statusMessage = "Found \(plan.items.count - 1) related items for "
-                        + "\(plan.applicationName)."
-                }
             } catch is CancellationError {
                 return
             } catch {
+                // Shown on the review page itself, where the user is waiting.
                 self.appUninstallError = error.localizedDescription
-                self.statusMessage = "Could not prepare that application for uninstall."
             }
         }
     }
@@ -1071,11 +1105,9 @@ final class AppModel {
         case .stillRunning:
             appUninstallError = "\(request.plan.applicationName) is still running. "
                 + "Quit it and try again; no files were removed."
-            statusMessage = "Uninstall stopped because the application did not quit."
             return
         case .interrupted:
             appUninstallError = "The uninstall was interrupted. Review the application and try again."
-            statusMessage = "Application uninstall was interrupted."
             return
         case .finished(let finished):
             outcome = finished
@@ -1092,16 +1124,9 @@ final class AppModel {
                 ? "" : " No related files were removed."
             appUninstallError = "\(request.plan.applicationName) could not be moved to the Trash."
                 + relatedFilesMessage
-            statusMessage = "Could not uninstall \(request.plan.applicationName)."
-        } else {
-            let survivorCount = outcome.failed.count
-            statusMessage = "Uninstalled \(request.plan.applicationName) and moved "
-                + "\(ByteFormatting.string(outcome.removedBytes)) to the Trash."
-            if survivorCount > 0 {
-                let noun = survivorCount == 1 ? "item" : "items"
-                statusMessage += " \(survivorCount) related \(noun) could not be removed."
-            }
         }
+        // Everything else this used to say is on the done page: what was removed,
+        // and how many related items remain on disk.
 
         pruneVanishedEntries()
         activity = nil
@@ -1265,12 +1290,8 @@ final class AppModel {
         }
 
         batchUninstallReview = nil
+        // The done page lists what was uninstalled and what is still installed.
         batchUninstallOutcome = result
-        let count = result.uninstalled.count
-        statusMessage = count == 0
-            ? "No applications were uninstalled."
-            : "Uninstalled \(count) \(count == 1 ? "application" : "applications") and moved "
-                + "\(ByteFormatting.string(result.removedBytes)) to the Trash."
 
         pruneVanishedEntries()
         activity = nil
@@ -1539,15 +1560,18 @@ final class AppModel {
                 activity = nil
                 pendingCleanUp = nil
                 let names = ListFormatter.localizedString(byJoining: stragglers.map(\.name))
-                statusMessage = "\(names) did not quit, so nothing was removed. "
-                    + "Quit it yourself and try Clean Up again."
+                report(
+                    "Nothing Was Removed",
+                    "\(names) did not quit, so Scolo stopped before touching anything. "
+                        + "Quit it yourself and try Clean Up again."
+                )
                 return
             }
             clearInUse(of: plan.runningOwners)
         }
 
+        // The overlay says what is happening while it happens.
         activity = .cleaningUp(itemCount: plan.itemCount, totalBytes: plan.totalBytes)
-        statusMessage = "Moving selected items to the Trash…"
         defer { activity = nil }
         let entries = plan.entries
         pendingCleanUp = nil
@@ -1611,13 +1635,16 @@ final class AppModel {
         }
         pruneVanishedEntries()
 
-        statusMessage = Self.cleanUpStatus(outcome, keptReceipt: keepReceipt)
         let deniedAppDataCount = outcome.permissionDenied.filter {
             Self.isAppDataPath($0)
         }.count
         if deniedAppDataCount > 0 {
+            // Its own alert, because it is the one failure with a remedy: the
+            // permission is granted in System Settings, and the alert offers to
+            // open it.
             isShowingAppDataAccessAlert = true
-            statusMessage += " Allow access to other application data, then try again."
+        } else if let unfinished = Self.cleanUpNotice(outcome) {
+            notice = unfinished
         }
         // The removal is over. The window comes back here, before the disk is
         // walked again — see `activity`.
@@ -1639,48 +1666,32 @@ final class AppModel {
         await trash
     }
 
-    /// Says what actually happened, split the way the outcome is: trashed bytes
-    /// invite an undo, deleted bytes must never pretend to.
-    private static func cleanUpStatus(_ outcome: CleanupOutcome, keptReceipt: Bool) -> String {
-        var message: String
-        let size = ByteFormatting.string(outcome.removedBytes)
-        if outcome.removedCount == 0, !outcome.failed.isEmpty {
-            message = "No items were removed."
-        } else if outcome.deletedCount == 0 {
-            message = "Moved \(size) to the Trash."
-            if outcome.trashedCount > 0 && keptReceipt {
-                message += " Put Back is available while those items remain in the Trash."
-            }
-        } else if outcome.trashedCount == 0 {
-            message = "Deleted \(size) permanently."
-        } else {
-            message = "Removed \(size) — "
-                + "\(outcome.trashedCount) to the Trash, \(outcome.deletedCount) deleted permanently."
+    /// What is left to say once a clean-up has finished, or nil when it did what
+    /// it said it would.
+    ///
+    /// Nothing is reported for a clean run. The figures were on the confirmation
+    /// sheet before the user agreed — the size, and how much of it APFS will
+    /// actually give back — and the result is the rows leaving the list and the
+    /// Dashboard being measured again. A partial failure is different in kind:
+    /// silent partial failure is how a cleaner loses trust.
+    private static func cleanUpNotice(_ outcome: CleanupOutcome) -> Notice? {
+        guard !outcome.failed.isEmpty else { return nil }
+        let count = outcome.failed.count
+        let one = count == 1
+        if outcome.removedCount == 0 {
+            return Notice(
+                title: "Nothing Was Removed",
+                message: one
+                    ? "The selected item could not be removed. It is where it was."
+                    : "None of the \(count) selected items could be removed. "
+                        + "They are where they were."
+            )
         }
-        // The size above is what the items occupied; this is what the disk gets
-        // back. They differ only when APFS was sharing those blocks with files that
-        // are still here, and saying nothing would leave the user expecting space
-        // that is not coming. Withheld when part of the run went unmeasured,
-        // because a partial figure presented as the total is its own small lie.
-        //
-        // Worded by disposition: deleted bytes are gone now, trashed bytes are not
-        // gone at all until the Trash is emptied, so neither may borrow the other's
-        // tense.
-        if outcome.removedCount > 0, outcome.unreportedFreedCount == 0,
-           outcome.sharedBytes > 0 {
-            let freed = ByteFormatting.string(outcome.freedBytes)
-            message += outcome.trashedCount == 0
-                ? " Of that, \(freed) was actually freed — other copies of the same "
-                    + "files still hold the rest."
-                : " Of that, \(freed) will come back when you empty the Trash — other "
-                    + "copies of the same files still hold the rest."
-        }
-        if !outcome.failed.isEmpty {
-            // Silent partial failure is how a cleaner loses trust.
-            let noun = outcome.failed.count == 1 ? "item" : "items"
-            message += " \(outcome.failed.count) \(noun) could not be removed."
-        }
-        return message
+        return Notice(
+            title: "Some Items Could Not Be Removed",
+            message: "\(count) \(one ? "item" : "items") could not be removed; "
+                + "the other \(outcome.removedCount) moved to the Trash."
+        )
     }
 
     private static func isAppDataPath(_ path: String) -> Bool {
@@ -1736,18 +1747,27 @@ final class AppModel {
         defer { activity = nil }
         do {
             let result = try await trashService.empty(privilegedFallback: true)
-            var message = "Emptied the Trash. Reclaimed \(ByteFormatting.string(result.freedBytes))."
             if result.skipped > 0 {
-                let noun = result.skipped == 1 ? "item" : "items"
-                message += " \(result.skipped) \(noun) could not be removed."
+                let one = result.skipped == 1
+                report(
+                    "The Trash Is Not Empty",
+                    "\(result.skipped) \(one ? "item" : "items") could not be removed. "
+                        + "\(one ? "It is" : "They are") still in the Trash."
+                )
+                // Stay on the Trash, where what is left is listed.
+            } else {
+                // Nothing left to look at here, and what was reclaimed is the
+                // figure the Dashboard is about to show.
+                view = .dashboard
             }
-            statusMessage = message
-            view = .dashboard
         } catch {
-            // Do not pretend. The denied read stays on the Trash screen with the
-            // remedy named.
-            statusMessage = "The Trash could not be read. Grant Full Disk Access "
-                + "in System Settings, Privacy & Security."
+            // Do not pretend. Name the remedy: this is what a denied read looks
+            // like, and the permission is the fix.
+            report(
+                "The Trash Could Not Be Read",
+                "Grant Scolo Full Disk Access in System Settings, Privacy & Security, "
+                    + "then try again."
+            )
         }
         // Re-read under the scrim, so the Trash never lifts it over rows that are
         // gone. The disk walk runs after, on the Dashboard's own skeleton.
@@ -1760,12 +1780,16 @@ final class AppModel {
 
     func putBack(_ item: TrashItem) async {
         do {
+            // The row leaves the Trash list below, which is the whole report.
             try await trashService.putBack(item)
-            statusMessage = "Put back \(item.name)."
         } catch TrashError.destinationOccupied {
-            statusMessage = "Put Back stopped because the original location is in use."
+            report(
+                "\(item.name) Was Not Put Back",
+                "Something is already at the place it came from. "
+                    + "Move that aside, or drag this out of the Trash yourself."
+            )
         } catch {
-            statusMessage = "\(item.name) could not be put back."
+            report("\(item.name) Was Not Put Back", "It is still in the Trash.")
         }
         await loadTrash()
         await loadCleanupHistory()
@@ -1961,11 +1985,14 @@ final class AppModel {
     /// the navigation instead of being written afterwards.
     ///
     /// One disk walk at a time, like every other start button: during a scan or a
-    /// removal the click is answered in the status bar instead of starting a
-    /// second measurement underneath the first.
+    /// removal the click is answered with a reason rather than starting a second
+    /// measurement underneath the first.
     func revealGrowth(_ attribution: GrowthAttribution) {
         guard !isBusyWithDisk else {
-            statusMessage = "Wait for the current measurement to finish, then open the folder."
+            report(
+                "Scolo Is Already Measuring",
+                "Wait for the measurement in progress to finish, then open the folder."
+            )
             return
         }
         let url = URL(fileURLWithPath: attribution.path)
@@ -2080,13 +2107,14 @@ final class AppModel {
                 // Fresh results arrive collapsed. Closed rows form a short summary
                 // the user can take in at a glance, and opening one is a click.
                 self.openCategories = []
-                self.statusMessage = "Scan complete. Found "
-                    + "\(ByteFormatting.string(results.totalBytes)) in "
-                    + "\(results.actionableCategories.count) categories."
+                // What the scan found is the page the user is looking at.
             } catch is CancellationError {
-                self.statusMessage = "Scan cancelled"
+                // The user stopped it.
             } catch {
-                self.statusMessage = "Scan failed"
+                self.report(
+                    "The Scan Did Not Finish",
+                    "Scolo could not finish measuring. Nothing was removed; try scanning again."
+                )
             }
         }
     }
@@ -2154,7 +2182,6 @@ final class AppModel {
         fileDuplicateSelection.removeAll()
         duplicateKind = .files
         view = .duplicates
-        statusMessage = "Scanning selected folders"
 
         fileDuplicateTask = Task { [weak self] in
             guard let self else { return }
@@ -2172,12 +2199,15 @@ final class AppModel {
                         Task { @MainActor in self.fileDuplicateProgress = progress }
                     }
                 )
+                // The results page counts what was checked and what was found.
                 fileDuplicateResults = results
-                statusMessage = Self.fileDuplicateStatus(results)
             } catch is CancellationError {
-                statusMessage = "Duplicate scan cancelled"
+                // The user stopped it.
             } catch {
-                statusMessage = "Duplicate scan failed"
+                report(
+                    "The Duplicate Scan Did Not Finish",
+                    "Scolo could not finish comparing those folders. Try scanning again."
+                )
             }
         }
     }
@@ -2185,14 +2215,6 @@ final class AppModel {
     func cancelFileDuplicateScan() {
         fileDuplicateTask?.cancel()
         Task { await fileDuplicateService.cancel() }
-    }
-
-    private static func fileDuplicateStatus(_ results: FileDuplicateResults) -> String {
-        guard !results.groups.isEmpty else {
-            return "No duplicate files found in \(results.examinedCount) files."
-        }
-        return "Found \(results.groups.count) duplicate sets. "
-            + "Up to \(ByteFormatting.string(results.reclaimableBytes)) is available."
     }
 
     func selectAllFileDuplicates() {
@@ -2266,26 +2288,40 @@ final class AppModel {
             }
             fileDuplicateSelection.subtract(noLongerVerified)
 
-            var message = "Moved \(outcome.removedCount) duplicate "
-                + (outcome.removedCount == 1 ? "file" : "files") + " to the Trash."
-            if !outcome.failed.isEmpty {
-                message += " \(outcome.failed.count) could not be moved."
-            }
-            if !result.staleFileIDs.isEmpty || !result.staleGroupIDs.isEmpty {
-                message += " Scan again to refresh these results."
-            }
-            statusMessage = message
             // The container alert names one remedy, and it is the wrong one for a
             // root-owned file in ~/Documents. Same filter as the clean-up path.
             if outcome.permissionDenied.contains(where: Self.isAppDataPath) {
                 isShowingAppDataAccessAlert = true
+            } else if !outcome.failed.isEmpty || !result.staleFileIDs.isEmpty
+                        || !result.staleGroupIDs.isEmpty {
+                // A copy that changed since the scan is refused on purpose — every
+                // file is hashed again before it moves — and the refusal has to be
+                // said, or the tick that stayed behind looks like a bug.
+                var message = ""
+                if !outcome.failed.isEmpty {
+                    let count = outcome.failed.count
+                    message = "\(count) \(count == 1 ? "file" : "files") could not move "
+                        + "to the Trash. "
+                }
+                if !result.staleFileIDs.isEmpty || !result.staleGroupIDs.isEmpty {
+                    message += "Some copies changed since the scan and were left alone. "
+                        + "Scan again to refresh these results."
+                }
+                report(
+                    outcome.removedCount == 0
+                        ? "Nothing Was Removed" : "Some Copies Were Left Alone",
+                    message.trimmingCharacters(in: .whitespaces)
+                )
             }
             activity = nil
             await refreshAfterRemoval()
         } catch is CancellationError {
-            statusMessage = "Duplicate removal cancelled"
+            // The user stopped it.
         } catch {
-            statusMessage = "Duplicate files could not be moved"
+            report(
+                "The Duplicates Could Not Be Moved",
+                "The selected copies could not move to the Trash. Nothing was removed."
+            )
         }
     }
 
@@ -2359,14 +2395,18 @@ final class AppModel {
                 // `removable` alone — and the `Looks similar` badge marks the groups
                 // that deserve a second look before the Delete button is pressed.
                 self.photoSelection = Set(results.groups.flatMap(\.removable).map(\.id))
-                self.statusMessage = Self.sweepStatus(results)
+                // The results page counts the sets, the photos and what was skipped.
             } catch let unavailable as PhotoSweepUnavailable {
+                // Shown on the page, with what to do about it.
                 self.photoUnavailable = Self.describe(unavailable)
-                self.statusMessage = "Photo sweep could not run."
             } catch is CancellationError {
-                self.statusMessage = "Photo sweep cancelled"
+                // The user stopped it.
             } catch {
-                self.statusMessage = "Photo sweep failed"
+                self.report(
+                    "The Photo Sweep Did Not Finish",
+                    "Scolo could not finish comparing the library. Nothing was deleted; "
+                        + "try again."
+                )
             }
         }
     }
@@ -2374,23 +2414,6 @@ final class AppModel {
     func cancelPhotoSweep() {
         photoTask?.cancel()
         Task { await photoService.cancel() }
-    }
-
-    private static func sweepStatus(_ results: PhotoDuplicateResults) -> String {
-        guard !results.groups.isEmpty else {
-            var message = "No duplicates found in \(results.examinedCount) photos."
-            if results.skippedCount > 0 {
-                message += " \(results.skippedCount) could not be read."
-            }
-            return message
-        }
-        var message = "Found \(results.groups.count) duplicate sets — "
-            + "\(results.removableCount) photos can go."
-        // A skipped asset was never compared, so the result is a floor, not a total.
-        if results.skippedCount > 0 {
-            message += " \(results.skippedCount) photos had no thumbnail and were not compared."
-        }
-        return message
     }
 
     private static func describe(_ unavailable: PhotoSweepUnavailable) -> String {
@@ -2489,12 +2512,21 @@ final class AppModel {
                 photoResults = results
             }
             photoSelection.removeAll()
-            statusMessage = "Deleted \(ids.count) \(ids.count == 1 ? "photo" : "photos"). "
-                + "Empty Recently Deleted in Photos to reclaim the iCloud storage."
+            // The rows are gone from the page, but the storage is not back: Photos
+            // holds a deleted asset for thirty days, and nothing on this screen
+            // could tell the user that.
+            report(
+                "Deleted \(ids.count) \(ids.count == 1 ? "Photo" : "Photos")",
+                "They are in Recently Deleted in Photos. Empty it there to reclaim "
+                    + "the storage, on this Mac and in iCloud."
+            )
         } catch {
             // Deletion is the one operation the user cannot verify at a glance across
             // devices, so a failure is stated rather than left to inference.
-            statusMessage = "Those photos could not be deleted."
+            report(
+                "Those Photos Were Not Deleted",
+                "Photos refused the deletion. Nothing was removed from the library."
+            )
         }
     }
 
