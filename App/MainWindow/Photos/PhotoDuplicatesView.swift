@@ -203,6 +203,10 @@ struct PhotoDuplicatesView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Badge(text: kindLabel(group.kind), style: group.kind == .similar ? .neutral : .safe)
+                        // The badge names how the group was decided, not how sure
+                        // Scolo is — a "Looks similar" group at 0.03 is the same
+                        // photograph twice, and reads as a guess without this.
+                        .help(badgeExplanation(group.kind))
                     // The number the threshold was compared against, on the groups
                     // a number decided. Without it "Looks similar" is the same
                     // sentence whether the match was tight or barely made, and the
@@ -264,7 +268,11 @@ struct PhotoDuplicatesView: View {
             }
             Picker("How alike", selection: $model.photoSimilarity) {
                 ForEach(PhotoSimilarity.allCases) { similarity in
-                    Text("\(similarity.title) · \(similarity.thresholdLabel)").tag(similarity)
+                    // The first entry has no number, because it sets no threshold.
+                    Text(similarity.thresholdLabel.isEmpty
+                         ? similarity.title
+                         : "\(similarity.title) · \(similarity.thresholdLabel)")
+                        .tag(similarity)
                 }
             }
             .pickerStyle(.menu)
@@ -273,6 +281,21 @@ struct PhotoDuplicatesView: View {
             .help(model.photoSimilarity.detail
                   + " Bursts and identical copies are unaffected — neither is decided "
                   + "by this number.")
+        }
+    }
+
+    private func badgeExplanation(_ kind: DuplicateGroup.Kind) -> String {
+        switch kind {
+        case .burst:
+            "Photos itself recorded these as one burst."
+        case .exact:
+            "Same capture time, size and kind, and the pictures agree. "
+                + "Scolo is as sure of this as it gets."
+        case .similar:
+            "Grouped because the pictures look alike, at the setting in the header — "
+                + "the number beside this says how alike. A tight one is often the same "
+                + "photograph re-saved, which misses Identical only because its capture "
+                + "time or size changed. Choose Identical only to be shown none of these."
         }
     }
 

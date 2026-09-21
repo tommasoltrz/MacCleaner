@@ -100,7 +100,7 @@ public actor PhotoDuplicateService {
         // changing the setting does not mean rebuilding the service — and with it
         // the in-flight-sweep guard above.
         var options = grouper.options
-        options.similarityThreshold = similarity.threshold
+        similarity.apply(to: &options)
         let grouper = DuplicateGrouper(options: options)
 
         let task = Task { [library, grouper, visionRevision, cacheDirectory] in
@@ -281,7 +281,7 @@ public actor PhotoDuplicateService {
         guard running == nil, let lastSweep else { return nil }
 
         var options = grouper.options
-        options.similarityThreshold = similarity.threshold
+        similarity.apply(to: &options)
         let grouper = DuplicateGrouper(options: options)
         let startedAt = Date()
 

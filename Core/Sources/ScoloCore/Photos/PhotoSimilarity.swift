@@ -25,6 +25,11 @@ import Foundation
 /// and exact claims certainty from a metadata signature plus agreement within 0.05;
 /// neither is a judgement call the user should have to make.
 public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
+    /// Don't judge by appearance at all: only the tiers that do not need a
+    /// threshold. A burst is Apple's own grouping and an identical match is a
+    /// metadata signature the feature prints then confirmed, so what is left is
+    /// everything Scolo can be certain of and nothing it had to weigh up.
+    case identicalOnly
     case veryStrict
     case strict
     case standard
@@ -33,13 +38,29 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
 
     public var id: String { rawValue }
 
-    public var threshold: Float {
+    /// Nil where appearance is not consulted, which is not the same as zero: a
+    /// threshold of zero would still group two images whose prints match exactly.
+    public var threshold: Float? {
         switch self {
-        case .veryStrict: 0.15
-        case .strict:     0.25
-        case .standard:   0.35
-        case .loose:      0.45
-        case .veryLoose:  0.55
+        case .identicalOnly: nil
+        case .veryStrict:    0.15
+        case .strict:        0.25
+        case .standard:      0.35
+        case .loose:         0.45
+        case .veryLoose:     0.55
+        }
+    }
+
+    /// Writes this setting into a grouper's options.
+    ///
+    /// A method rather than a threshold the caller reads, so that "no threshold"
+    /// cannot be turned into a number by whoever happens to be holding it.
+    public func apply(to options: inout DuplicateGrouper.Options) {
+        if let threshold {
+            options.comparesAppearance = true
+            options.similarityThreshold = threshold
+        } else {
+            options.comparesAppearance = false
         }
     }
 
@@ -47,6 +68,7 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
     /// groups" and "more groups" are the things the user is about to see.
     public var title: String {
         switch self {
+        case .identicalOnly: "Identical only"
         case .veryStrict: "Nearly identical"
         case .strict:     "Very alike"
         case .standard:   "Alike"
@@ -57,6 +79,9 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
 
     public var detail: String {
         switch self {
+        case .identicalOnly:
+            "Only bursts and identical copies. Nothing here was decided by how alike "
+                + "two photographs look, so nothing here is a judgement call."
         case .veryStrict:
             "Fewest groups. The same shot re-saved or re-imported, little else."
         case .strict:
@@ -70,9 +95,10 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// Shown beside the title so the scale on the group badges is legible.
+    /// Shown beside the title so the scale on the group badges is legible. Empty
+    /// where there is no threshold, rather than a zero that would read as one.
     public var thresholdLabel: String {
-        String(format: "%.2f", threshold)
+        threshold.map { String(format: "%.2f", $0) } ?? ""
     }
 
     public static let `default` = PhotoSimilarity.standard
@@ -80,5 +106,5 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
     /// The loosest setting there is, and so the distance out to which a sweep has
     /// to compare. Beyond this nothing can be asked, which is why
     /// `PhotoNeighbourGraph` is built exactly this far and refuses further.
-    public static let ceiling: Float = allCases.map(\.threshold).max() ?? 0.55
+    public static let ceiling: Float = allCases.compactMap(\.threshold).max() ?? 0.55
 }

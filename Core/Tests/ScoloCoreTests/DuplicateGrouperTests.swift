@@ -430,7 +430,9 @@ struct DuplicateGrouperTests {
         let prints: [String: PhotoFingerprint] = ["a": print([0, 0, 0]), "b": print([0.3, 0, 0])]
 
         func groups(_ similarity: PhotoSimilarity) -> Int {
-            DuplicateGrouper(options: .init(similarityThreshold: similarity.threshold))
+            var options = DuplicateGrouper.Options()
+            similarity.apply(to: &options)
+            return DuplicateGrouper(options: options)
                 .group(assets: assets, fingerprints: prints)
                 .count
         }
@@ -439,15 +441,33 @@ struct DuplicateGrouperTests {
         #expect(groups(.standard) == 1)
         #expect(groups(.strict) == 0)
         #expect(groups(.veryStrict) == 0)
+        // Not the same request as a very tight threshold: this one declines to
+        // judge by appearance at all, so these two never meet however alike they
+        // are. The pair above is 0.3 apart; the pair below is the same photograph.
+        #expect(groups(.identicalOnly) == 0)
+        let same: [String: PhotoFingerprint] = ["a": print([0, 0, 0]), "b": print([0, 0, 0])]
+        // A threshold of zero still groups prints that match exactly, which is why
+        // "no threshold" cannot be spelled as zero.
+        let atZero = DuplicateGrouper(options: .init(similarityThreshold: 0))
+            .group(assets: assets, fingerprints: same)
+        #expect(atZero.count == 1)
+        var off = DuplicateGrouper.Options()
+        PhotoSimilarity.identicalOnly.apply(to: &off)
+        #expect(DuplicateGrouper(options: off).group(assets: assets, fingerprints: same).isEmpty)
     }
 
     @Test("The scale runs from strictest to loosest, and the default is on it")
     func similarityScaleIsOrdered() {
-        let thresholds = PhotoSimilarity.allCases.map(\.threshold)
+        let thresholds = PhotoSimilarity.allCases.compactMap(\.threshold)
         #expect(thresholds == thresholds.sorted(), "the picker reads top to bottom")
         #expect(Set(thresholds).count == thresholds.count, "two settings would do the same thing")
         #expect(PhotoSimilarity.default.threshold == 0.35,
                 "the measured threshold is what an existing library keeps getting")
+        // The one setting with no threshold leads the scale, because it asks for
+        // less than the tightest number does.
+        #expect(PhotoSimilarity.allCases.first == .identicalOnly)
+        #expect(PhotoSimilarity.allCases.filter { $0.threshold == nil } == [.identicalOnly])
+        #expect(PhotoSimilarity.ceiling == thresholds.max())
     }
 
     /// The number on the badge is what makes the setting calibratable: a group at
