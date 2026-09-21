@@ -11,13 +11,19 @@ struct ScannerView: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        VStack(spacing: 0) {
+            // No header before the first scan: "No scan yet · nothing selected yet"
+            // above the empty state said the same thing twice.
+            if model.scanResults != nil { header }
+            scrollingContent
+        }
+        .task { model.pruneVanishedEntries() }
+    }
+
+    private var scrollingContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                // No header before the first scan: "No scan yet · nothing selected
-                // yet" above the empty state said the same thing twice, and Large &
-                // Old Files already shows this state bare.
                 if let results = model.scanResults {
-                    header
                     if results.totalBytes > 0 {
                         ScanCompositionSummary(results: results)
                         // Under the bar, never above it: the bar describes the whole
@@ -39,27 +45,23 @@ struct ScannerView: View {
                     emptyState
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
+            .padding(.horizontal, Token.Size.pageGutter)
+            .padding(.top, 12)
             .padding(.bottom, 22)
         }
-        .task { model.pruneVanishedEntries() }
     }
 
     // MARK: - Header line
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Text(summaryText)
-            Spacer(minLength: 12)
-            Text(selectionText)
-            // Beside the readout they change. They were in the window's footer, a
-            // window away from the rows; the footer is gone, and what removes the
-            // selection is in the toolbar.
-            //
-            // A filtered tab promises a sweep — "safe to remove" especially — and a
-            // sweep should not mean ticking every row by hand. The unfiltered outline
-            // is for browsing, so it offers Deselect All alone.
+        PageHeader {
+            Text(summaryText).pageHeaderSummary()
+        } trailing: {
+            Text(selectionText).pageHeaderSummary()
+            // Beside the readout they change. A filtered tab promises a sweep —
+            // "safe to remove" especially — and a sweep should not mean ticking
+            // every row by hand. The unfiltered outline is for browsing, so it
+            // offers Deselect All alone.
             if model.scanFilter != .all {
                 Button("Select All") { model.selectAllInCurrentView() }
                     .buttonStyle(SecondaryButtonStyle())
@@ -69,8 +71,6 @@ struct ScannerView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(!model.hasSelection || model.isCleaningUp)
         }
-        .font(.mcControlLabel)
-        .foregroundStyle(Token.Text.tertiary)
         .padding(.horizontal, 2)
     }
 

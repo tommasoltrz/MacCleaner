@@ -161,40 +161,40 @@ struct PhotoDuplicatesView: View {
     }
 
     private var groups: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                // The selection buttons, from the window's footer, which is gone.
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let results = model.photoResults, results.skippedCount > 0 {
-                        Text(summary(results))
-                            .font(.mcSubtitle)
-                            .foregroundStyle(Token.Text.tertiary)
-                    }
-                    Spacer()
-                    // In the slot "Certain Only" had. That button ticked the burst
-                    // and identical groups and left every judgement call alone —
-                    // one fixed answer to "show me only what you are sure of". This
-                    // asks the same question and lets the user put the line where
-                    // they want it, with each group's distance beside it to aim by.
-                    similarityPicker
-                    Button("Select All") { model.selectAllRemovablePhotos() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.photoGroups.isEmpty || model.isRegroupingPhotos)
-                    Button("Deselect All") { model.deselectAllPhotos() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.photoSelection.isEmpty)
-                    Button("Scan Again") { model.startPhotoSweep() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.isBusyWithDisk)
-                        .help("Looks for photographs added since the last sweep. "
-                              + "Changing how alike \"alike\" means does not need this.")
+        VStack(spacing: 0) {
+            PageHeader {
+                if let results = model.photoResults, results.skippedCount > 0 {
+                    Text(summary(results)).pageHeaderSummary()
                 }
-                .padding(.horizontal, 2)
-                ForEach(model.photoGroups) { group in
-                    groupCard(group)
-                }
+            } trailing: {
+                // In the slot "Certain Only" had. That button ticked the burst and
+                // identical groups and left every judgement call alone — one fixed
+                // answer to "show me only what you are sure of". This asks the same
+                // question and lets the user put the line where they want it, with
+                // each group's distance beside it to aim by.
+                similarityPicker
+                Button("Select All") { model.selectAllRemovablePhotos() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.photoGroups.isEmpty || model.isRegroupingPhotos)
+                Button("Deselect All") { model.deselectAllPhotos() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.photoSelection.isEmpty)
+                Button("Scan Again") { model.startPhotoSweep() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.isBusyWithDisk)
+                    .help("Looks for photographs added since the last sweep. "
+                          + "Changing how alike \"alike\" means does not need this.")
             }
-            .padding(18)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(model.photoGroups) { group in
+                        groupCard(group)
+                    }
+                }
+                .padding(.horizontal, Token.Size.pageGutter)
+                .padding(.vertical, 14)
+            }
         }
     }
 

@@ -104,40 +104,43 @@ struct FileDuplicatesView: View {
     }
 
     private var groups: some View {
+        VStack(spacing: 0) {
+            PageHeader {
+                if let results = model.fileDuplicateResults {
+                    Text(resultSummary(results)).pageHeaderSummary()
+                }
+            } trailing: {
+                // These choose rows, so they belong beside the rows.
+                Button("Select All") { model.selectAllFileDuplicates() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.fileDuplicateGroups.isEmpty
+                        || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
+                Button("Deselect All") { model.deselectAllFileDuplicates() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.fileDuplicateSelection.isEmpty
+                        || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
+                minimumPicker
+                Button("Scan Again") { model.startFileDuplicateScan() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.isBusyWithDisk)
+                Button("Choose Other Folders") { model.chooseFileDuplicateFolders() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.isBusyWithDisk)
+            }
+
+            scrollingGroups
+        }
+    }
+
+    private var scrollingGroups: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let results = model.fileDuplicateResults {
-                        Text(resultSummary(results))
-                            .font(.mcSubtitle)
-                            .foregroundStyle(Token.Text.secondary)
-                    }
-                    Spacer()
-                    // From the window's footer, which is gone: these choose rows,
-                    // and belong beside the rows.
-                    Button("Select All") { model.selectAllFileDuplicates() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.fileDuplicateGroups.isEmpty
-                            || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
-                    Button("Deselect All") { model.deselectAllFileDuplicates() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.fileDuplicateSelection.isEmpty
-                            || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
-                    minimumPicker
-                    Button("Scan Again") { model.startFileDuplicateScan() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.isBusyWithDisk)
-                    Button("Choose Other Folders") { model.chooseFileDuplicateFolders() }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.isBusyWithDisk)
-                }
-                .padding(.horizontal, 2)
-
                 ForEach(model.fileDuplicateGroups) { group in
                     groupCard(group)
                 }
             }
-            .padding(18)
+            .padding(.horizontal, Token.Size.pageGutter)
+            .padding(.vertical, 14)
         }
     }
 

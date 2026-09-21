@@ -294,3 +294,58 @@ extension View {
             .foregroundStyle(Token.Text.quaternary)
     }
 }
+
+
+// MARK: - Page header
+
+/// The strip directly under the toolbar, on every view that has one.
+///
+/// It exists because each view had grown its own. Side padding was 18 in the Trash
+/// and History, 16 in the Uninstaller and 14 in the Storage Explorer, while the
+/// rows under every one of them are inset by 14 — so a header's own title sat out
+/// of line with what it described, and no two views agreed on where the page
+/// begins. The Scanner's scrolled away with the list, which is a fourth answer.
+///
+/// Pinned, never scrolling: three views put their search field here and four put
+/// their selection controls here, and a control that scrolls out of reach is worse
+/// than one that costs a little room.
+struct PageHeader<Leading: View, Trailing: View>: View {
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            leading
+            Spacer(minLength: 12)
+            trailing
+        }
+        .padding(.horizontal, Token.Size.pageGutter)
+        .padding(.vertical, 10)
+        // A minimum rather than a fixed height: the Trash's header carries figures
+        // at hero weight and is allowed to be taller than a line of caption text.
+        .frame(minHeight: Token.Size.pageHeader)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Token.separator)
+                .frame(height: Token.hairline)
+        }
+    }
+}
+
+extension PageHeader where Trailing == EmptyView {
+    init(@ViewBuilder leading: () -> Leading) {
+        self.init(leading: leading, trailing: { EmptyView() })
+    }
+}
+
+extension View {
+    /// The ordinary left-hand line of a page header: what this page is showing,
+    /// in one line, in the quiet tone.
+    func pageHeaderSummary() -> some View {
+        font(.mcControlLabel)
+            .foregroundStyle(Token.Text.tertiary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+}

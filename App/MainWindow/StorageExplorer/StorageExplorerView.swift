@@ -17,7 +17,6 @@ struct StorageExplorerView: View {
         VStack(spacing: 0) {
             if let currentURL = model.currentURL {
                 browserBar(currentURL)
-                Divider()
             }
 
             content
@@ -51,7 +50,7 @@ struct StorageExplorerView: View {
     }
 
     private func browserBar(_ url: URL) -> some View {
-        HStack(spacing: 10) {
+        PageHeader {
             // Folder history, which used to be the window's toolbar arrows. Those
             // meant pages everywhere else and folders here — one control with two
             // meanings — so they went, and this is the half that was doing real
@@ -71,7 +70,7 @@ struct StorageExplorerView: View {
             NativePathControl(url: url, onSelect: model.navigate)
                 .frame(minWidth: 260, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
                 .disabled(isMeasurementBlocked || model.isLoading)
-
+        } trailing: {
             // The selection's readout and its undo, from the window's footer, which
             // is gone. Only while there is a selection: this bar is already full.
             if !model.selectedItems.isEmpty {
@@ -106,8 +105,6 @@ struct StorageExplorerView: View {
 
             locationMenu
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
     }
 
     private var startView: some View {

@@ -157,7 +157,7 @@ struct AppUninstallerView: View {
     // MARK: Leftovers
 
     @ViewBuilder
-    private var leftoversHeaderContent: some View {
+    private var leftoversSummaryContent: some View {
         if model.selectedLeftoverIdentifiers.isEmpty {
             Text(leftoversSummary)
                 .font(.mcCaption)
@@ -175,9 +175,10 @@ struct AppUninstallerView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .fixedSize()
         }
+    }
 
-        Spacer()
-
+    @ViewBuilder
+    private var leftoversActions: some View {
         if !model.selectedLeftoverIdentifiers.isEmpty {
             // The ellipsis is the promise: the sheet says how many items, and that
             // they move to the Trash, before anything does.
@@ -303,7 +304,7 @@ struct AppUninstallerView: View {
     }
 
     private var libraryHeader: some View {
-        HStack(spacing: 10) {
+        PageHeader {
             Picker("Show", selection: $tab) {
                 ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
@@ -311,21 +312,17 @@ struct AppUninstallerView: View {
             .labelsHidden()
             .fixedSize()
 
-            if tab == .leftovers {
-                leftoversHeaderContent
-            } else {
-                installedHeaderContent
-            }
+            if tab == .leftovers { leftoversSummaryContent } else { installedSummaryContent }
+        } trailing: {
+            if tab == .leftovers { leftoversActions } else { installedActions }
         }
         // Fixed, so the first tick does not push the grid down by the difference
         // between a line of caption text and a button.
-        .frame(height: Self.headerControlHeight)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .frame(height: Self.headerControlHeight + 20)
     }
 
     @ViewBuilder
-    private var installedHeaderContent: some View {
+    private var installedSummaryContent: some View {
         // A selection takes over the summary's place: the count the user is
         // building matters more than the total they are not acting on.
         if model.selectedApplicationIDs.isEmpty {
@@ -343,9 +340,10 @@ struct AppUninstallerView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .fixedSize()
         }
+    }
 
-        Spacer()
-
+    @ViewBuilder
+    private var installedActions: some View {
         Picker("Sort", selection: $sortOrder) {
             ForEach(SortOrder.allCases, id: \.self) { Text($0.rawValue).tag($0) }
         }
