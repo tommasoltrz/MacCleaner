@@ -416,6 +416,107 @@ struct DuplicateGrouperTests {
         #expect(d == 5)
     }
 
+    // MARK: - How alike is alike
+
+    /// The setting exists because one threshold was wrong for a real library:
+    /// different screenshots were grouped together, which is what Vision's feature
+    /// space says about two pictures of the same app chrome. The scale has to
+    /// actually change the answer, or it is a picker that does nothing.
+    @Test("A stricter setting splits what a looser one merges")
+    func similarityScaleChangesTheGrouping() {
+        // 0.30 apart: inside `.veryLoose` (0.55) and `.standard` (0.35), outside
+        // `.veryStrict` (0.15) and `.strict` (0.25).
+        let assets = [asset("a", seconds: 100), asset("b", seconds: 140, width: 3000)]
+        let prints: [String: PhotoFingerprint] = ["a": print([0, 0, 0]), "b": print([0.3, 0, 0])]
+
+        func groups(_ similarity: PhotoSimilarity) -> Int {
+            DuplicateGrouper(options: .init(similarityThreshold: similarity.threshold))
+                .group(assets: assets, fingerprints: prints)
+                .count
+        }
+
+        #expect(groups(.veryLoose) == 1)
+        #expect(groups(.standard) == 1)
+        #expect(groups(.strict) == 0)
+        #expect(groups(.veryStrict) == 0)
+    }
+
+    @Test("The scale runs from strictest to loosest, and the default is on it")
+    func similarityScaleIsOrdered() {
+        let thresholds = PhotoSimilarity.allCases.map(\.threshold)
+        #expect(thresholds == thresholds.sorted(), "the picker reads top to bottom")
+        #expect(Set(thresholds).count == thresholds.count, "two settings would do the same thing")
+        #expect(PhotoSimilarity.default.threshold == 0.35,
+                "the measured threshold is what an existing library keeps getting")
+    }
+
+    /// The number on the badge is what makes the setting calibratable: a group at
+    /// 0.33 and a group at 0.12 look equally confident on screen.
+    @Test("A similar group reports the distance of its least alike pair")
+    func similarGroupCarriesItsDiameter() throws {
+        let assets = [asset("a", seconds: 100), asset("b", seconds: 140, width: 3000),
+                      asset("c", seconds: 180, width: 2000)]
+        // a–b is 0.1, b–c is 0.2, a–c is 0.3. The group's diameter is the worst.
+        let prints: [String: PhotoFingerprint] = [
+            "a": print([0, 0, 0]), "b": print([0.1, 0, 0]), "c": print([0.3, 0, 0])
+        ]
+        let group = try #require(
+            DuplicateGrouper(options: .init(similarityThreshold: 0.5))
+                .group(assets: assets, fingerprints: prints)
+                .first { $0.kind == .similar }
+        )
+
+        #expect(group.assets.count == 3)
+        let diameter = try #require(group.maximumDistance)
+        #expect(abs(diameter - 0.3) < 0.0001, "0.3 is the pair furthest apart, not 0.1")
+    }
+
+    @Test("A tier that did not judge by distance reports none")
+    func onlySimilarGroupsCarryADistance() {
+        let burst = [asset("a", seconds: 100, burst: "B1", representsBurst: true),
+                     asset("b", seconds: 100, burst: "B1")]
+        let exact = [asset("c", seconds: 300), asset("d", seconds: 300)]
+
+        for group in DuplicateGrouper().group(assets: burst + exact,
+                                              fingerprints: identicalPrints("c", "d")) {
+            #expect(group.kind != .similar)
+            #expect(group.maximumDistance == nil,
+                    "\(group.kind) did not decide by distance, so it has no distance to show")
+        }
+    }
+
+    /// The badge is on every similar group or on none of them: a group without one
+    /// would read as a different, more certain kind of match.
+    ///
+    /// This holds because `cluster` skips an asset with no fingerprint, so a similar
+    /// group's members all have one — including the asset here that does not, which
+    /// is why it is absent from the group rather than in it without a distance.
+    @Test("Every similar group carries a distance, and a photo with no print joins none")
+    func everySimilarGroupCarriesADistance() {
+        let assets = [asset("a", seconds: 100), asset("b", seconds: 140, width: 3000),
+                      asset("d", seconds: 180, width: 2000)]
+        let groups = DuplicateGrouper(options: .init(similarityThreshold: 0.5))
+            .group(assets: assets, fingerprints: ["a": print([0, 0, 0]), "b": print([0.1, 0, 0])])
+
+        #expect(!groups.isEmpty)
+        for group in groups where group.kind == .similar {
+            #expect(group.maximumDistance != nil)
+            #expect(!group.assets.contains { $0.id == "d" })
+        }
+    }
+
+    @Test("Choosing a different keeper does not change what was measured")
+    func promotingKeepsTheDistance() throws {
+        let assets = [asset("a", seconds: 100), asset("b", seconds: 140, width: 3000)]
+        let prints: [String: PhotoFingerprint] = ["a": print([0, 0, 0]), "b": print([0.2, 0, 0])]
+        let group = try #require(
+            DuplicateGrouper(options: .init(similarityThreshold: 0.5))
+                .group(assets: assets, fingerprints: prints).first
+        )
+        let promoted = try #require(group.promoting(group.removable[0].id))
+        #expect(promoted.maximumDistance == group.maximumDistance)
+    }
+
     // MARK: - Cancellation
 
     /// A cancelled sweep must stop grouping, not finish the grind and hand back a

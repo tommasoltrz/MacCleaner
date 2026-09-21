@@ -138,9 +138,14 @@ struct PhotoDuplicatesView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
             }
-            Button("Scan Again") { model.startPhotoSweep() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(model.isBusyWithDisk)
+            // The page where loosening the setting is the obvious next move, so
+            // the setting is on it rather than a sweep away.
+            HStack(spacing: 8) {
+                similarityPicker
+                Button("Scan Again") { model.startPhotoSweep() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(model.isBusyWithDisk)
+            }
         }
     }
 
@@ -166,6 +171,7 @@ struct PhotoDuplicatesView: View {
                             .foregroundStyle(Token.Text.tertiary)
                     }
                     Spacer()
+                    similarityPicker
                     Button("Select All") { model.selectAllRemovablePhotos() }
                         .buttonStyle(SecondaryButtonStyle())
                         .disabled(model.photoGroups.isEmpty)
@@ -193,6 +199,19 @@ struct PhotoDuplicatesView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Badge(text: kindLabel(group.kind), style: group.kind == .similar ? .neutral : .safe)
+                    // The number the threshold was compared against, on the groups
+                    // a number decided. Without it "Looks similar" is the same
+                    // sentence whether the match was tight or barely made, and the
+                    // similarity setting is a dial with no readout.
+                    if let distance = group.maximumDistance {
+                        Text(String(format: "%.2f", distance))
+                            .font(.mcCaption.monospacedDigit())
+                            .foregroundStyle(Token.Text.tertiary)
+                            .help("How far apart the two least alike photographs here are. "
+                                  + "Lower is more alike; zero is the same image. "
+                                  + "This group was formed at \(model.photoSimilarity.thresholdLabel) "
+                                  + "or closer.")
+                    }
                     Text("\(group.count) copies · keeping 1")
                         .font(.mcRowTitle)
                         .foregroundStyle(Token.Text.primary)
@@ -221,6 +240,34 @@ struct PhotoDuplicatesView: View {
                 }
             }
             .padding(12)
+        }
+    }
+
+    /// How alike the similar tier must find two photographs.
+    ///
+    /// Beside the results rather than in Preferences: it is calibrated by looking at
+    /// the distances on the groups it just produced, and a setting you have to leave
+    /// the page to reach cannot be calibrated that way. It does not re-sweep on its
+    /// own — with every fingerprint cached a sweep is still the whole comparing
+    /// phase — so the note below says the results are no longer what the picker says.
+    private var similarityPicker: some View {
+        HStack(spacing: 8) {
+            if model.photoResultsAreStale {
+                Text("Scan again to apply")
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.textColor(.orange))
+            }
+            Picker("How alike", selection: $model.photoSimilarity) {
+                ForEach(PhotoSimilarity.allCases) { similarity in
+                    Text("\(similarity.title) · \(similarity.thresholdLabel)").tag(similarity)
+                }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+            .disabled(model.isSweepingPhotos)
+            .help(model.photoSimilarity.detail
+                  + " Bursts and identical copies are unaffected — neither is decided "
+                  + "by this number.")
         }
     }
 

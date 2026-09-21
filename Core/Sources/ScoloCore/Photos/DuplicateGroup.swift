@@ -45,19 +45,33 @@ public struct DuplicateGroup: Sendable, Equatable, Identifiable {
     /// Everything proposed for deletion. Never contains `keeper`, and never contains
     /// a favourite.
     public let removable: [PhotoAsset]
+    /// How far apart the two least alike members of a `.similar` group are, in
+    /// Vision feature-print distance — the group's diameter, which complete linkage
+    /// bounds by the threshold that formed it.
+    ///
+    /// Present only for `.similar`, because it is only there that a number was the
+    /// judge. Burst is Apple's own grouping and exact is a metadata signature; the
+    /// figure would be an answer to a question nobody asked of those tiers.
+    ///
+    /// It exists so that `PhotoSimilarity` is a setting the user can actually
+    /// calibrate: a group at 0.33 and a group at 0.12 look identically confident on
+    /// screen, and one of them is the reason the threshold wants moving.
+    public let maximumDistance: Float?
 
     public init(
         id: String,
         kind: Kind,
         keeper: PhotoAsset,
         keeperReason: KeeperReason = .earliest,
-        removable: [PhotoAsset]
+        removable: [PhotoAsset],
+        maximumDistance: Float? = nil
     ) {
         self.id = id
         self.kind = kind
         self.keeper = keeper
         self.keeperReason = keeperReason
         self.removable = removable
+        self.maximumDistance = maximumDistance
     }
 
     /// Re-nominates `assetID` as the one to keep, demoting the current keeper.
@@ -77,7 +91,10 @@ public struct DuplicateGroup: Sendable, Equatable, Identifiable {
         let demoted = removable.map { $0.id == assetID ? keeper : $0 }
 
         return DuplicateGroup(
-            id: id, kind: kind, keeper: promoted, keeperReason: .chosenByYou, removable: demoted
+            id: id, kind: kind, keeper: promoted, keeperReason: .chosenByYou,
+            // Promoting changes which member is kept, never which members there
+            // are, so the group's diameter is the same measurement as before.
+            removable: demoted, maximumDistance: maximumDistance
         )
     }
 

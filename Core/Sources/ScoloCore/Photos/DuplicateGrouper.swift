@@ -194,7 +194,11 @@ public struct DuplicateGrouper: Sendable {
                     id: "similar:\(bucket):\(cluster.map(\.id).min() ?? "")",
                     kind: .similar,
                     members: cluster,
-                    claiming: &claimed
+                    claiming: &claimed,
+                    // Measured over the cluster alone, which is a handful of photos
+                    // against the bucket's thousands — the quadratic cost that made
+                    // `isWithin` early-exit does not apply at this size.
+                    distance: diameter(of: cluster, fingerprints: fingerprints)
                 ) {
                     groups.append(group)
                 }
@@ -277,11 +281,35 @@ public struct DuplicateGrouper: Sendable {
     ///
     /// Marks members claimed only when a group is actually produced, so assets
     /// rejected here stay available to weaker tiers.
+    /// The distance between the two least alike members — the group's diameter.
+    ///
+    /// Every member of a similar cluster has a fingerprint, because `cluster` skips
+    /// any asset without one, so the refusals below do not fire on the path that
+    /// calls this. They are here because a diameter measured over *some* of a group
+    /// is not that group's diameter: it would read as a tighter match than was
+    /// actually made, which is the one thing this figure must never do.
+    private func diameter(
+        of members: [PhotoAsset],
+        fingerprints: [String: PhotoFingerprint]
+    ) -> Float? {
+        let prints = members.compactMap { fingerprints[$0.id] }
+        guard prints.count == members.count else { return nil }
+        var worst: Float = 0
+        for i in prints.indices {
+            for j in prints.indices where j > i {
+                guard let distance = prints[i].distance(to: prints[j]) else { return nil }
+                worst = max(worst, distance)
+            }
+        }
+        return worst
+    }
+
     private func makeGroup(
         id: String,
         kind: DuplicateGroup.Kind,
         members: [PhotoAsset],
-        claiming claimed: inout Set<String>
+        claiming claimed: inout Set<String>,
+        distance: Float? = nil
     ) -> DuplicateGroup? {
         let available = members.filter { !claimed.contains($0.id) }
         guard available.count > 1 else { return nil }
@@ -304,7 +332,8 @@ public struct DuplicateGrouper: Sendable {
         // as undeletable members: the grid's contract is that everything beside the
         // keeper is going, and an exception inside it invites a mis-click.
         return DuplicateGroup(
-            id: id, kind: kind, keeper: keeper, keeperReason: reason, removable: removable
+            id: id, kind: kind, keeper: keeper, keeperReason: reason,
+            removable: removable, maximumDistance: distance
         )
     }
 
