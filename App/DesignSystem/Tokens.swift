@@ -363,6 +363,9 @@ enum Token {
         static let largeFileRow: CGFloat = 36
         static let trashRow: CGFloat = 40
         static let capacityBar: CGFloat = 13
+        /// The sidebar footer's bar. It was 4, which at this width read as a rule
+        /// under the figure rather than as a measure of anything.
+        static let sidebarCapacityBar: CGFloat = 8
         /// The design's window size. Resizable; the sidebar stays fixed.
         static let windowWidth: CGFloat = 1268
         static let windowHeight: CGFloat = 734

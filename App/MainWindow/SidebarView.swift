@@ -179,18 +179,14 @@ struct SidebarView: View {
     /// much is left, how full it is.
     private var capacityFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(model.volume?.name ?? "Macintosh HD")
-                    .font(.mcRowTitle)
-                    .foregroundStyle(Token.Text.primary)
-                Spacer(minLength: 8)
-                // Free space is the figure someone opens this app for, so it is
-                // the one on the volume's own line.
-                Text(model.volume.map { "\(ByteFormatting.string($0.freeBytes)) free" } ?? "—")
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-            }
-            .lineLimit(1)
+            // No volume name. Scolo measures the startup disk and nothing else,
+            // so naming it answered a question with one possible answer — and it
+            // was taking the line that the figure someone opens this app for
+            // should have to itself.
+            Text(model.volume.map { "\(ByteFormatting.string($0.freeBytes)) free" } ?? "—")
+                .font(.mcRowTitle)
+                .foregroundStyle(Token.Text.primary)
+                .lineLimit(1)
 
             capacityBar
 
@@ -221,11 +217,11 @@ struct SidebarView: View {
                     .fill(Token.ink(light: 0.55, dark: 0.85))
                     // A disk with a sliver used still shows a sliver, rather than
                     // rounding down to an empty track that says the wrong thing.
-                    .frame(width: max(usedFraction > 0 ? 3 : 0,
+                    .frame(width: max(usedFraction > 0 ? Token.Size.sidebarCapacityBar : 0,
                                       geometry.size.width * usedFraction))
             }
         }
-        .frame(height: 4)
+        .frame(height: Token.Size.sidebarCapacityBar)
     }
 
     private var usedFraction: Double {
