@@ -69,11 +69,24 @@ public actor PhotoDuplicateService {
     ///   coming down from iCloud yields confident-looking groups computed over a
     ///   fraction of the photos, and the copies that would have been kept may not
     ///   have arrived yet. Zero disables the guard.
+    /// - Parameter similarity: how alike the similar tier requires two photographs
+    ///   to be. Re-running at a different setting costs the comparing phase and
+    ///   nothing else: the feature prints come back from the cache, which is the
+    ///   expensive half and is unaffected by the threshold.
     public func sweep(
         minimumAssets: Int = 0,
+        similarity: PhotoSimilarity = .default,
         onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> PhotoDuplicateResults {
         if let running { return try await running.value }
+
+        // Everything the injected grouper was given, with the one option that is
+        // the user's to set replaced. Built here rather than at init so that
+        // changing the setting does not mean rebuilding the service — and with it
+        // the in-flight-sweep guard above.
+        var options = grouper.options
+        options.similarityThreshold = similarity.threshold
+        let grouper = DuplicateGrouper(options: options)
 
         let task = Task { [library, grouper, visionRevision] in
             let startedAt = Date()

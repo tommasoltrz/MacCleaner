@@ -2342,6 +2342,31 @@ final class AppModel {
     /// Set when a sweep could not run at all, with copy naming the remedy.
     var photoUnavailable: String?
 
+    /// How alike the similar tier requires two photographs to be.
+    ///
+    /// Persisted: it is a calibration against this library, not a per-session
+    /// choice, and the user arrives at it by looking at the distances on the groups
+    /// it produced. Changing it never re-sweeps on its own — a sweep costs the
+    /// comparing phase even with every fingerprint cached, so it waits to be asked.
+    var photoSimilarity: PhotoSimilarity = UserDefaults.standard
+        .string(forKey: "photoSimilarity")
+        .flatMap(PhotoSimilarity.init(rawValue:)) ?? .default {
+        didSet {
+            guard photoSimilarity != oldValue else { return }
+            UserDefaults.standard.set(photoSimilarity.rawValue, forKey: "photoSimilarity")
+        }
+    }
+
+    /// Whether what is on screen was produced by the setting now showing.
+    ///
+    /// The results outlive the picker, so without this the view would silently
+    /// present groups formed at one threshold under the name of another.
+    private(set) var photoResultsSimilarity: PhotoSimilarity?
+    var photoResultsAreStale: Bool {
+        guard let photoResultsSimilarity else { return false }
+        return photoResultsSimilarity != photoSimilarity
+    }
+
     /// Groups in date order, newest first.
     ///
     /// Chronology is how people remember photographs, so it is how the review reads —
@@ -2370,6 +2395,10 @@ final class AppModel {
 
     func startPhotoSweep() {
         guard !isBusyWithDisk else { return }
+        // Captured here rather than read inside the task: the picker is on the page
+        // the sweep is running under, and results labelled with one threshold must
+        // have been produced by it.
+        let similarity = photoSimilarity
         isSweepingPhotos = true
         photoUnavailable = nil
         photoSelection.removeAll()
@@ -2384,11 +2413,13 @@ final class AppModel {
             }
             do {
                 let results = try await photoService.sweep(
+                    similarity: similarity,
                     onProgress: { progress in
                         Task { @MainActor in self.photoProgress = progress }
                     }
                 )
                 self.photoResults = results
+                self.photoResultsSimilarity = similarity
                 // Everything removable arrives selected, so the review is a matter of
                 // unticking what should stay rather than ticking 990 things that
                 // should go. Keepers are still unreachable — the set is built from
