@@ -113,6 +113,16 @@ struct FileDuplicatesView: View {
                             .foregroundStyle(Token.Text.secondary)
                     }
                     Spacer()
+                    // From the window's footer, which is gone: these choose rows,
+                    // and belong beside the rows.
+                    Button("Select All") { model.selectAllFileDuplicates() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.fileDuplicateGroups.isEmpty
+                            || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
+                    Button("Deselect All") { model.deselectAllFileDuplicates() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.fileDuplicateSelection.isEmpty
+                            || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
                     minimumPicker
                     Button("Scan Again") { model.startFileDuplicateScan() }
                         .buttonStyle(SecondaryButtonStyle())

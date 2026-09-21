@@ -265,7 +265,6 @@ enum Token {
 
     enum Size {
         static let toolbar: CGFloat = 52
-        static let statusBar: CGFloat = 46
         static let sidebarWidth: CGFloat = 218
         static let sidebarRow: CGFloat = 28
         static let control: CGFloat = 24

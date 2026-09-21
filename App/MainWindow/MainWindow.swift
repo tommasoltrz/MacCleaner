@@ -79,18 +79,12 @@ struct MainWindow: View {
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
         .background(Token.pageBackground)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            // The Uninstaller has no footer. Its actions sit in the page's own
-            // header, beside the list they act on; a red button at the far corner
-            // of the window was a long way from the cards it uninstalls. What the
-            // bar's message said there is said on the page: errors inline, progress
-            // by the activity overlay, the result by the done state.
-            if model.view != .uninstaller {
-                StatusBarView(message: model.currentStatusMessage) {
-                    statusBarTrailing
-                }
-            }
-        }
+        // No footer. It held a status line and each view's buttons. The buttons that
+        // remove things are in the toolbar now, beside Scan, where the window's other
+        // primary action already was; the ones that only choose rows (Select All,
+        // Deselect All) are in each view's own header, next to the list they act on;
+        // and the status line is gone (the owner's call, 21 Sep 2026) — a view shows
+        // its own result, and a failure is an alert, not a caption.
         // A real sheet, so macOS supplies the titlebar attachment, the entrance
         // animation, and Escape/Return handling.
         .sheet(item: $model.activeSheet) { sheet in
@@ -197,132 +191,56 @@ struct MainWindow: View {
         }
     }
 
-    /// Actions that belong to the current view.
-    ///
-    /// The Dashboard's `Scan for Junk` button is gone from here — it duplicated the
-    /// toolbar's, which is present on every view. (`Storage Report…` is omitted
-    /// entirely; it was never specified beyond a label.) The Scanner's Clean Up pair
-    /// stays, because those act on the selection this view owns.
-    @ViewBuilder
-    private var statusBarTrailing: some View {
+    // MARK: - The toolbar's removal action
+
+    /// Whether the current view has something to remove. The Uninstaller is not
+    /// here: which of its four buttons applies depends on the page and tab it is
+    /// showing, which is that view's own state, so its actions stay in its header.
+    private var hasRemovalAction: Bool {
         switch model.view {
-        case .dashboard:
-            // Keep this in the same lifecycle as the card: startup preparation is
-            // already a measurement even before the disk walk itself begins.
-            Button(model.isDashboardLoading ? "Measuring…" : "Measure Again") {
-                Task { await model.measureStorage() }
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(model.isDashboardLoading)
+        case .scanner, .duplicates, .storageExplorer, .trash: true
+        case .dashboard, .uninstaller, .history: false
+        }
+    }
 
+    /// The one button that removes things, for the view on screen. Inert rather
+    /// than hidden when nothing is selected, so its place beside Scan is stable.
+    @ViewBuilder
+    private var removalButton: some View {
+        switch model.view {
         case .scanner:
-            // A filtered list promises a sweep — "safe to remove" especially — and a
-            // sweep should not mean ticking every row by hand. It sits beside
-            // Deselect All rather than up in the header, where the two halves of one
-            // decision were a window apart. The unfiltered outline is for browsing
-            // and has per-category controls, so it keeps Deselect All alone.
-            if model.scanFilter != .all {
-                Button("Select All") { model.selectAllInCurrentView() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(!model.canSelectAllInCurrentView || model.isCleaningUp)
-            }
-
-            Button("Deselect All") { model.deselectAll() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(!model.hasSelection || model.isCleaningUp)
-
             Button { model.requestCleanUp() } label: {
                 HStack(spacing: 7) {
-                    if model.isCleaningUp {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    if model.isCleaningUp { ProgressView().controlSize(.small) }
                     Text(model.isCleaningUp ? "Moving to Trash…" : model.cleanUpLabel)
                 }
             }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                // Nothing selected means nothing to confirm; the design renders the
-                // button inert rather than hiding it, so its place stays predictable.
-                .disabled(!model.hasSelection || model.isCleaningUp)
+            .disabled(!model.hasSelection || model.isCleaningUp)
+
         case .duplicates:
             switch model.duplicateKind {
             case .files:
-                Button("Select All") { model.selectAllFileDuplicates() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(
-                        model.fileDuplicateGroups.isEmpty
-                            || model.isScanningDuplicateFiles
-                            || model.isRemovingDuplicateFiles
-                    )
-
-                Button("Deselect All") { model.deselectAllFileDuplicates() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(
-                        model.fileDuplicateSelection.isEmpty || model.isRemovingDuplicateFiles
-                            || model.isScanningDuplicateFiles
-                    )
-
                 Button { model.activeSheet = .deleteDuplicateFiles } label: {
                     HStack(spacing: 7) {
-                        if model.isRemovingDuplicateFiles {
-                            ProgressView().controlSize(.small)
-                        }
-                        Text(
-                            model.isRemovingDuplicateFiles
-                                ? "Moving to Trash…" : model.fileDuplicateSelectionLabel
-                        )
+                        if model.isRemovingDuplicateFiles { ProgressView().controlSize(.small) }
+                        Text(model.isRemovingDuplicateFiles
+                             ? "Moving to Trash…" : model.fileDuplicateSelectionLabel)
                     }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
                 .disabled(
                     model.fileDuplicateSelection.isEmpty || model.isRemovingDuplicateFiles
                         || model.isScanningDuplicateFiles
                 )
-
             case .photos:
-                Button("Select All") { model.selectAllRemovablePhotos() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.photoGroups.isEmpty)
-
-                // This action excludes groups that need manual review.
-                Button("Certain Only (\(model.certainRemovableCount))") {
-                    model.selectCertainPhotosOnly()
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(model.certainRemovableCount == 0)
-
-                Button("Deselect All") { model.deselectAllPhotos() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.photoSelection.isEmpty)
-
                 Button(model.photoSelectionLabel) { model.activeSheet = .deletePhotos }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .tint(Token.color(.red))
                     .disabled(model.photoSelection.isEmpty)
             }
 
         case .storageExplorer:
             let explorer = model.storageExplorer
-            if !explorer.selectedItems.isEmpty {
-                Text("\(explorer.selectedItems.count) selected · "
-                     + ByteFormatting.string(explorer.selectedBytes))
-                    .foregroundStyle(Token.Text.secondary)
-            }
-
-            Button("Deselect All") { explorer.selection.removeAll() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(explorer.selection.isEmpty || model.isRemovingStorageItems)
-
             Button(model.storageExplorerSelectionLabel) {
                 Task { await model.requestStorageExplorerRemoval() }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .tint(Token.color(.red))
             .disabled(!explorer.canRemoveSelection || model.isStorageExplorerMeasurementBlocked)
             .help(
                 explorer.canRemoveSelection
@@ -330,22 +248,12 @@ struct MainWindow: View {
                     : "Select only unlocked items to continue."
             )
 
-        case .uninstaller:
-            // No status bar on this view — see the `safeAreaInset` above.
-            EmptyView()
-
-        case .history:
-            EmptyView()
-
         case .trash:
             Button("Empty Trash") { model.activeSheet = .emptyTrash }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(Token.color(.red))
-                // Keep the destructive action in its stable footer position while
-                // the Trash is loading or empty, but do not open an empty review.
                 .disabled((model.trashSummary?.itemCount ?? 0) == 0 || model.activity != nil)
 
+        case .dashboard, .uninstaller, .history:
+            EmptyView()
         }
     }
 
@@ -417,6 +325,28 @@ struct MainWindow: View {
                     Color.clear.frame(width: 8, height: 1)
                 }
                 }
+                }
+            }
+        }
+
+        // What this view removes, to the left of Scan. Red, since Scan is the accent
+        // and two accent capsules side by side would read as one choice; sized like
+        // Scan so the pair sits on one line.
+        if hasRemovalAction {
+            if #available(macOS 26, *) {
+                ToolbarItem(placement: .primaryAction) {
+                    removalButton
+                        .buttonStyle(.glassProminent)
+                        .tint(Token.color(.red))
+                        .controlSize(.large)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    removalButton
+                        .buttonStyle(.borderedProminent)
+                        .tint(Token.color(.red))
+                        .controlSize(.large)
                 }
             }
         }
