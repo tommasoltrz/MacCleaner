@@ -25,21 +25,12 @@ struct DashboardView: View {
                     // produces go to bones. The previous breakdown supplies the
                     // category names, which are stable; its figures are withheld:
                     // stale numbers under a pulse read as current.
-                    CapacityCard(
-                        volume: volume,
-                        breakdown: model.breakdown,
-                        isMeasuring: true,
-                        onMeasureAgain: { Task { await model.measureStorage() } }
-                    )
+                    CapacityCard(volume: volume, breakdown: model.breakdown, isMeasuring: true)
                 } else if model.isDashboardLoading {
                     // Not even the totals yet: the moment before `diskutil` returns.
                     CapacityCardSkeleton()
                 } else if let volume = model.volume, let breakdown = model.breakdown {
-                    CapacityCard(
-                        volume: volume,
-                        breakdown: breakdown,
-                        onMeasureAgain: { Task { await model.measureStorage() } }
-                    )
+                    CapacityCard(volume: volume, breakdown: breakdown)
                     if model.breakdownIsStale {
                         staleNote
                     }
