@@ -205,8 +205,13 @@ struct GrowthCard: View {
         let entries = classEntries(deltas)
         if !entries.isEmpty {
             let half = (entries.count + 1) / 2
-            // One line while the window is wide enough for it. A narrow window gets
-            // two lines rather than a row that truncates its own figures.
+            // A chip never truncates: its figure is the whole of what it says. So
+            // the choice is how many lines to use, never how much to cut — one
+            // while the card is wide enough, then two, then one chip per line.
+            //
+            // The last option is what makes the card fit a narrow column. Without
+            // it `ViewThatFits` fell through to the two-line layout and drew wider
+            // than the space it was given, straight over whatever sat beside it.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 16) {
                     ForEach(entries) { classChip($0) }
@@ -218,6 +223,9 @@ struct GrowthCard: View {
                     HStack(spacing: 16) {
                         ForEach(entries.dropFirst(half)) { classChip($0) }
                     }
+                }
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(entries) { classChip($0) }
                 }
             }
             .padding(.top, 12)
