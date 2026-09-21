@@ -43,20 +43,22 @@ struct DashboardView: View {
                 // user to go and find the thing that acted on it. A suggestion
                 // carries the verb, so the row is the action.
                 //
-                // Side by side because they answer different questions about the
-                // same disk: what is worth removing now, and what has been filling
-                // it up. Stacked below a certain width, where two columns would
-                // each be too narrow for a row to keep its figure on one line.
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        SuggestionList(model: model)
-                        growthSection.frame(width: 340)
-                    }
-                    VStack(alignment: .leading, spacing: 16) {
-                        SuggestionList(model: model)
-                        growthSection
-                    }
-                }
+                // Stacked, not side by side.
+                //
+                // The reference puts "what changed" in a narrow right-hand column,
+                // and the growth card cannot go there. It has a hard minimum width:
+                // its class chips are `fixedSize`, and its folder rows carry a rule
+                // that the path truncates before the figure ever does. Put in a
+                // 340pt column it drew straight over the suggestions beside it —
+                // and `ViewThatFits` chose that layout anyway, because the card's
+                // own nested `ViewThatFits` reported an ideal width it then
+                // exceeded.
+                //
+                // A compact variant could be designed for that column, at the cost
+                // of the paths, which are the part worth having. Until then both
+                // get the width they were drawn for.
+                SuggestionList(model: model)
+                growthSection
 
                 // After everything about this disk and before the system-level
                 // footnotes, matching where the account sits in the user's mental
