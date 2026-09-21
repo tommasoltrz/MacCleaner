@@ -169,15 +169,35 @@ enum Token {
 
     static let separator = Color(nsColor: .separatorColor)
 
-    /// The content area behind the cards. The detail pane's own background is white
-    /// in light mode, which left white cards invisible on it. Light paints the
-    /// System Settings grey so the cards stand off the page. Dark used to stay
-    /// clear, but the bare window material lightens to #302D31 whenever the window
-    /// is key, washing the page out next to the App Store and Finder — both paint
-    /// an opaque canvas that holds still. This is the App Store's, as measured.
+    // MARK: - Surfaces
+    //
+    // Three authored darks, one per depth: the page, the surfaces grouped on it,
+    // and the cards standing off those. They are opaque on purpose. The previous
+    // dark canvas was measured off the App Store and the surfaces above it were
+    // white at low alpha, which meant every one of them took a wash of whatever
+    // wallpaper the window sat over — the Storage Explorer's table made that
+    // visible enough to report, and it was true of every card in the app.
+    //
+    // Light keeps its own scheme. These three values are authored for dark.
+
+    /// The content area behind everything else.
+    ///
+    /// Light paints the System Settings grey so that white cards stand off the
+    /// page; the detail pane's own background is white there, which left them
+    /// invisible.
     static let pageBackground = Token.dynamic(
         light: NSColor(srgbRed: 0.949, green: 0.949, blue: 0.957, alpha: 1),  // #F2F2F4
-        dark: NSColor(srgbRed: 0.141, green: 0.129, blue: 0.145, alpha: 1)    // #242125
+        dark: NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 29 / 255, alpha: 1)  // #18181D
+    )
+
+    /// The sidebar, and any surface grouped on the page rather than raised off it.
+    ///
+    /// One step up from the page and one below a card. In light it is the window
+    /// material still, because the sidebar there is a source list and the platform
+    /// draws those with a material that follows the user's settings.
+    static let sidebarSurface = Token.dynamic(
+        light: NSColor.windowBackgroundColor,
+        dark: NSColor(srgbRed: 32 / 255, green: 32 / 255, blue: 38 / 255, alpha: 1)  // #202026
     )
 
     // MARK: - Fills
@@ -190,12 +210,18 @@ enum Token {
     // it whichever way round the window is.
 
     enum Fill {
-        /// Dark lifts the card off the window with white at low alpha. Light goes the
-        /// other way, like System Settings: a white card on the grey window. Slightly
-        /// translucent so a wallpaper-tinted window shows through the card faintly.
+        /// A card: the topmost of the three darks, standing off the page.
+        ///
+        /// Opaque, where it used to be white at 4.5% over the window. That was a
+        /// deliberate translucency — "so a wallpaper-tinted window shows through
+        /// the card faintly" — and the cost was that no card had a colour of its
+        /// own: each one drifted with the desktop behind the window.
+        ///
+        /// Light still goes the other way, like System Settings: a white card on
+        /// the grey window.
         static let box = Token.dynamic(
             light: .white.withAlphaComponent(0.85),
-            dark: .white.withAlphaComponent(0.045)
+            dark: NSColor(srgbRed: 40 / 255, green: 40 / 255, blue: 48 / 255, alpha: 1)  // #282830
         )
         /// Also the row rule in every table and the capacity bar's track. Deliberately
         /// weaker than `separatorColor`, which is roughly 0.10 in light: repeated every
@@ -205,9 +231,12 @@ enum Token {
         /// edge to draw, so it becomes the outline that makes the control look raised,
         /// and it needs more weight than the box hairline to do that.
         static let controlBorder = Token.ink(light: 0.13, dark: 0.10)
+        /// A recess — an expanded table body, a callout, the exclusion list. It
+        /// sits back down at the grouped-surface dark, below the card it is cut
+        /// into, which is what makes it read as recessed.
         static let well = Token.dynamic(
             light: .black.withAlphaComponent(0.04),
-            dark: .black.withAlphaComponent(0.22)
+            dark: NSColor(srgbRed: 32 / 255, green: 32 / 255, blue: 38 / 255, alpha: 1)  // #202026
         )
         static let control = Token.ink(light: 0.07, dark: 0.09)
         /// Hover darkens the control in light and lightens it in dark. Same gesture,

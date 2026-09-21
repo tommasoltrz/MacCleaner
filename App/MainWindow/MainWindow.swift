@@ -22,10 +22,21 @@ struct MainWindow: View {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
                 .toolbar(removing: .sidebarToggle)
+                // Opaque, so the sidebar has a colour of its own instead of a wash
+                // of whatever the window happens to sit over. The modifier reaches
+                // the `List` inside through the environment, which is also why it
+                // is applied here: that file has another session's work in it.
+                .scrollContentBackground(.hidden)
+                .background(Token.sidebarSurface)
         } detail: {
             detail
                 .navigationTitle(model.view.title)
                 .toolbar { toolbarContent }
+                // The toolbar takes the page's own dark rather than the window
+                // material, which lightened whenever the window was key and
+                // tinted itself with the desktop the rest of the time.
+                .toolbarBackground(Token.pageBackground, for: .windowToolbar)
+                .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         }
         // Over the whole content area, inside the safe area, so the toolbar above
         // keeps its glass and its controls. `.disabled` on the detail pane used to
@@ -339,25 +350,16 @@ struct MainWindow: View {
         // pair still matches in height — that was the actual complaint, and it was
         // the inset, not the style.
         //
-        // Two spellings. On macOS 26 the prominent style supplies its own Liquid
-        // Glass capsule, and the toolbar item's shared background has to be hidden
-        // or a second capsule appears behind it. Earlier systems have neither. The
-        // branch is at the item, not inside the label, because
-        // `sharedBackgroundVisibility` is a toolbar modifier.
+        // `.borderedProminent` on every system, including 26. The Liquid Glass
+        // variant was here to sit on a translucent toolbar; this one is painted a
+        // flat colour, and a glass capsule on a flat bar is refracting something
+        // that is not there. It also took a `sharedBackgroundVisibility(.hidden)`
+        // to stop a second capsule drawing behind it, which goes with it.
         if hasRemovalAction {
-            if #available(macOS 26, *) {
-                ToolbarItem(placement: .primaryAction) {
-                    removeButton
-                        .buttonStyle(.glassProminent)
-                        .tint(Token.color(.red))
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .primaryAction) {
-                    removeButton
-                        .buttonStyle(.borderedProminent)
-                        .tint(Token.color(.red))
-                }
+            ToolbarItem(placement: .primaryAction) {
+                removeButton
+                    .buttonStyle(.borderedProminent)
+                    .tint(Token.color(.red))
             }
         }
     }
