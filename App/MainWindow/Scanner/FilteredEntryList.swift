@@ -32,19 +32,8 @@ struct FilteredSummary: View {
         .foregroundStyle(Token.Text.tertiary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 2)
-        // Only the safe tab opens pre-selected — see `seedSafeToRemoveSelection`,
-        // which seeds once for each scan, so a return visit does not overwrite what
-        // the user chose. Keyed on the tab as well as the scan: this view is the
-        // same view under both tabs, and keyed on the scan alone it never ran when
-        // the user came to "Safe to Remove" from "Needs Review".
-        .task(id: SeedKey(scan: model.scanResults?.finishedAt, filter: filter)) {
-            guard filter == .safeToRemove else { return }
-            model.seedSafeToRemoveSelection()
-        }
-    }
-
-    private struct SeedKey: Equatable {
-        let scan: Date?
-        let filter: AppModel.ScanFilter
+        // No seeding here any more. What is ticked when a scan finishes is the
+        // scan's business, not this summary line's: see
+        // `AppModel.seedSafeToRemoveSelection`, now called when the scan returns.
     }
 }
