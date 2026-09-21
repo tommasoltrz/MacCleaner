@@ -42,12 +42,22 @@ public struct FingerprintCache: Sendable {
 
     // MARK: - Storage
 
-    public static var fileURL: URL {
+    /// Where the cache lives, or where a test says it lives.
+    ///
+    /// The directory is a parameter because the alternative is a compiled-in
+    /// absolute path, and this project has twice found that such a path makes the
+    /// thing holding it untestable — with a sharper edge here than usual: a test
+    /// that ran a sweep against the real location would overwrite the user's own
+    /// 34 MB of fingerprints with three fixtures.
+    public static func fileURL(in directory: URL? = nil) -> URL {
+        let base = directory ?? defaultDirectory
+        return base.appendingPathComponent("photo-fingerprints.bin")
+    }
+
+    private static var defaultDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base
-            .appendingPathComponent("Scolo", isDirectory: true)
-            .appendingPathComponent("photo-fingerprints.bin")
+        return base.appendingPathComponent("Scolo", isDirectory: true)
     }
 
     public func encoded() -> Data {
@@ -113,13 +123,13 @@ public struct FingerprintCache: Sendable {
         return FingerprintCache(visionRevision: revision, elementCount: elementCount, prints: prints)
     }
 
-    public static func load(expectingRevision revision: UInt32) -> FingerprintCache? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+    public static func load(expectingRevision revision: UInt32, in directory: URL? = nil) -> FingerprintCache? {
+        guard let data = try? Data(contentsOf: fileURL(in: directory)) else { return nil }
         return decode(data, expectingRevision: revision)
     }
 
-    public func save() {
-        let url = Self.fileURL
+    public func save(in directory: URL? = nil) {
+        let url = Self.fileURL(in: directory)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
@@ -127,6 +137,6 @@ public struct FingerprintCache: Sendable {
     }
 
     public static func clear() {
-        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: fileURL(in: nil))
     }
 }

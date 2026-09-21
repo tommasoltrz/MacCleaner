@@ -44,16 +44,36 @@ public actor PhotoDuplicateService {
     private let library: any PhotoLibraryProviding
     private let grouper: DuplicateGrouper
     private let visionRevision: UInt32
-    private var running: Task<PhotoDuplicateResults, Error>?
+    private let cacheDirectory: URL?
+    private var running: Task<Sweep, Error>?
+    /// What the last finished sweep grouped, kept so that changing the similarity
+    /// setting does not have to sweep again.
+    ///
+    /// Grouping needs exactly two things, and the expensive half of a sweep produces
+    /// neither of them for the threshold's sake: the library fetch and the
+    /// fingerprinting are the same work whatever the number is. So a threshold
+    /// change costs the comparing phase and nothing else — no PhotoKit, no Vision,
+    /// no network.
+    ///
+    /// The prints are the size of the fingerprint cache, about 34 MB for a library
+    /// of 11,000 photographs. That is the price of the setting being a control
+    /// rather than a reason to start over, and it is paid only after a sweep has
+    /// actually run.
+    private var lastSweep: (assets: [PhotoAsset], prints: [String: PhotoFingerprint])?
 
+    /// - Parameter cacheDirectory: where the fingerprint cache is read and written.
+    ///   Nil is the app's own Application Support folder; a test passes a temporary
+    ///   directory so a sweep cannot overwrite the real one.
     public init(
         library: any PhotoLibraryProviding,
         grouper: DuplicateGrouper = DuplicateGrouper(),
-        visionRevision: UInt32
+        visionRevision: UInt32,
+        cacheDirectory: URL? = nil
     ) {
         self.library = library
         self.grouper = grouper
         self.visionRevision = visionRevision
+        self.cacheDirectory = cacheDirectory
     }
 
     public var isSweeping: Bool { running != nil }
@@ -78,7 +98,7 @@ public actor PhotoDuplicateService {
         similarity: PhotoSimilarity = .default,
         onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> PhotoDuplicateResults {
-        if let running { return try await running.value }
+        if let running { return try await running.value.results }
 
         // Everything the injected grouper was given, with the one option that is
         // the user's to set replaced. Built here rather than at init so that
@@ -88,7 +108,7 @@ public actor PhotoDuplicateService {
         options.similarityThreshold = similarity.threshold
         let grouper = DuplicateGrouper(options: options)
 
-        let task = Task { [library, grouper, visionRevision] in
+        let task = Task { [library, grouper, visionRevision, cacheDirectory] in
             let startedAt = Date()
             let access = await library.authorize()
             guard access.canSweep else { throw PhotoSweepUnavailable.access(access) }
@@ -117,7 +137,7 @@ public actor PhotoDuplicateService {
                 !claimed.contains($0.id) && !$0.isHidden && $0.mediaType == .image
             }
 
-            var cache = FingerprintCache.load(expectingRevision: visionRevision)
+            var cache = FingerprintCache.load(expectingRevision: visionRevision, in: cacheDirectory)
                 ?? FingerprintCache(visionRevision: visionRevision, elementCount: 0)
             cache.retaining(Set(assets.map(\.id)))
 
@@ -182,7 +202,7 @@ public actor PhotoDuplicateService {
                     visionRevision: visionRevision,
                     elementCount: UInt32(width),
                     prints: cache.prints
-                ).save()
+                ).save(in: cacheDirectory)
             }
             try Task.checkCancellation()
 
@@ -207,18 +227,79 @@ public actor PhotoDuplicateService {
                 completed: candidates.count, total: candidates.count, fromCache: cached
             ))
 
-            return PhotoDuplicateResults(
-                groups: groups,
-                examinedCount: assets.filter { !$0.isHidden }.count,
-                skippedCount: skipped,
-                startedAt: startedAt,
-                finishedAt: Date()
+            return Sweep(
+                results: PhotoDuplicateResults(
+                    groups: groups,
+                    examinedCount: assets.filter { !$0.isHidden }.count,
+                    skippedCount: skipped,
+                    startedAt: startedAt,
+                    finishedAt: Date()
+                ),
+                assets: assets,
+                prints: cache.prints
             )
         }
 
         running = task
         defer { running = nil }
-        return try await task.value
+        let sweep = try await task.value
+        lastSweep = (sweep.assets, sweep.prints)
+        return sweep.results
+    }
+
+    /// Everything a sweep produced, including what a regroup will need again.
+    private struct Sweep: Sendable {
+        var results: PhotoDuplicateResults
+        var assets: [PhotoAsset]
+        var prints: [String: PhotoFingerprint]
+    }
+
+    /// Re-groups the last sweep at a different similarity, without sweeping.
+    ///
+    /// Returns nil when there is nothing to regroup — no sweep has run in this
+    /// session — which is the caller's cue to run one.
+    ///
+    /// The burst tier reaches the same verdict it always does, and exact is decided
+    /// at its own fixed threshold, so what actually changes is the similar tier. It
+    /// is still the quadratic phase, seconds rather than an instant on a large
+    /// library, and it still polls cancellation.
+    public func regroup(
+        similarity: PhotoSimilarity,
+        onProgress: (@Sendable (Progress) -> Void)? = nil
+    ) async throws -> PhotoDuplicateResults? {
+        guard running == nil, let lastSweep else { return nil }
+
+        var options = grouper.options
+        options.similarityThreshold = similarity.threshold
+        let grouper = DuplicateGrouper(options: options)
+        let startedAt = Date()
+
+        let groups = grouper.group(assets: lastSweep.assets, fingerprints: lastSweep.prints) {
+            onProgress?(Progress(stage: .grouping, percent: Int($0 * 100)))
+        }
+        // A cancelled grouper returns early with partial groups. Same rule as the
+        // sweep: they are not a finished result and must not be shown as one.
+        try Task.checkCancellation()
+        onProgress?(Progress(stage: .done, percent: 100))
+
+        return PhotoDuplicateResults(
+            groups: groups,
+            examinedCount: lastSweep.assets.filter { !$0.isHidden }.count,
+            // The same photographs went unfingerprinted as before: this pass read
+            // no thumbnails at all, so it can neither add to that count nor cure it.
+            skippedCount: skipped(in: lastSweep),
+            startedAt: startedAt,
+            finishedAt: Date()
+        )
+    }
+
+    /// Image assets with no fingerprint — the ones a sweep could not read.
+    private func skipped(
+        in sweep: (assets: [PhotoAsset], prints: [String: PhotoFingerprint])
+    ) -> Int {
+        sweep.assets.filter {
+            !$0.isHidden && $0.mediaType == .image && sweep.prints[$0.id] == nil
+        }.count
     }
 
     /// Deletes the assets the user confirmed.

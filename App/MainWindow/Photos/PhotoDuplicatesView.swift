@@ -171,19 +171,23 @@ struct PhotoDuplicatesView: View {
                             .foregroundStyle(Token.Text.tertiary)
                     }
                     Spacer()
+                    // In the slot "Certain Only" had. That button ticked the burst
+                    // and identical groups and left every judgement call alone —
+                    // one fixed answer to "show me only what you are sure of". This
+                    // asks the same question and lets the user put the line where
+                    // they want it, with each group's distance beside it to aim by.
                     similarityPicker
                     Button("Select All") { model.selectAllRemovablePhotos() }
                         .buttonStyle(SecondaryButtonStyle())
-                        .disabled(model.photoGroups.isEmpty)
-                    // This action excludes groups that need manual review.
-                    Button("Certain Only (\(model.certainRemovableCount))") {
-                        model.selectCertainPhotosOnly()
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.certainRemovableCount == 0)
+                        .disabled(model.photoGroups.isEmpty || model.isRegroupingPhotos)
                     Button("Deselect All") { model.deselectAllPhotos() }
                         .buttonStyle(SecondaryButtonStyle())
                         .disabled(model.photoSelection.isEmpty)
+                    Button("Scan Again") { model.startPhotoSweep() }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .disabled(model.isBusyWithDisk)
+                        .help("Looks for photographs added since the last sweep. "
+                              + "Changing how alike \"alike\" means does not need this.")
                 }
                 .padding(.horizontal, 2)
                 ForEach(model.photoGroups) { group in
@@ -247,15 +251,16 @@ struct PhotoDuplicatesView: View {
     ///
     /// Beside the results rather than in Preferences: it is calibrated by looking at
     /// the distances on the groups it just produced, and a setting you have to leave
-    /// the page to reach cannot be calibrated that way. It does not re-sweep on its
-    /// own — with every fingerprint cached a sweep is still the whole comparing
-    /// phase — so the note below says the results are no longer what the picker says.
+    /// the page to reach cannot be calibrated that way.
+    ///
+    /// It applies at once. Re-grouping needs the assets and the fingerprints, both
+    /// of which the last sweep still has, so it costs the comparing phase and asks
+    /// the photo library for nothing — which is why there is a spinner here and not
+    /// an instruction to scan again.
     private var similarityPicker: some View {
         HStack(spacing: 8) {
-            if model.photoResultsAreStale {
-                Text("Scan again to apply")
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.textColor(.orange))
+            if model.isRegroupingPhotos {
+                ProgressView().controlSize(.small)
             }
             Picker("How alike", selection: $model.photoSimilarity) {
                 ForEach(PhotoSimilarity.allCases) { similarity in
