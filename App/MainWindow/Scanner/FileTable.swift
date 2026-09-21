@@ -759,26 +759,22 @@ private struct ProtectedItemHoverTip: View {
 
 /// The hover tip's surface, in the shape that carries its pointer.
 ///
-/// macOS 26 draws it in Liquid Glass, which refracts the table behind it and
-/// carries the pointer continuously out of the card. Earlier systems have no such
-/// material: `.regularMaterial` in the same shape is the nearest honest
-/// equivalent — a translucent card rather than a lens — with a hairline border,
-/// because without glass's own edge the card and the table it floats over meet
-/// with nothing between them.
+/// A solid card, on every system. macOS 26 drew this in Liquid Glass, which
+/// refracted the table behind it — handsome, and the last thing in the app still
+/// doing it once the page, the sidebar, the cards and the toolbar were given
+/// opaque colours of their own. A lens over a flat surface refracts something that
+/// is not there.
+///
+/// It keeps the hairline: without glass's own edge, the tip and the table it
+/// floats over would meet with nothing between them.
 private extension View {
-    @ViewBuilder
     func hoverTipSurface() -> some View {
         let shape = UninstallHoverTipShape(
             cornerRadius: Token.Radius.card,
             pointerCenterX: 22
         )
-        if #available(macOS 26, *) {
-            self.glassEffect(.regular.interactive(false), in: shape)
-        } else {
-            self
-                .background(.regularMaterial, in: shape)
-                .overlay(shape.stroke(Token.Fill.boxBorder, lineWidth: Token.hairline))
-        }
+        return background(Token.Fill.box, in: shape)
+            .overlay(shape.stroke(Token.Fill.boxBorder, lineWidth: Token.hairline))
     }
 }
 
