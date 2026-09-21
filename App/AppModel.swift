@@ -179,13 +179,12 @@ final class AppModel {
 
     // MARK: - Navigation
 
-    var view: View = .dashboard {
-        didSet {
-            guard view != oldValue else { return }
-            history.append(oldValue)
-            forwardStack.removeAll()
-        }
-    }
+    /// The section on screen. There is no history behind it: the sidebar shows
+    /// every section at once and never collapses, so "back" would only ever mean
+    /// "the row above or below the one you can already see". The toolbar's arrows
+    /// are gone with it — they also meant folders in the Storage Explorer, which
+    /// is two things for one control, and those now live in that view's own bar.
+    var view: View = .dashboard
     var duplicateKind: DuplicateKind = .files
 
     /// Edit › Find (⌘F) bumps this; the view on screen moves focus to its search
@@ -208,51 +207,6 @@ final class AppModel {
     }
 
     var scanFilter: ScanFilter = .all
-    private var history: [View] = []
-    private var forwardStack: [View] = []
-
-    var canGoBack: Bool {
-        if view == .storageExplorer, storageExplorer.canGoBack {
-            return !isStorageExplorerMeasurementBlocked
-        }
-        return !history.isEmpty
-    }
-    var canGoForward: Bool {
-        if view == .storageExplorer, storageExplorer.canGoForward {
-            return !isStorageExplorerMeasurementBlocked
-        }
-        return !forwardStack.isEmpty
-    }
-
-    func goBack() {
-        if view == .storageExplorer, storageExplorer.canGoBack {
-            guard !isStorageExplorerMeasurementBlocked else { return }
-            storageExplorer.goBack()
-            return
-        }
-        guard let previous = history.popLast() else { return }
-        forwardStack.append(view)
-        withoutHistory { view = previous }
-    }
-
-    func goForward() {
-        if view == .storageExplorer, storageExplorer.canGoForward {
-            guard !isStorageExplorerMeasurementBlocked else { return }
-            storageExplorer.goForward()
-            return
-        }
-        guard let next = forwardStack.popLast() else { return }
-        history.append(view)
-        withoutHistory { view = next }
-    }
-
-    private func withoutHistory(_ change: () -> Void) {
-        let savedHistory = history
-        let savedForward = forwardStack
-        change()
-        history = savedHistory
-        forwardStack = savedForward
-    }
 
     // MARK: - Data
 

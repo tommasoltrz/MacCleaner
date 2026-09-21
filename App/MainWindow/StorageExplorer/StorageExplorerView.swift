@@ -52,6 +52,22 @@ struct StorageExplorerView: View {
 
     private func browserBar(_ url: URL) -> some View {
         HStack(spacing: 10) {
+            // Folder history, which used to be the window's toolbar arrows. Those
+            // meant pages everywhere else and folders here — one control with two
+            // meanings — so they went, and this is the half that was doing real
+            // work: the path control beside it only ever walks *up*, and going back
+            // to a folder you looked at earlier has no other route.
+            HStack(spacing: 2) {
+                Button { model.goBack() } label: { Image(systemName: "chevron.left") }
+                    .disabled(!model.canGoBack || isMeasurementBlocked)
+                    .help("Back to the last folder")
+                Button { model.goForward() } label: { Image(systemName: "chevron.right") }
+                    .disabled(!model.canGoForward || isMeasurementBlocked)
+                    .help("Forward")
+            }
+            .buttonStyle(.accessoryBar)
+            .fixedSize()
+
             NativePathControl(url: url, onSelect: model.navigate)
                 .frame(minWidth: 260, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
                 .disabled(isMeasurementBlocked || model.isLoading)
