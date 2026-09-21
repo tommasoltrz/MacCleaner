@@ -262,6 +262,11 @@ struct MainWindow: View {
     }
 
     /// The one button that removes things, for the view on screen.
+    ///
+    /// The same control as Scan, in the same size, with the same label inset — the
+    /// two sit side by side, and a pair that differs by a couple of points reads as
+    /// a mistake rather than as a hierarchy. It is told apart by its tint and by
+    /// saying what it would take, not by being a different shape.
     private var removeButton: some View {
         Button(action: removeTapped) {
             HStack(spacing: 7) {
@@ -270,7 +275,9 @@ struct MainWindow: View {
                 }
                 Text(model.removeLabel)
             }
+            .toolbarButtonLabel()
         }
+        .controlSize(.large)
         .disabled(!canRemove)
     }
 
@@ -321,38 +328,21 @@ struct MainWindow: View {
 
         // Scan comes first and quietly. It used to be the window's one filled
         // capsule, which made starting a measurement look like the point of the
-        // app; what the user came to do is remove something, and that is the
-        // button that should carry the weight.
+        // app; what the user came to do is remove something.
         ToolbarItem(placement: .primaryAction) {
             scanButton.buttonStyle(.bordered)
         }
 
-        // Then what this view removes, on the right, filled and red. Always there
-        // on a view that can remove anything, disabled until it can — see
-        // `hasRemovalAction`.
-        //
-        // Two spellings of one button. On macOS 26 it supplies its own Liquid
-        // Glass capsule, and the toolbar item's shared background has to be hidden
-        // or a second capsule appears behind it. Earlier systems have neither, and
-        // `.borderedProminent` is the filled capsule those releases draw for
-        // exactly this button. The branch is at the item, not inside the label,
-        // because `sharedBackgroundVisibility` is a toolbar modifier.
+        // Then what this view removes, on the right. The same control as Scan —
+        // `.bordered`, `.large`, same label inset — tinted red, because the pair
+        // sits side by side and two buttons that differ slightly in height read as
+        // a mistake. Always there on a view that can remove anything, disabled
+        // until it can; see `hasRemovalAction`.
         if hasRemovalAction {
-            if #available(macOS 26, *) {
-                ToolbarItem(placement: .primaryAction) {
-                    removeButton
-                        .buttonStyle(.glassProminent)
-                        .tint(Token.color(.red))
-                        .controlSize(.large)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            } else {
-                ToolbarItem(placement: .primaryAction) {
-                    removeButton
-                        .buttonStyle(.borderedProminent)
-                        .tint(Token.color(.red))
-                        .controlSize(.large)
-                }
+            ToolbarItem(placement: .primaryAction) {
+                removeButton
+                    .buttonStyle(.bordered)
+                    .tint(Token.color(.red))
             }
         }
     }
@@ -363,11 +353,8 @@ struct MainWindow: View {
         } label: {
             // Plain text, no glyph: the sparkles icon sat on the label's
             // baseline and dragged the whole line optically off-centre in the
-            // capsule. The App Store's offer button it is modelled on is
-            // text-only too.
-            Text("Scan")
-                .padding(.vertical, 1)
-                .padding(.horizontal, 8)
+            // capsule.
+            Text("Scan").toolbarButtonLabel()
         }
         .controlSize(.large)
         .disabled(model.isBusyWithDisk)

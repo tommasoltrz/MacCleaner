@@ -349,3 +349,14 @@ extension View {
             .truncationMode(.middle)
     }
 }
+
+extension View {
+    /// The inset every toolbar button's label carries.
+    ///
+    /// Shared because Scan and Remove sit next to each other: one of them had it
+    /// and the other did not, which made the pair differ in both width and height
+    /// for no reason a reader could see.
+    func toolbarButtonLabel() -> some View {
+        padding(.vertical, 1).padding(.horizontal, 8)
+    }
+}
