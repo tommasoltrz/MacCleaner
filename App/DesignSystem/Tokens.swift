@@ -172,7 +172,14 @@ enum Token {
     // MARK: - Surfaces
     //
     // Three authored darks, one per depth: the page, the surfaces grouped on it,
-    // and the cards standing off those. They are opaque on purpose. The previous
+    // and the cards standing off those.
+    //
+    // **Neutral, and deliberately so.** The first set of three carried a blue
+    // channel raised above the other two — #18181D is (24, 24, 29), #202026 is
+    // (32, 32, 38), #282830 is (40, 40, 48) — and five to eight points on one
+    // channel is enough to read as a purple cast across a whole window. The greys
+    // are equal now, and the scale sits nine or so points lower, nearer black.
+    // Each step is eight, which is what separates a surface from the one above it. They are opaque on purpose. The previous
     // dark canvas was measured off the App Store and the surfaces above it were
     // white at low alpha, which meant every one of them took a wash of whatever
     // wallpaper the window sat over — the Storage Explorer's table made that
@@ -187,7 +194,7 @@ enum Token {
     /// invisible.
     static let pageBackground = Token.dynamic(
         light: NSColor(srgbRed: 0.949, green: 0.949, blue: 0.957, alpha: 1),  // #F2F2F4
-        dark: NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 29 / 255, alpha: 1)  // #18181D
+        dark: NSColor(white: 14 / 255, alpha: 1)  // #0E0E0E
     )
 
     /// The shell: one continuous surface under the whole window, title-bar area
@@ -211,7 +218,7 @@ enum Token {
     /// settings.
     static let chrome = Token.dynamic(
         light: NSColor.windowBackgroundColor,
-        dark: NSColor(srgbRed: 32 / 255, green: 32 / 255, blue: 38 / 255, alpha: 1)  // #202026
+        dark: NSColor(white: 23 / 255, alpha: 1)  // #171717
     )
 
     // MARK: - Fills
@@ -235,7 +242,7 @@ enum Token {
         /// the grey window.
         static let box = Token.dynamic(
             light: .white.withAlphaComponent(0.85),
-            dark: NSColor(srgbRed: 40 / 255, green: 40 / 255, blue: 48 / 255, alpha: 1)  // #282830
+            dark: NSColor(white: 31 / 255, alpha: 1)  // #1F1F1F
         )
         /// Also the row rule in every table and the capacity bar's track. Deliberately
         /// weaker than `separatorColor`, which is roughly 0.10 in light: repeated every
@@ -250,7 +257,7 @@ enum Token {
         /// into, which is what makes it read as recessed.
         static let well = Token.dynamic(
             light: .black.withAlphaComponent(0.04),
-            dark: NSColor(srgbRed: 32 / 255, green: 32 / 255, blue: 38 / 255, alpha: 1)  // #202026
+            dark: NSColor(white: 23 / 255, alpha: 1)  // #171717
         )
         static let control = Token.ink(light: 0.07, dark: 0.09)
         /// Hover darkens the control in light and lightens it in dark. Same gesture,
@@ -258,12 +265,14 @@ enum Token {
         static let controlHover = Token.ink(light: 0.12, dark: 0.14)
         static let rowHover = Token.ink(light: 0.04, dark: 0.03)
         // Light matches the App Store's pill: about 4% black over the sidebar
-        // material, a hint rather than a block. Dark matches Finder's selected pill
-        // (#2F2C2F) as a solid: as an ink over the translucent sidebar it
-        // composited to #3C3B3E and drifted with whatever sat behind the window.
+        // material, a hint rather than a block. Dark is a solid rather than an ink:
+        // over the translucent sidebar an ink composited to #3C3B3E and drifted
+        // with whatever sat behind the window. It was Finder's #2F2C2F, whose red
+        // and blue sit three above its green — the same cast the surfaces carried,
+        // and the more visible for being the one thing on the panel with a fill.
         static let sidebarSelection = Token.dynamic(
             light: NSColor.black.withAlphaComponent(0.045),
-            dark: NSColor(srgbRed: 47 / 255, green: 44 / 255, blue: 47 / 255, alpha: 1)  // #2F2C2F
+            dark: NSColor(white: 44 / 255, alpha: 1)  // #2C2C2C
         )
         /// The selected row's label and icon. Not a system token: the App Store
         /// pill this is modelled on paints its selection with a wide-gamut blue —
