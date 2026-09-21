@@ -682,6 +682,39 @@ final class AppModel {
         view = .scanner
     }
 
+    /// Opens one of the two duplicate reviews.
+    func showDuplicates(kind: DuplicateKind) {
+        duplicateKind = kind
+        view = .duplicates
+    }
+
+    /// Opens the Scanner with one category disclosed and the rest closed.
+    ///
+    /// For the Dashboard's suggestions, each of which names a category: arriving
+    /// at the whole outline and hunting for the row the user just pressed is the
+    /// thing a suggestion is supposed to save them.
+    func showScanner(category: CategoryID) {
+        scanFilter = .all
+        openCategories = [category]
+        view = .scanner
+    }
+
+    /// Cleans exactly what a "safe to remove" suggestion says it will.
+    ///
+    /// It re-seeds the selection first. The row states a figure taken from the
+    /// scan, and the sheet must remove that and not whatever happens to be ticked
+    /// — a user who unticked something in the Scanner and then pressed this would
+    /// otherwise get a sheet quoting a different number from the row they pressed.
+    ///
+    /// Still the ordinary confirmation sheet. One click reaches it; nothing is
+    /// removed until that sheet is read and agreed to.
+    func cleanSafeToRemove() {
+        guard let results = scanResults, results.safeToRemoveBytes > 0 else { return }
+        safeSelectionSeededAt = nil
+        seedSafeToRemoveSelection()
+        requestCleanUp()
+    }
+
     /// Rows in the filtered list whose checkbox actually works. A locked entry — a
     /// running app, user data, a manual-removal aggregate — must never be swept into
     /// a total that would then fail at cleanup.

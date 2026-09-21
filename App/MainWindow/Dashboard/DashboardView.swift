@@ -38,28 +38,24 @@ struct DashboardView: View {
                     measuringPlaceholder
                 }
 
-                StatTiles(
-                    results: model.scanResults,
-                    lastScanAt: model.lastScanFinishedAt,
-                    // The tiles are a summary of the scan; the scan's own page is
-                    // where its rows live, so a tile opens the Scanner on the list
-                    // it counted rather than a page of its own.
-                    onSafeTap: { model.showScanner(filtered: .safeToRemove) },
-                    onReviewTap: { model.showScanner(filtered: .needsReview) },
-                    onScan: { model.startScan() }
-                )
-
-                // Below the tiles: the capacity card and the tiles are what the
-                // disk is now, and this is what it did since a date the user picks.
-                // It carries no measuring state — the report is dated history, so it
-                // stays on screen while the next walk runs.
-                if let growth = model.growth {
-                    GrowthCard(
-                        presentation: GrowthCard.Presentation(growth),
-                        baseline: model.growthBaseline,
-                        onSelectBaseline: { model.growthBaseline = $0 },
-                        onReveal: { model.revealGrowth($0) }
-                    )
+                // What to do, beside what changed. The three stat tiles that used
+                // to sit here were summaries — each stated a figure and left the
+                // user to go and find the thing that acted on it. A suggestion
+                // carries the verb, so the row is the action.
+                //
+                // Side by side because they answer different questions about the
+                // same disk: what is worth removing now, and what has been filling
+                // it up. Stacked below a certain width, where two columns would
+                // each be too narrow for a row to keep its figure on one line.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 16) {
+                        SuggestionList(model: model)
+                        growthSection.frame(width: 340)
+                    }
+                    VStack(alignment: .leading, spacing: 16) {
+                        SuggestionList(model: model)
+                        growthSection
+                    }
                 }
 
                 // After everything about this disk and before the system-level
@@ -89,6 +85,45 @@ struct DashboardView: View {
             .padding(.horizontal, 14)
             .padding(.top, 4)
             .padding(.bottom, 22)
+        }
+    }
+
+    /// What the disk did, beside what to do about it.
+    ///
+    /// It keeps its named folders. A summary of which *categories* grew —
+    /// "macOS +10.6 GB" — says a thing happened and nothing a person can act on;
+    /// `Documents/Renewals/build +11.0 GB` is the whole point of the measurement
+    /// ring, and the rule that finds it (a child is named instead of its parent
+    /// only when it explains four fifths of the change) exists to make that line
+    /// trustworthy. The figures stay; the bars that would have replaced them do
+    /// not, because they are the less useful half.
+    ///
+    /// No measuring state: the report is dated history, so it stays on screen
+    /// while the next walk runs.
+    @ViewBuilder
+    private var growthSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What changed")
+                .font(.mcSectionTitle)
+                .foregroundStyle(Token.Text.primary)
+            if let growth = model.growth {
+                GrowthCard(
+                    presentation: GrowthCard.Presentation(growth),
+                    baseline: model.growthBaseline,
+                    onSelectBaseline: { model.growthBaseline = $0 },
+                    onReveal: { model.revealGrowth($0) }
+                )
+            } else {
+                GroupedBox {
+                    Text("Scolo compares each measurement with the last one. "
+                         + "The first report arrives after the second measurement.")
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+            }
         }
     }
 
