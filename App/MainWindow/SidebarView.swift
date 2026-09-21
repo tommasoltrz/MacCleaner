@@ -25,67 +25,69 @@ struct SidebarView: View {
         // colour and offers no way to change it (`listItemTint(.monochrome)` tints
         // row *content*, not the selection fill).
         List {
-            Section("Scolo") {
-                ForEach(AppModel.View.sidebarCases) { view in
-                    Button {
-                        select(view)
-                    } label: {
-                        Label {
-                            HStack {
-                                Text(view.title)
-                                    // App Store's treatment, per the user's call over
-                                    // Finder's: the selected row's label and icon go
-                                    // accent, everything else stays white.
+            ForEach(AppModel.View.sidebarSections) { section in
+                Section(section.title) {
+                    ForEach(section.views) { view in
+                        Button {
+                            select(view)
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(view.title)
+                                        // App Store's treatment, per the user's call over
+                                        // Finder's: the selected row's label and icon go
+                                        // accent, everything else stays white.
+                                        .foregroundStyle(isSelected(view)
+                                            ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
+                                    Spacer()
+                                    if let count = count(for: view) {
+                                        Text(count, format: .number)
+                                            .font(.mcSidebarCount)
+                                            .foregroundStyle(Token.Text.tertiary)
+                                    }
+                                }
+                            } icon: {
+                                Image(systemName: view.symbol)
+                                    // 14, down from 16: after the macOS 27 update the same
+                                    // 16 pt symbols measured ~22 pt across in a 218 pt
+                                    // sidebar and crowded the 13 pt labels. The scale is
+                                    // pinned because a sidebar list sets one through the
+                                    // environment, and it multiplies whatever the font says.
+                                    .font(.system(size: 14, weight: .medium))
+                                    .imageScale(.medium)
+                                    // The App Store fills the selected row's symbol —
+                                    // outline at rest, solid when chosen — and the solid
+                                    // glyph is most of why its selection reads brighter.
+                                    // Symbols with no fill variant keep their outline.
+                                    .symbolVariant(isSelected(view) ? .fill : .none)
                                     .foregroundStyle(isSelected(view)
                                         ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
-                                Spacer()
-                                if let count = count(for: view) {
-                                    Text(count, format: .number)
-                                        .font(.mcSidebarCount)
-                                        .foregroundStyle(Token.Text.tertiary)
-                                }
                             }
-                        } icon: {
-                            Image(systemName: view.symbol)
-                                // 14, down from 16: after the macOS 27 update the same
-                                // 16 pt symbols measured ~22 pt across in a 218 pt
-                                // sidebar and crowded the 13 pt labels. The scale is
-                                // pinned because a sidebar list sets one through the
-                                // environment, and it multiplies whatever the font says.
-                                .font(.system(size: 14, weight: .medium))
-                                .imageScale(.medium)
-                                // The App Store fills the selected row's symbol —
-                                // outline at rest, solid when chosen — and the solid
-                                // glyph is most of why its selection reads brighter.
-                                // Symbols with no fill variant keep their outline.
-                                .symbolVariant(isSelected(view) ? .fill : .none)
-                                .foregroundStyle(isSelected(view)
-                                    ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        // Not `.plain`: that style fades the label while the mouse is
+                        // held, and a source list has no pressed state at all.
+                        .buttonStyle(SidebarRowButtonStyle())
+                        // Zero minimum duration, so this is a press recogniser rather than
+                        // a long press: it runs the instant the mouse goes down. A `Button`
+                        // acts on mouse *up*, which left the row looking stuck until the
+                        // release; Finder switches on the way down, and so does this. The
+                        // `Button`'s own action stays for keyboard and assistive
+                        // activation, where there is no mouse to go down. Scrolling is
+                        // untouched — a wheel or a two-finger swipe is not a press — and
+                        // dragging more than 4pt away only ends a selection already made.
+                        .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
+                            if isPressing { select(view) }
+                        } perform: {}
+                        .listRowBackground(
+                            // Inset, so the pill floats inside the sidebar instead of
+                            // running edge to edge.
+                            RoundedRectangle(cornerRadius: Token.Radius.row)
+                                .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
+                                .padding(.horizontal, 10)
+                        )
+                        .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
                     }
-                    // Not `.plain`: that style fades the label while the mouse is
-                    // held, and a source list has no pressed state at all.
-                    .buttonStyle(SidebarRowButtonStyle())
-                    // Zero minimum duration, so this is a press recogniser rather than
-                    // a long press: it runs the instant the mouse goes down. A `Button`
-                    // acts on mouse *up*, which left the row looking stuck until the
-                    // release; Finder switches on the way down, and so does this. The
-                    // `Button`'s own action stays for keyboard and assistive
-                    // activation, where there is no mouse to go down. Scrolling is
-                    // untouched — a wheel or a two-finger swipe is not a press — and
-                    // dragging more than 4pt away only ends a selection already made.
-                    .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
-                        if isPressing { select(view) }
-                    } perform: {}
-                    .listRowBackground(
-                        // Inset, so the pill floats inside the sidebar instead of
-                        // running edge to edge.
-                        RoundedRectangle(cornerRadius: Token.Radius.row)
-                            .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
-                            .padding(.horizontal, 10)
-                    )
-                    .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
                 }
             }
             // No "Locations" section. It held one row, the startup volume, which
@@ -151,28 +153,80 @@ struct SidebarView: View {
     }
 
     /// Free-space readout pinned under the list.
+    ///
+    /// A card rather than a rule and a line: the sidebar's rows are the app's
+    /// navigation and this is not one of them, so it is separated by being a
+    /// surface of its own rather than by a divider that reads as one more group
+    /// header. Three lines, in the order the question is asked — which disk, how
+    /// much is left, how full it is.
     private var capacityFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider()
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
                 Text(model.volume?.name ?? "Macintosh HD")
-                Spacer()
+                    .font(.mcRowTitle)
+                    .foregroundStyle(Token.Text.primary)
+                Spacer(minLength: 8)
+                // Free space is the figure someone opens this app for, so it is
+                // the one on the volume's own line.
                 Text(model.volume.map { "\(ByteFormatting.string($0.freeBytes)) free" } ?? "—")
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
             }
-            .font(.mcEyebrow)
-            .foregroundStyle(Token.Text.tertiary)
+            .lineLimit(1)
 
-            ProgressView(value: usedFraction)
-                .progressViewStyle(.linear)
-                .controlSize(.small)
+            capacityBar
+
+            Text(usedSummary ?? "—")
+                .font(.mcCaption)
+                .foregroundStyle(Token.Text.quaternary)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: Token.Radius.box)
+                .fill(Token.Fill.box)
+        )
+        .padding(.horizontal, 10)
         .padding(.bottom, 12)
+    }
+
+    /// The fullness bar. Drawn by hand rather than with `ProgressView`, which paints
+    /// the accent colour: the accent means "the thing you chose" everywhere else in
+    /// this window, and how full a disk is was not chosen. A neutral ink says the
+    /// same proportion without claiming it is a status.
+    private var capacityBar: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Token.Fill.well)
+                Capsule()
+                    .fill(Token.ink(light: 0.55, dark: 0.85))
+                    // A disk with a sliver used still shows a sliver, rather than
+                    // rounding down to an empty track that says the wrong thing.
+                    .frame(width: max(usedFraction > 0 ? 3 : 0,
+                                      geometry.size.width * usedFraction))
+            }
+        }
+        .frame(height: 4)
     }
 
     private var usedFraction: Double {
         guard let volume = model.volume, volume.capacityBytes > 0 else { return 0 }
         return Double(volume.usedBytes) / Double(volume.capacityBytes)
+    }
+
+    /// "220.36 of 245.11 GB used". The unit is written once when both figures land
+    /// in it, which on any real startup volume they do; a pair that somehow split
+    /// units keeps both, since dropping one would then be a lie about the smaller.
+    private var usedSummary: String? {
+        guard let volume = model.volume else { return nil }
+        let used = ByteFormatting.string(volume.usedBytes)
+        let capacity = ByteFormatting.string(volume.capacityBytes)
+        guard let usedUnit = used.split(separator: " ").last,
+              let capacityUnit = capacity.split(separator: " ").last,
+              usedUnit == capacityUnit
+        else { return "\(used) of \(capacity) used" }
+        return "\(used.dropLast(usedUnit.count + 1)) of \(capacity) used"
     }
 
     /// The design shows a count beside Scanner and Trash only.

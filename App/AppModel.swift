@@ -90,11 +90,29 @@ final class AppModel {
         case dashboard, scanner, storageExplorer, uninstaller, history, trash, duplicates
         var id: String { rawValue }
 
-        /// The sidebar's rows. Destructive workflows sit at the end: review an
-        /// application's complete uninstall first, then the Trash where removed
-        /// items ultimately land.
-        static var sidebarCases: [View] {
-            [.dashboard, .scanner, .storageExplorer, .duplicates, .uninstaller, .history, .trash]
+        /// A named group of sidebar rows.
+        struct SidebarSection: Identifiable {
+            let title: String
+            let views: [View]
+            var id: String { title }
+        }
+
+        /// The sidebar's rows, in three groups.
+        ///
+        /// One flat list of seven rows said nothing about what any of them was for,
+        /// and the order had to carry the whole argument. The groups say it outright:
+        /// *Overview* is where the disk is described and nothing is removed;
+        /// *Clean up* is the three ways to remove something, in the order they ask for
+        /// trust — a scan proposes, duplicates need a keeper chosen, an uninstall takes
+        /// an application the user installed on purpose; *Activity* is the record of
+        /// what was removed and the Trash it went to, which is where it ends and so
+        /// where the list ends.
+        static var sidebarSections: [SidebarSection] {
+            [
+                SidebarSection(title: "Overview", views: [.dashboard, .storageExplorer]),
+                SidebarSection(title: "Clean up", views: [.scanner, .duplicates, .uninstaller]),
+                SidebarSection(title: "Activity", views: [.history, .trash])
+            ]
         }
 
         var title: String {
