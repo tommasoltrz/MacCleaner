@@ -723,9 +723,14 @@ final class AppModel {
     /// confirmation. Needs Review starts with no selection because the user must
     /// make that decision.
     ///
-    /// Seeded once per scan. Re-seeding on every appearance would undo a
-    /// deliberate deselection the moment the user stepped away and came back; a new
-    /// scan is a new list, so it re-arms.
+    /// Called when a scan finishes, and only then. It was a view's `.task` once,
+    /// on the summary line of the "Safe to Remove" tab, which made the app's whole
+    /// opening selection a side effect of looking at one tab: land on "All" after a
+    /// scan and nothing was ticked, so Remove was disabled over a list of rows that
+    /// were about to tick themselves the moment the user clicked elsewhere.
+    ///
+    /// Still guarded by `safeSelectionSeededAt`, so re-seeding cannot undo a
+    /// deliberate deselection. A new scan is a new list, so it re-arms.
     func seedSafeToRemoveSelection() {
         guard let finishedAt = scanResults?.finishedAt,
               safeSelectionSeededAt != finishedAt
@@ -2129,7 +2134,12 @@ final class AppModel {
                 // Fresh results arrive collapsed. Closed rows form a short summary
                 // the user can take in at a glance, and opening one is a click.
                 self.openCategories = []
-                // What the scan found is the page the user is looking at.
+                // Here, because a scan finishing is what arms the selection. It
+                // used to be a `.task` on the "Safe to Remove" tab's summary, so
+                // nothing was ticked until the user happened to visit that tab —
+                // and the Remove button, which reads the same selection, stayed
+                // dead on the tab the scan actually lands on.
+                self.seedSafeToRemoveSelection()
             } catch is CancellationError {
                 // The user stopped it.
             } catch {

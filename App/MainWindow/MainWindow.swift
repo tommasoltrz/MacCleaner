@@ -263,10 +263,10 @@ struct MainWindow: View {
 
     /// The one button that removes things, for the view on screen.
     ///
-    /// The same control as Scan, in the same size, with the same label inset — the
-    /// two sit side by side, and a pair that differs by a couple of points reads as
-    /// a mistake rather than as a hierarchy. It is told apart by its tint and by
-    /// saying what it would take, not by being a different shape.
+    /// The same size and the same label inset as Scan — the two sit side by side,
+    /// and a pair that differs by a couple of points reads as a mistake. It is
+    /// filled where Scan is bordered, because it is the one destructive control in
+    /// the window and that is worth a difference the eye can catch.
     private var removeButton: some View {
         Button(action: removeTapped) {
             HStack(spacing: 7) {
@@ -333,16 +333,31 @@ struct MainWindow: View {
             scanButton.buttonStyle(.bordered)
         }
 
-        // Then what this view removes, on the right. The same control as Scan —
-        // `.bordered`, `.large`, same label inset — tinted red, because the pair
-        // sits side by side and two buttons that differ slightly in height read as
-        // a mistake. Always there on a view that can remove anything, disabled
-        // until it can; see `hasRemovalAction`.
+        // Then what this view removes, on the right: filled red, because this is
+        // the one destructive control in the window and a tint on a bordered
+        // button was not saying so. Same size and same label inset as Scan, so the
+        // pair still matches in height — that was the actual complaint, and it was
+        // the inset, not the style.
+        //
+        // Two spellings. On macOS 26 the prominent style supplies its own Liquid
+        // Glass capsule, and the toolbar item's shared background has to be hidden
+        // or a second capsule appears behind it. Earlier systems have neither. The
+        // branch is at the item, not inside the label, because
+        // `sharedBackgroundVisibility` is a toolbar modifier.
         if hasRemovalAction {
-            ToolbarItem(placement: .primaryAction) {
-                removeButton
-                    .buttonStyle(.bordered)
-                    .tint(Token.color(.red))
+            if #available(macOS 26, *) {
+                ToolbarItem(placement: .primaryAction) {
+                    removeButton
+                        .buttonStyle(.glassProminent)
+                        .tint(Token.color(.red))
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    removeButton
+                        .buttonStyle(.borderedProminent)
+                        .tint(Token.color(.red))
+                }
             }
         }
     }
