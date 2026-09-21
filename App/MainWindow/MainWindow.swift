@@ -14,9 +14,14 @@ struct MainWindow: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        NavigationSplitView {
+        // The sidebar is always there and cannot be collapsed. It is the whole of
+        // this app's navigation — seven sections, all of them visible — so hiding
+        // it only ever strands the user somewhere with no way back, and the toolbar
+        // control for hiding it is a control whose best outcome is nothing.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
+                .toolbar(removing: .sidebarToggle)
         } detail: {
             detail
                 .navigationTitle(model.view.title)
@@ -274,33 +279,6 @@ struct MainWindow: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // The pair is one HStack inside the group, with the rule drawn between the
-        // arrows the way Finder's back/forward control does.
-        //
-        // Not `ControlGroup`: it renders the separator correctly but loses the
-        // leading edge — the pair drifts to the right of the title. A bare
-        // `ToolbarItemGroup` holds the left but draws no separator, so the rule is
-        // placed by hand.
-        // No leading inset item: the toolbar's own ~4.5pt is matched by the content's
-        // horizontal padding instead. Insetting the toolbar proved impossible —
-        // `ToolbarSpacer(.fixed)` adds nothing visible, and a `Color.clear` inside
-        // the group is swallowed by its shared capsule, padding the first chevron.
-
-        ToolbarItemGroup(placement: .navigation) {
-            HStack(spacing: 2) {
-                Button { model.goBack() } label: { Image(systemName: "chevron.left") }
-                    .disabled(!model.canGoBack)
-
-                Rectangle()
-                    .fill(Token.separator)
-                    .frame(width: 1, height: 16)
-                    .accessibilityHidden(true)
-
-                Button { model.goForward() } label: { Image(systemName: "chevron.right") }
-                    .disabled(!model.canGoForward)
-            }
-        }
-
         // One principal item holding both. The Duplicates picker used to take the
         // slot alone, so a junk scan started elsewhere lost its readout and its
         // stop button the moment the user opened Duplicates.

@@ -76,6 +76,11 @@ struct ScoloApp: App {
                     .keyboardShortcut("f")
                     .disabled(!model.canFind)
             }
+            // View › Show Sidebar goes too. The sidebar cannot be collapsed — the
+            // split view's visibility is a constant — so the menu item would write
+            // to a binding that discards it and appear to do nothing. A command
+            // that is refused is worse than a command that is absent.
+            CommandGroup(replacing: .sidebar) {}
             CommandGroup(after: .appSettings) {
                 Button("Grant Full Disk Access") {
                     let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
