@@ -190,12 +190,18 @@ enum Token {
         dark: NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 29 / 255, alpha: 1)  // #18181D
     )
 
-    /// The sidebar, and any surface grouped on the page rather than raised off it.
+    /// The window's own surface: the sidebar, the toolbar, and the margin around
+    /// the content pane.
     ///
-    /// One step up from the page and one below a card. In light it is the window
-    /// material still, because the sidebar there is a source list and the platform
-    /// draws those with a material that follows the user's settings.
-    static let sidebarSurface = Token.dynamic(
+    /// The sidebar and the chrome around the page are one continuous surface, and
+    /// the page is a rounded pane inset into it. That is the layout — it only
+    /// reads if the pane and what surrounds it are different colours, which is why
+    /// the page takes the darkest of the three and this sits a step above it.
+    ///
+    /// In light it stays the window material: the sidebar there is a source list,
+    /// and the platform draws those with a material that follows the user's
+    /// settings.
+    static let chrome = Token.dynamic(
         light: NSColor.windowBackgroundColor,
         dark: NSColor(srgbRed: 32 / 255, green: 32 / 255, blue: 38 / 255, alpha: 1)  // #202026
     )
@@ -301,6 +307,8 @@ enum Token {
         /// had drifted to 18, 16 and 14 while the rows beneath them stayed at 14,
         /// so each title sat out of line with what it described.
         static let pageGutter: CGFloat = 14
+        /// The margin between the content pane and the window around it.
+        static let contentInset: CGFloat = 10
         /// Tall enough for the tallest thing a header carries — the Explorer's
         /// 26pt path control — with the 10pt of breathing room above and below.
         static let pageHeader: CGFloat = 46
