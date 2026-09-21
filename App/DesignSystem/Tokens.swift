@@ -337,6 +337,9 @@ enum Token {
         static let panelRadius: CGFloat = 14
         /// A navigation row, and how far its pill sits inside the panel.
         static let sidebarRowInset: CGFloat = 10
+        /// Where the traffic lights end: the last one's centre is at 72 and it is
+        /// 14 across. Anything in the header band has to start clear of this.
+        static let trafficLightsTrailingEdge: CGFloat = 79
         /// Tall enough for the tallest thing a header carries — the Explorer's
         /// 26pt path control — with the 10pt of breathing room above and below.
         static let pageHeader: CGFloat = 46
