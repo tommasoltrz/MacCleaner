@@ -1,14 +1,22 @@
 import SwiftUI
 import ScoloCore
 
-/// The source list.
+/// The source list, inside the sidebar panel.
 ///
-/// A stock `List` with `.sidebar` style, which on macOS 26 supplies the design's
-/// tier-1 glass — the real behind-window sidebar material — for free. The handoff
-/// explicitly says to drop its hand-drawn gradients and inset highlights in favour of
-/// this: they exist only because a browser cannot reach `NSVisualEffectView`.
+/// The panel's surface, corner radius, border and inset belong to `MainWindow` —
+/// this is what goes in it. The list no longer supplies its own background: the
+/// panel is a solid colour, and a sidebar material inside a solid panel would be
+/// two surfaces claiming the same rectangle.
+///
+/// `headerBand` is the height of the window's header, which this leaves empty at
+/// the top. The panel's surface runs up behind the traffic lights, and the rows
+/// start below them.
 struct SidebarView: View {
     @Bindable var model: AppModel
+    var headerBand: CGFloat = 0
+    /// Nil where the sidebar cannot be put away — the Preferences panes reuse
+    /// nothing here, but previews do.
+    var isExpanded: Binding<Bool>?
 
     /// The row the user just pressed, before the app has moved there.
     ///
@@ -24,6 +32,27 @@ struct SidebarView: View {
         // `selection-sidebar` token — but SwiftUI's list selection paints the accent
         // colour and offers no way to change it (`listItemTint(.monochrome)` tints
         // row *content*, not the selection fill).
+        VStack(spacing: 0) {
+            // The band the traffic lights sit in. The panel's colour is behind
+            // them; its rows are not.
+            if let isExpanded {
+                HStack {
+                    Spacer(minLength: 0)
+                    SidebarToggleButton(isExpanded: isExpanded, isCollapsed: false)
+                }
+                .padding(.horizontal, Token.Size.sidebarRowInset)
+                .frame(height: headerBand)
+            } else {
+                Color.clear.frame(height: headerBand)
+            }
+
+            list
+        }
+        .onChange(of: model.view) { pendingView = nil }
+        .safeAreaInset(edge: .bottom, spacing: 0) { capacityFooter }
+    }
+
+    private var list: some View {
         List {
             ForEach(AppModel.View.sidebarSections) { section in
                 Section(section.title) {
@@ -34,11 +63,13 @@ struct SidebarView: View {
                             Label {
                                 HStack {
                                     Text(view.title)
-                                        // App Store's treatment, per the user's call over
-                                        // Finder's: the selected row's label and icon go
-                                        // accent, everything else stays white.
-                                        .foregroundStyle(isSelected(view)
-                                            ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
+                                        // Neutral, not accent. A selected row is
+                                        // marked by its fill and by the weight of
+                                        // its label; turning the whole label blue
+                                        // said "chosen" a second time, louder.
+                                        .font(.system(size: 13,
+                                                      weight: isSelected(view) ? .medium : .regular))
+                                        .foregroundStyle(Token.Text.primary)
                                     Spacer()
                                     if let count = count(for: view) {
                                         Text(count, format: .number)
@@ -48,20 +79,18 @@ struct SidebarView: View {
                                 }
                             } icon: {
                                 Image(systemName: view.symbol)
-                                    // 14, down from 16: after the macOS 27 update the same
-                                    // 16 pt symbols measured ~22 pt across in a 218 pt
-                                    // sidebar and crowded the 13 pt labels. The scale is
-                                    // pinned because a sidebar list sets one through the
-                                    // environment, and it multiplies whatever the font says.
-                                    .font(.system(size: 14, weight: .medium))
+                                    // 18pt in the expanded sidebar. The scale is
+                                    // pinned because a sidebar list sets one through
+                                    // the environment and it multiplies whatever the
+                                    // font says.
+                                    .font(.system(size: 18, weight: .regular))
                                     .imageScale(.medium)
-                                    // The App Store fills the selected row's symbol —
-                                    // outline at rest, solid when chosen — and the solid
-                                    // glyph is most of why its selection reads brighter.
-                                    // Symbols with no fill variant keep their outline.
+                                    .frame(width: 22, alignment: .leading)
+                                    // Outline at rest, solid when chosen: the filled
+                                    // glyph is most of what makes a selected row read
+                                    // brighter, and it does it without colour.
                                     .symbolVariant(isSelected(view) ? .fill : .none)
-                                    .foregroundStyle(isSelected(view)
-                                        ? Token.Fill.sidebarSelectedTint : Token.Text.primary)
+                                    .foregroundStyle(Token.Text.primary)
                             }
                             .contentShape(Rectangle())
                         }
@@ -79,12 +108,16 @@ struct SidebarView: View {
                         .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
                             if isPressing { select(view) }
                         } perform: {}
+                        .frame(height: Token.Size.sidebarRow)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
                         .listRowBackground(
-                            // Inset, so the pill floats inside the sidebar instead of
-                            // running edge to edge.
-                            RoundedRectangle(cornerRadius: Token.Radius.row)
+                            // Inset from the panel's edge, so the pill floats inside
+                            // it instead of running edge to edge.
+                            RoundedRectangle(cornerRadius: Token.Radius.sidebarRow,
+                                             style: .continuous)
                                 .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
-                                .padding(.horizontal, 10)
+                                .padding(.horizontal, Token.Size.sidebarRowInset)
                         )
                         .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
                     }
@@ -97,14 +130,9 @@ struct SidebarView: View {
             // offers. The footer below still names the volume beside its free space.
         }
         .listStyle(.sidebar)
-        // Anything that moves the app without going through a row — the Dashboard's
-        // tiles, and the Back button that returns from them — lands here. Clearing the
-        // pending row on every change keeps the pill from being held on a view the app
-        // has already left, and it is also what ends the normal press: the commit below
-        // changes the view, this clears the pending row, and both land in the same
-        // update, so the pill never moves twice.
-        .onChange(of: model.view) { pendingView = nil }
-        .safeAreaInset(edge: .bottom, spacing: 0) { capacityFooter }
+        // The panel is already a surface. A sidebar list's own material inside it
+        // would be two surfaces claiming one rectangle.
+        .scrollContentBackground(.hidden)
     }
 
     /// Moves to a view, or does nothing if the app is already showing it or already on

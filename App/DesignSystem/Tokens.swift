@@ -190,6 +190,14 @@ enum Token {
         dark: NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 29 / 255, alpha: 1)  // #18181D
     )
 
+    /// The shell: one continuous surface under the whole window, title-bar area
+    /// included, and the colour of every gutter the panels do not cover.
+    ///
+    /// The same value as `pageBackground`, and a separate name because they are
+    /// separate responsibilities — the shell is what shows through the gaps, the
+    /// page is what the content scrolls on. They are free to part company.
+    static let shell = pageBackground
+
     /// The window's own surface: the sidebar, the toolbar, and the margin around
     /// the content pane.
     ///
@@ -295,18 +303,40 @@ enum Token {
         static let well: CGFloat = 8
         static let box: CGFloat = 10
         static let card: CGFloat = 11
+        /// A sidebar navigation row's pill.
+        static let sidebarRow: CGFloat = 7
         static let window: CGFloat = 12
     }
 
     enum Size {
         static let toolbar: CGFloat = 52
-        static let sidebarWidth: CGFloat = 218
         static let sidebarRow: CGFloat = 28
         static let control: CGFloat = 24
         /// The side inset every page uses, header and content alike. The headers
         /// had drifted to 18, 16 and 14 while the rows beneath them stayed at 14,
         /// so each title sat out of line with what it described.
         static let pageGutter: CGFloat = 14
+
+        // MARK: Window shell
+        //
+        // The window is a shell with panels laid on it: a sidebar inset from three
+        // edges, a header band across the top, and the content viewport under the
+        // header. Each gap between them shows the shell through.
+
+        /// The gap between a panel and the window edge, and between panels.
+        static let shellGutter: CGFloat = 8
+        /// The band across the top, level with the traffic lights. The sidebar's
+        /// surface runs up behind it; only its rows start below.
+        static let headerBand: CGFloat = 52
+        /// What the sidebar panel occupies in the layout: the panel plus a gutter
+        /// on each side.
+        static let sidebarColumn: CGFloat = 234
+        /// The panel itself.
+        static let sidebarWidth: CGFloat = 218
+        /// The sidebar panel and the content viewport share it.
+        static let panelRadius: CGFloat = 14
+        /// A navigation row, and how far its pill sits inside the panel.
+        static let sidebarRowInset: CGFloat = 10
         /// Tall enough for the tallest thing a header carries — the Explorer's
         /// 26pt path control — with the 10pt of breathing room above and below.
         static let pageHeader: CGFloat = 46
