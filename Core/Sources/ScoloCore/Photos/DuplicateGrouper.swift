@@ -15,6 +15,16 @@ public struct DuplicateGrouper: Sendable {
         /// deleting photos the user meant to keep. It is deliberately conservative,
         /// and `.similar` groups are never pre-selected regardless.
         public var similarityThreshold: Float
+        /// Whether the similar tier runs at all.
+        ///
+        /// Off, the only groups are the ones no threshold decided — a burst, which
+        /// is Apple's own grouping, and an identical match, which is a metadata
+        /// signature the prints then confirmed. That is a different request from a
+        /// very tight threshold: tightening asks for fewer judgement calls, this
+        /// asks for none. `similarityThreshold` is left alone rather than set to
+        /// zero, because zero is a threshold and would still group prints that
+        /// match exactly.
+        public var comparesAppearance: Bool
         /// Distance below which two images sharing a metadata signature are called
         /// the same photograph. Far tighter than `similarityThreshold`: this tier
         /// claims certainty, so it must earn it.
@@ -31,11 +41,13 @@ public struct DuplicateGrouper: Sendable {
 
         public init(
             similarityThreshold: Float = 0.35,
+            comparesAppearance: Bool = true,
             exactThreshold: Float = 0.05,
             bucketInterval: TimeInterval = 86_400,
             protectFavorites: Bool = true
         ) {
             self.similarityThreshold = similarityThreshold
+            self.comparesAppearance = comparesAppearance
             self.exactThreshold = exactThreshold
             self.bucketInterval = bucketInterval
             self.protectFavorites = protectFavorites
@@ -136,8 +148,8 @@ public struct DuplicateGrouper: Sendable {
         graph: PhotoNeighbourGraph,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) -> [DuplicateGroup]? {
-        guard options.similarityThreshold <= graph.ceiling,
-              options.exactThreshold <= graph.ceiling
+        guard options.exactThreshold <= graph.ceiling,
+              !options.comparesAppearance || options.similarityThreshold <= graph.ceiling
         else { return nil }
         return group(assets: assets, comparing: .graph(graph), onProgress: onProgress)
     }
@@ -230,7 +242,7 @@ public struct DuplicateGrouper: Sendable {
         claiming claimed: inout Set<String>,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) -> [DuplicateGroup] {
-        guard !comparison.comparable.isEmpty else { return [] }
+        guard options.comparesAppearance, !comparison.comparable.isEmpty else { return [] }
 
         // Only stills. Two frames of different videos routinely fingerprint alike,
         // and a video is never a "duplicate" of another on one frame's evidence.

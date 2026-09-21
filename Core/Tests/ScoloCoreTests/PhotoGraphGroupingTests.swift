@@ -135,15 +135,17 @@ struct PhotoGraphGroupingTests {
     @Test("Every setting produces the same groups from the graph as from the prints")
     func graphMatchesPrintsAtEverySetting() throws {
         let (assets, prints) = library(families: 40)
-        let ceiling = PhotoSimilarity.allCases.map(\.threshold).max()!
+        let ceiling = PhotoSimilarity.ceiling
         let graph = PhotoNeighbourGraph.build(
             assets: assets, fingerprints: prints, bucketInterval: 86_400, ceiling: ceiling
         )
 
         var sawSimilar = false
         var sawCertain = false
+        var sawAppearanceOff = false
         for similarity in PhotoSimilarity.allCases {
-            let options = DuplicateGrouper.Options(similarityThreshold: similarity.threshold)
+            var options = DuplicateGrouper.Options()
+            similarity.apply(to: &options)
             let grouper = DuplicateGrouper(options: options)
 
             let fromPrints = grouper.group(assets: assets, fingerprints: prints)
@@ -156,11 +158,22 @@ struct PhotoGraphGroupingTests {
                     "\(similarity.title) disagrees: the graph would delete a different set")
             if fromPrints.contains(where: { $0.kind == .similar }) { sawSimilar = true }
             if fromPrints.contains(where: { $0.kind != .similar }) { sawCertain = true }
+
+            // The setting that asks for no judgement calls has to actually produce
+            // none, by either route.
+            if similarity.threshold == nil {
+                sawAppearanceOff = true
+                #expect(!fromPrints.contains { $0.kind == .similar },
+                        "\(similarity.title) still grouped by appearance")
+                #expect(!fromGraph.contains { $0.kind == .similar })
+                #expect(!fromGraph.isEmpty, "the certain tiers still run without a threshold")
+            }
         }
         // Without these the suite would pass over a library that groups nothing by
         // the very tier the graph exists for.
         #expect(sawSimilar, "no similar group formed: the tier the graph serves was never run")
         #expect(sawCertain, "no burst or exact group formed: those tiers read the graph too")
+        #expect(sawAppearanceOff, "the no-threshold setting was never exercised")
     }
 
     /// The graph holds every pair within its ceiling and nothing beyond it. Asked
