@@ -18,10 +18,6 @@ extension Font {
 
     static let mcToolbarTitle = Font.system(size: 14, weight: .medium)
 
-    /// 15pt — the name of a section of the page, above the cards it collects.
-    /// A step above a row title and below the window's own hero figures.
-    static let mcSectionTitle = Font.system(size: 15, weight: .semibold)
-
     /// The design specifies SF's 590 weight here, which is `.medium` — not semibold.
     static let mcRowTitle = Font.system(size: 13, weight: .medium)
     static let mcRowTitleRegular = Font.system(size: 13)
