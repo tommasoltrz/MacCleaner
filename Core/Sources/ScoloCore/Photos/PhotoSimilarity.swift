@@ -76,4 +76,9 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
     }
 
     public static let `default` = PhotoSimilarity.standard
+
+    /// The loosest setting there is, and so the distance out to which a sweep has
+    /// to compare. Beyond this nothing can be asked, which is why
+    /// `PhotoNeighbourGraph` is built exactly this far and refuses further.
+    public static let ceiling: Float = allCases.map(\.threshold).max() ?? 0.55
 }

@@ -48,6 +48,57 @@ public struct DuplicateGrouper: Sendable {
         self.options = options
     }
 
+    /// How "are these two within `threshold`" gets answered.
+    ///
+    /// Two sources, one clustering. The arithmetic is the definition; the graph is
+    /// the same answers computed once and looked up, which is what makes changing
+    /// the similarity setting free. They are held to being the same thing by
+    /// `PhotoGraphGroupingTests`, which groups a library both ways at every
+    /// threshold and requires the results to be identical — because the moment they
+    /// disagree, the fast path is deleting photographs the slow one would keep.
+    struct Comparison {
+        /// Assets that were fingerprinted. An asset outside this set is never
+        /// grouped by a tier that needs pixels: absence of evidence cannot promote
+        /// a photo to "duplicate".
+        let comparable: Set<String>
+        let isWithin: @Sendable (Float, String, String) -> Bool
+        let distance: @Sendable (String, String) -> Float?
+        /// Everything within the threshold of an id, where that is known without
+        /// computing it. Nil means it is not, and the clustering falls back to
+        /// asking about every cluster — which is what it always did.
+        let neighbours: (@Sendable (Float, String) -> [String])?
+
+        static func prints(_ fingerprints: [String: PhotoFingerprint]) -> Comparison {
+            Comparison(
+                comparable: Set(fingerprints.keys),
+                isWithin: { threshold, a, b in
+                    guard let left = fingerprints[a], let right = fingerprints[b] else {
+                        return false
+                    }
+                    return left.isWithin(threshold, of: right)
+                },
+                distance: { a, b in
+                    guard let left = fingerprints[a], let right = fingerprints[b] else {
+                        return nil
+                    }
+                    return left.distance(to: right)
+                },
+                // Finding them would mean comparing everything against everything,
+                // which is the work this would be short-cutting.
+                neighbours: nil
+            )
+        }
+
+        static func graph(_ graph: PhotoNeighbourGraph) -> Comparison {
+            Comparison(
+                comparable: graph.fingerprinted,
+                isWithin: { threshold, a, b in graph.isWithin(threshold, a, b) },
+                distance: { a, b in graph.distance(a, b) },
+                neighbours: { threshold, id in graph.neighbours(within: threshold, of: id) }
+            )
+        }
+    }
+
     /// Groups `assets`, consulting `fingerprints` only for the similar tier.
     ///
     /// Each asset lands in at most one group: the tiers run strongest-first and every
@@ -71,6 +122,31 @@ public struct DuplicateGrouper: Sendable {
         fingerprints: [String: PhotoFingerprint] = [:],
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) -> [DuplicateGroup] {
+        group(assets: assets, comparing: .prints(fingerprints), onProgress: onProgress)
+    }
+
+    /// The same grouping, reading a graph built once instead of comparing again.
+    ///
+    /// Returns nil when the graph cannot answer for this threshold — it holds every
+    /// pair within its ceiling and nothing beyond, so a stricter question is a
+    /// lookup and a looser one is unanswerable. "Not examined" is not "not a match",
+    /// and quietly treating it as one would silently drop real duplicates.
+    public func group(
+        assets: [PhotoAsset],
+        graph: PhotoNeighbourGraph,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) -> [DuplicateGroup]? {
+        guard options.similarityThreshold <= graph.ceiling,
+              options.exactThreshold <= graph.ceiling
+        else { return nil }
+        return group(assets: assets, comparing: .graph(graph), onProgress: onProgress)
+    }
+
+    private func group(
+        assets: [PhotoAsset],
+        comparing comparison: Comparison,
+        onProgress: (@Sendable (Double) -> Void)?
+    ) -> [DuplicateGroup] {
 
         // Hidden assets are a deliberate act by the user. Surfacing them in a bulk
         // delete grid would both expose them and invite removing them by accident.
@@ -80,9 +156,9 @@ public struct DuplicateGrouper: Sendable {
         var groups: [DuplicateGroup] = []
 
         groups += burstGroups(visible, claiming: &claimed)
-        groups += exactGroups(visible, fingerprints: fingerprints, claiming: &claimed)
+        groups += exactGroups(visible, comparing: comparison, claiming: &claimed)
         groups += similarGroups(
-            visible, fingerprints: fingerprints, claiming: &claimed, onProgress: onProgress
+            visible, comparing: comparison, claiming: &claimed, onProgress: onProgress
         )
 
         // Largest first: the biggest wins are the ones worth a person's attention.
@@ -118,10 +194,12 @@ public struct DuplicateGrouper: Sendable {
     /// grouped here — absence of evidence cannot promote a photo to "duplicate".
     private func exactGroups(
         _ assets: [PhotoAsset],
-        fingerprints: [String: PhotoFingerprint],
+        comparing comparison: Comparison,
         claiming claimed: inout Set<String>
     ) -> [DuplicateGroup] {
-        let candidates = assets.filter { !claimed.contains($0.id) && fingerprints[$0.id] != nil }
+        let candidates = assets.filter {
+            !claimed.contains($0.id) && comparison.comparable.contains($0.id)
+        }
         let buckets = Dictionary(grouping: candidates.compactMap { asset -> (String, PhotoAsset)? in
             guard let signature = asset.exactSignature else { return nil }
             return (signature, asset)
@@ -131,7 +209,7 @@ public struct DuplicateGrouper: Sendable {
         for (signature, members) in buckets.sorted(by: { $0.key < $1.key }) {
             if Task.isCancelled { break }
             guard members.count > 1 else { continue }
-            for cluster in cluster(members, fingerprints: fingerprints, threshold: options.exactThreshold)
+            for cluster in cluster(members, comparing: comparison, threshold: options.exactThreshold)
             where cluster.count > 1 {
                 if let group = makeGroup(
                     id: "exact:\(signature):\(cluster.map(\.id).min() ?? "")",
@@ -148,16 +226,17 @@ public struct DuplicateGrouper: Sendable {
 
     private func similarGroups(
         _ assets: [PhotoAsset],
-        fingerprints: [String: PhotoFingerprint],
+        comparing comparison: Comparison,
         claiming claimed: inout Set<String>,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) -> [DuplicateGroup] {
-        guard !fingerprints.isEmpty else { return [] }
+        guard !comparison.comparable.isEmpty else { return [] }
 
         // Only stills. Two frames of different videos routinely fingerprint alike,
         // and a video is never a "duplicate" of another on one frame's evidence.
         let candidates = assets.filter {
-            !claimed.contains($0.id) && $0.mediaType == .image && fingerprints[$0.id] != nil
+            !claimed.contains($0.id) && $0.mediaType == .image
+                && comparison.comparable.contains($0.id)
         }
 
         var groups: [DuplicateGroup] = []
@@ -182,7 +261,7 @@ public struct DuplicateGrouper: Sendable {
             let bucketBase = doneCost
             let bucketCost = pow(Double(members.count), 2)
             for cluster in cluster(
-                members, fingerprints: fingerprints, threshold: options.similarityThreshold,
+                members, comparing: comparison, threshold: options.similarityThreshold,
                 onProgress: { done, count in
                     guard totalCost > 0, count > 0 else { return }
                     let within = pow(Double(done), 2) / pow(Double(count), 2)
@@ -198,7 +277,7 @@ public struct DuplicateGrouper: Sendable {
                     // Measured over the cluster alone, which is a handful of photos
                     // against the bucket's thousands — the quadratic cost that made
                     // `isWithin` early-exit does not apply at this size.
-                    distance: diameter(of: cluster, fingerprints: fingerprints)
+                    distance: diameter(of: cluster, comparing: comparison)
                 ) {
                     groups.append(group)
                 }
@@ -240,17 +319,19 @@ public struct DuplicateGrouper: Sendable {
     /// makes to the user when it offers to delete all but one of them.
     private func cluster(
         _ assets: [PhotoAsset],
-        fingerprints: [String: PhotoFingerprint],
+        comparing comparison: Comparison,
         threshold: Float,
         onProgress: ((Int, Int) -> Void)? = nil
     ) -> [[PhotoAsset]] {
         // Deterministic input order, so a rerun produces identical clusters.
         let ordered = assets.sorted { $0.id < $1.id }
-        // Hoisted out of the dictionary: the inner loop runs millions of times on a
-        // large bucket, and the lookup dominated the comparison itself.
-        let prints = ordered.map { fingerprints[$0.id] }
+        let ids = ordered.map(\.id)
 
         var clusters: [[Int]] = []
+        // Which cluster each id ended up in, so a candidate's neighbours can be
+        // turned into the short list of clusters worth asking about.
+        var clusterOfID: [String: Int] = [:]
+
         for index in ordered.indices {
             // Every 128 assets: cheap enough to be free against the quadratic
             // work, frequent enough that Stop lands within a beat and the bar
@@ -259,17 +340,33 @@ public struct DuplicateGrouper: Sendable {
                 if Task.isCancelled { break }
                 onProgress?(index, ordered.count)
             }
-            guard let candidate = prints[index] else { continue }
-            let match = clusters.firstIndex { members in
-                members.allSatisfy { member in
-                    guard let other = prints[member] else { return false }
-                    return candidate.isWithin(threshold, of: other)
+            guard comparison.comparable.contains(ids[index]) else { continue }
+
+            // Only clusters holding something this photograph is already known to
+            // resemble. Complete linkage needs every member within the threshold,
+            // so a cluster with no neighbour in it cannot possibly accept it — and
+            // the candidates are taken in cluster order, which is the order the
+            // exhaustive scan would have found them in. Same answer, asked of a
+            // handful of clusters instead of all of them.
+            let searchable: [Int]
+            if let neighbours = comparison.neighbours {
+                searchable = Set(neighbours(threshold, ids[index]).compactMap { clusterOfID[$0] })
+                    .sorted()
+            } else {
+                searchable = Array(clusters.indices)
+            }
+
+            let match = searchable.first { candidate in
+                clusters[candidate].allSatisfy {
+                    comparison.isWithin(threshold, ids[index], ids[$0])
                 }
             }
             if let match {
                 clusters[match].append(index)
+                clusterOfID[ids[index]] = match
             } else {
                 clusters.append([index])
+                clusterOfID[ids[index]] = clusters.count - 1
             }
         }
         return clusters.map { $0.map { ordered[$0] } }
@@ -288,16 +385,13 @@ public struct DuplicateGrouper: Sendable {
     /// calls this. They are here because a diameter measured over *some* of a group
     /// is not that group's diameter: it would read as a tighter match than was
     /// actually made, which is the one thing this figure must never do.
-    private func diameter(
-        of members: [PhotoAsset],
-        fingerprints: [String: PhotoFingerprint]
-    ) -> Float? {
-        let prints = members.compactMap { fingerprints[$0.id] }
-        guard prints.count == members.count else { return nil }
+    private func diameter(of members: [PhotoAsset], comparing comparison: Comparison) -> Float? {
         var worst: Float = 0
-        for i in prints.indices {
-            for j in prints.indices where j > i {
-                guard let distance = prints[i].distance(to: prints[j]) else { return nil }
+        for i in members.indices {
+            for j in members.indices where j > i {
+                guard let distance = comparison.distance(members[i].id, members[j].id) else {
+                    return nil
+                }
                 worst = max(worst, distance)
             }
         }
