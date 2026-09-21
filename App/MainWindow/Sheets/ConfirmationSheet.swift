@@ -142,6 +142,11 @@ struct ConfirmationSheet: View {
         .padding(.top, 22)
         .padding(.bottom, 18)
         .frame(width: 404)
+        // The app's own panel colour rather than the sheet material AppKit would
+        // draw, which is translucent and takes a wash of the desktop — the thing
+        // every other surface here stopped doing. A dialog sits above the page,
+        // so it takes the surface a step up from it, the one the sidebar uses.
+        .presentationBackground(Token.chrome)
     }
 
     // MARK: - Variant copy

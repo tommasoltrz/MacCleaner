@@ -167,7 +167,11 @@ private struct ICloudBar: View {
             }
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+            .background(Token.Fill.box, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+            .overlay(
+                RoundedRectangle(cornerRadius: Token.Radius.control)
+                    .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: Token.Radius.control)
                     .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)

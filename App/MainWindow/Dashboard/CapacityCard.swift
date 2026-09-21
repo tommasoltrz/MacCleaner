@@ -222,6 +222,9 @@ private struct LegendRow: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(12)
                             .frame(width: 280)
+                            // The app's panel colour, like every other thing that
+                            // floats above the page.
+                            .presentationBackground(Token.chrome)
                     }
             }
 
@@ -373,7 +376,11 @@ private struct CapacityBar: View {
             .fixedSize()
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+            .background(Token.Fill.box, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+            .overlay(
+                RoundedRectangle(cornerRadius: Token.Radius.control)
+                    .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: Token.Radius.control)
                     .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)

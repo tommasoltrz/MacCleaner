@@ -172,7 +172,9 @@ struct SnapshotsDisclosureRow: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     HelpButton { isShowingHelp.toggle() }
-                        .popover(isPresented: $isShowingHelp) { helpExplanation }
+                        .popover(isPresented: $isShowingHelp) {
+                            helpExplanation.presentationBackground(Token.chrome)
+                        }
 
                     Spacer(minLength: 0)
                 }
