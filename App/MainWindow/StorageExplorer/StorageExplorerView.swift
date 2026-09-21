@@ -239,6 +239,17 @@ struct StorageExplorerView: View {
             .width(min: 86, ideal: 104, max: 124)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
+        // A native `Table` paints its own backdrop, and that backdrop is the window
+        // material — translucent, so it takes a wash of whatever wallpaper is behind
+        // the window. This page stood visibly brown against the Scanner's opaque
+        // #242125, and because the table scrolls under the toolbar, the toolbar
+        // blurred the same material and went brown with it. Hidden, the page colour
+        // behind shows through and the two views match.
+        //
+        // This is the same fault History had on 20 Sep. That one was rewritten away
+        // from `Table` altogether, which also cost it column resizing; one modifier
+        // would have done, and does here.
+        .scrollContentBackground(.hidden)
         .contextMenu(forSelectionType: StorageExplorerItem.ID.self) { selection in
             if selection.count == 1, let item = firstItem(in: selection), item.opensAsDirectory {
                 Button("Open") { model.open(item) }
