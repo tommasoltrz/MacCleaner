@@ -465,6 +465,7 @@ private struct FileRow: View {
                     .buttonStyle(.plain)
                     .popover(isPresented: $isShowingManualInfo, arrowEdge: .bottom) {
                         ManualRemovalPopover(manual: manual)
+                            .presentationBackground(Token.chrome)
                     }
                 } else if let reason = entry.protectionReason {
                     // Says *why* the checkbox is locked without hovering anything,

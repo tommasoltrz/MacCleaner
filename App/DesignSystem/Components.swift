@@ -199,7 +199,14 @@ struct HoverTip: View {
         .fixedSize()
         .padding(.horizontal, 11)
         .padding(.vertical, 7)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+        // A card, not a material: it floats over the page, and every other
+        // surface in the app is now a colour of its own rather than a wash of
+        // whatever is behind the window.
+        .background(Token.Fill.box, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+        .overlay(
+            RoundedRectangle(cornerRadius: Token.Radius.control)
+                .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: Token.Radius.control)
                 .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)

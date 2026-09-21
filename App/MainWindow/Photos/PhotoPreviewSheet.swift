@@ -118,7 +118,7 @@ struct PhotoPreviewSheet: View {
                 .font(.mcSubtitle)
                 .foregroundStyle(Token.Text.secondary)
                 .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Token.Radius.box))
+                .background(Token.Fill.box, in: RoundedRectangle(cornerRadius: Token.Radius.box))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
