@@ -27,26 +27,29 @@ struct MainWindow: View {
                 // the `List` inside through the environment, which is also why it
                 // is applied here: that file has another session's work in it.
                 .scrollContentBackground(.hidden)
-                .background(Token.chrome)
-                // The sidebar and the margin around the content pane are the same
-                // surface, so without this there is nothing to say where one ends:
-                // painting our own background also covered the divider the split
-                // view would have drawn. It runs the full height of the window,
-                // past the toolbar, because the surface it divides does too.
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(Token.separator)
-                        .frame(width: Token.hairline)
+                // Surface and edge together, in the background layer so both run
+                // the full height of the window — past the toolbar, which is the
+                // point: the sidebar is a column the window is divided into, not a
+                // panel that starts below the title.
+                //
+                // The hairline is drawn rather than inherited because painting our
+                // own background covers the divider the split view would draw.
+                .background {
+                    Token.chrome
+                        .overlay(alignment: .trailing) {
+                            Rectangle()
+                                .fill(Token.separator)
+                                .frame(width: Token.hairline)
+                        }
                         .ignoresSafeArea()
                 }
         } detail: {
             detail
                 .navigationTitle(model.view.title)
                 .toolbar { toolbarContent }
-                // The toolbar is part of the window's surface, continuous with the
-                // sidebar and with the margin around the content pane — not part of
-                // the page, which is the inset thing below it.
-                .toolbarBackground(Token.chrome, for: .windowToolbar)
+                // The toolbar is part of the page, not of the sidebar: everything
+                // to the right of that hairline is one surface.
+                .toolbarBackground(Token.pageBackground, for: .windowToolbar)
                 .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         }
         // Over the whole content area, inside the safe area, so the toolbar above
@@ -120,16 +123,14 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
-        // The page is a rounded pane inset into the window rather than content
-        // filling it edge to edge. The margin around it is the window's own
-        // surface, continuous with the sidebar and the toolbar, so the pane reads
-        // as a sheet laid on the app rather than as the app itself.
+        // One surface, edge to edge, with the cards standing off it.
+        //
+        // It was briefly a rounded pane inset by 10pt on a lighter frame, which
+        // was the wrong way round: the page is the darkest of the three colours,
+        // so an inset pane read as a hole cut into the window rather than as a
+        // sheet laid on it. The sidebar is the only thing the window is divided
+        // into, and its hairline is what says so.
         .background(Token.pageBackground)
-        .clipShape(RoundedRectangle(cornerRadius: Token.Radius.window))
-        .padding(Token.Size.contentInset)
-        // Behind the pane and out through the safe area, so the strip under the
-        // toolbar is the same surface as the margin.
-        .background(Token.chrome)
         // No footer. It held a status line and each view's buttons. The buttons that
         // remove things are in the toolbar now, beside Scan, where the window's other
         // primary action already was; the ones that only choose rows (Select All,
