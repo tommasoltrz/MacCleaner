@@ -360,3 +360,56 @@ extension View {
         padding(.vertical, 1).padding(.horizontal, 8)
     }
 }
+
+// MARK: - Window shell
+
+/// Shows and hides the sidebar.
+///
+/// Two treatments, per the design: inside the expanded panel it is a bare glyph,
+/// because the panel it sits on is already a surface and a second one around the
+/// glyph would be a button drawn on a button. Once the sidebar is away the glyph is
+/// alone on the shell with nothing to belong to, so it takes a circular fill to
+/// become a control again.
+struct SidebarToggleButton: View {
+    @Binding var isExpanded: Bool
+    let isCollapsed: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Token.Text.secondary)
+                .frame(width: 28, height: 28)
+                .background {
+                    if isCollapsed {
+                        Circle().fill(isHovering ? Token.Fill.controlHover : Token.Fill.control)
+                    } else if isHovering {
+                        RoundedRectangle(cornerRadius: Token.Radius.sidebarRow, style: .continuous)
+                            .fill(Token.Fill.rowHover)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(isExpanded ? "Hide Sidebar" : "Show Sidebar")
+    }
+}
+
+/// Stops a region from dragging the window.
+///
+/// The window hides its title bar so the shell can run up behind the traffic
+/// lights, and everything drawn in that strip inherits the title bar's drag
+/// behaviour — including the sidebar panel, which reaches the top of the window.
+/// Pressing the panel's empty space would move the window instead of doing nothing.
+struct WindowDragDisabled: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Blocker() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class Blocker: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+    }
+}

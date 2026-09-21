@@ -36,6 +36,11 @@ struct ScoloApp: App {
                 .background(FinderUninstallRequestReceiver())
         }
         .defaultSize(width: Token.Size.windowWidth, height: Token.Size.windowHeight)
+        // The shell is one surface under the whole window, title-bar area included,
+        // and the sidebar panel runs up behind the traffic lights. A title bar of
+        // its own would cut a strip out of both. The lights stay; they are the
+        // window's, not the title bar's.
+        .windowStyle(.hiddenTitleBar)
 
         Settings {
             PreferencesView(

@@ -1,57 +1,43 @@
 import SwiftUI
 import ScoloCore
 
-/// The main window: source list, unified toolbar, and a status bar per view.
+/// The main window: a shell, with panels laid on it.
 ///
-/// Everything structural here is stock. `NavigationSplitView` supplies the sidebar
-/// and its material, `.toolbar` supplies the unified Liquid Glass toolbar with live
-/// scroll-under blur, and `safeAreaInset` supplies the status bar. The handoff's
-/// pixel values for these are descriptions of what the native chrome already does —
-/// it says so directly: "Prefer the stock control over recreating it."
+/// Three separate layout responsibilities, deliberately not one stock control:
+///
+/// * the **shell**, one continuous surface under the whole window including the
+///   title-bar area, which is what every gutter shows;
+/// * the **sidebar panel**, a rounded surface inset 8pt from the top, leading and
+///   bottom edges, whose background runs up behind the traffic lights while its
+///   rows start below the header band;
+/// * the **header band**, 52pt, on the shell beside the sidebar, holding the title
+///   and this view's actions level with the traffic lights;
+/// * and the **content viewport** below it, clipped to the same radius as the
+///   sidebar, with a gutter on its trailing and bottom edges.
+///
+/// `NavigationSplitView` cannot do this. Its sidebar is a column of the window
+/// rather than a panel inset from its edges, its divider is an edge rather than a
+/// gutter, and its toolbar owns the full width of the window above both. Each of
+/// those is the thing being replaced, so the split view goes with them — which also
+/// means the toolbar goes, and the header band below is where a view's actions live
+/// now.
+///
+/// Scrolling belongs to the sidebar and to the content viewport. The two headers
+/// and the sidebar's footer do not move.
 struct MainWindow: View {
     @Bindable var model: AppModel
     var settings: SettingsStore?
     @Environment(\.scenePhase) private var scenePhase
-    /// Collapsible again, and open to begin with. It was pinned open on 21 Sep on
-    /// the argument that hiding the app's only navigation strands the user; the
-    /// owner's call is that a window this size should be able to give the content
-    /// its full width, and the toggle sits where macOS puts it.
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var isSidebarExpanded = true
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(model: model)
-                .navigationSplitViewColumnWidth(Token.Size.sidebarWidth)
-                // Opaque, so the sidebar has a colour of its own instead of a wash
-                // of whatever the window happens to sit over. The modifier reaches
-                // the `List` inside through the environment, which is also why it
-                // is applied here: that file has another session's work in it.
-                .scrollContentBackground(.hidden)
-                // Surface and edge together, in the background layer so both run
-                // the full height of the window — past the toolbar, which is the
-                // point: the sidebar is a column the window is divided into, not a
-                // panel that starts below the title.
-                //
-                // The hairline is drawn rather than inherited because painting our
-                // own background covers the divider the split view would draw.
-                .background {
-                    Token.chrome
-                        .overlay(alignment: .trailing) {
-                            Rectangle()
-                                .fill(Token.separator)
-                                .frame(width: Token.hairline)
-                        }
-                        .ignoresSafeArea()
-                }
-        } detail: {
-            detail
-                .navigationTitle(model.view.title)
-                .toolbar { toolbarContent }
-                // The toolbar is part of the page, not of the sidebar: everything
-                // to the right of that hairline is one surface.
-                .toolbarBackground(Token.pageBackground, for: .windowToolbar)
-                .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        HStack(spacing: 0) {
+            if isSidebarExpanded { sidebarPanel }
+            contentColumn
         }
+        .animation(.smooth(duration: 0.22), value: isSidebarExpanded)
+        // Under everything, through the title bar: the shell is the window.
+        .background(Token.shell.ignoresSafeArea())
         // Over the whole content area, inside the safe area, so the toolbar above
         // keeps its glass and its controls. `.disabled` on the detail pane used to
         // do this job, and it reached the toolbar through the environment.
@@ -97,6 +83,80 @@ struct MainWindow: View {
         } message: { notice in
             Text(notice.message)
         }
+    }
+
+    // MARK: - Panels
+
+    /// The sidebar, inset from three edges, its surface running up behind the
+    /// traffic lights while its rows begin below the header band.
+    private var sidebarPanel: some View {
+        SidebarView(
+            model: model,
+            headerBand: Token.Size.headerBand,
+            isExpanded: $isSidebarExpanded
+        )
+            .frame(width: Token.Size.sidebarWidth)
+            .background(Token.chrome)
+            // The panel reaches the top of the window, where the hidden title bar
+            // would otherwise make every empty spot a drag handle.
+            .background(WindowDragDisabled())
+            .clipShape(RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous)
+                    .strokeBorder(Token.Fill.boxBorder, lineWidth: 1)
+            }
+            .padding(.leading, Token.Size.shellGutter)
+            .padding(.vertical, Token.Size.shellGutter)
+            .frame(width: Token.Size.sidebarColumn)
+            .transition(.move(edge: .leading).combined(with: .opacity))
+    }
+
+    private var contentColumn: some View {
+        VStack(spacing: 0) {
+            contentHeader
+            detail
+                .clipShape(
+                    RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous)
+                )
+                // No gutter above: the content begins directly under the header
+                // band. The sidebar column carries its own trailing gutter, so the
+                // leading one is needed only when there is no sidebar.
+                .padding(.leading, isSidebarExpanded ? 0 : Token.Size.shellGutter)
+                .padding(.trailing, Token.Size.shellGutter)
+                .padding(.bottom, Token.Size.shellGutter)
+        }
+    }
+
+    /// Clear of the traffic lights. With the sidebar expanded they sit on its
+    /// panel; collapsed, they are in this band and the title would land under them.
+    private var headerLeadingInset: CGFloat {
+        isSidebarExpanded ? Token.Size.shellGutter + 6 : 76
+    }
+
+    /// The header band: the view's name and its actions, level with the traffic
+    /// lights, on the shell rather than on any panel.
+    private var contentHeader: some View {
+        HStack(spacing: 10) {
+            // Only while the sidebar is away: expanded, its own control sits inside
+            // the panel, where the spec puts it.
+            if !isSidebarExpanded {
+                SidebarToggleButton(isExpanded: $isSidebarExpanded, isCollapsed: true)
+            }
+            Text(model.view.title)
+                .font(.mcToolbarTitle)
+                .foregroundStyle(Token.Text.primary)
+            Spacer(minLength: 12)
+            headerCentre
+            scanButton.buttonStyle(.bordered)
+            if hasRemovalAction {
+                removeButton
+                    .buttonStyle(.borderedProminent)
+                    .tint(Token.color(.red))
+            }
+        }
+        .padding(.leading, headerLeadingInset)
+        .padding(.trailing, Token.Size.shellGutter + 6)
+        .frame(height: Token.Size.headerBand)
     }
 
     @ViewBuilder
@@ -313,75 +373,39 @@ struct MainWindow: View {
         .disabled(!canRemove)
     }
 
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        // One principal item holding both. The Duplicates picker used to take the
-        // slot alone, so a junk scan started elsewhere lost its readout and its
-        // stop button the moment the user opened Duplicates.
-        if model.view == .duplicates || model.isScanning {
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 14) {
-                if model.view == .duplicates {
-                    Picker("Duplicate type", selection: $model.duplicateKind) {
-                        ForEach(AppModel.DuplicateKind.allCases) { kind in
-                            Text(kind.title).tag(kind)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize(horizontal: true, vertical: false)
-                }
-                if model.isScanning {
-                HStack(spacing: 8) {
-                    // Breathing room on both sides: a principal item otherwise butts
-                    // straight against the title on its left and the Scan button on
-                    // its right.
-                    Color.clear.frame(width: 8, height: 1)
-                    Text("Measuring \(model.scanProgress)%")
-                        .font(.mcCaption)
-                        .foregroundStyle(Token.Text.secondary)
-                    ProgressView(value: Double(model.scanProgress), total: 100)
-                        .progressViewStyle(.linear)
-                        .frame(width: 126)
-                    // The design notes the prototype had no cancel affordance and
-                    // that a real scan needs one.
-                    Button { model.cancelScan() } label: {
-                        Image(systemName: "stop.fill")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Stop scanning")
-
-                    Color.clear.frame(width: 8, height: 1)
-                }
-                }
+    /// What the toolbar's principal slot used to carry: the Duplicates picker and
+    /// the running scan's readout. One row, so a junk scan started elsewhere keeps
+    /// its progress and its stop button when the user opens Duplicates.
+    @ViewBuilder
+    private var headerCentre: some View {
+        if model.view == .duplicates {
+            Picker("Duplicate type", selection: $model.duplicateKind) {
+                ForEach(AppModel.DuplicateKind.allCases) { kind in
+                    Text(kind.title).tag(kind)
                 }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
         }
-
-        // Scan comes first and quietly. It used to be the window's one filled
-        // capsule, which made starting a measurement look like the point of the
-        // app; what the user came to do is remove something.
-        ToolbarItem(placement: .primaryAction) {
-            scanButton.buttonStyle(.bordered)
-        }
-
-        // Then what this view removes, on the right: filled red, because this is
-        // the one destructive control in the window and a tint on a bordered
-        // button was not saying so. Same size and same label inset as Scan, so the
-        // pair still matches in height — that was the actual complaint, and it was
-        // the inset, not the style.
-        //
-        // `.borderedProminent` on every system, including 26. The Liquid Glass
-        // variant was here to sit on a translucent toolbar; this one is painted a
-        // flat colour, and a glass capsule on a flat bar is refracting something
-        // that is not there. It also took a `sharedBackgroundVisibility(.hidden)`
-        // to stop a second capsule drawing behind it, which goes with it.
-        if hasRemovalAction {
-            ToolbarItem(placement: .primaryAction) {
-                removeButton
-                    .buttonStyle(.borderedProminent)
-                    .tint(Token.color(.red))
+        if model.isScanning {
+            HStack(spacing: 8) {
+                Text("Measuring \(model.scanProgress)%")
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+                    .monospacedDigit()
+                ProgressView(value: Double(model.scanProgress), total: 100)
+                    .progressViewStyle(.linear)
+                    .frame(width: 126)
+                // The design notes the prototype had no cancel affordance and
+                // that a real scan needs one.
+                Button { model.cancelScan() } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .buttonStyle(.borderless)
+                .help("Stop scanning")
             }
+            .fixedSize()
         }
     }
 
