@@ -179,9 +179,11 @@ struct MainWindow: View {
                 RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous)
                     .strokeBorder(Token.Fill.boxBorder, lineWidth: 1)
             }
-            .padding(.leading, Token.Size.shellGutter)
-            .padding(.vertical, Token.Size.shellGutter)
-            .frame(width: Token.Size.sidebarColumn)
+            // A gutter on every side, which comes to the column's own width:
+            // 8 + 218 + 8. It used to pad the leading edge only and then force
+            // the result into a 234pt frame, which *centres* a 226pt view — so
+            // the gap left of the panel was 12 and the gap right of it 4.
+            .padding(Token.Size.shellGutter)
             .transition(.move(edge: .leading).combined(with: .opacity))
     }
 
@@ -192,20 +194,30 @@ struct MainWindow: View {
                 .clipShape(
                     RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous)
                 )
-                // No gutter above: the content begins directly under the header
-                // band. The sidebar column carries its own trailing gutter, so the
-                // leading one is needed only when there is no sidebar.
-                .padding(.leading, isSidebarExpanded ? 0 : Token.Size.shellGutter)
-                .padding(.trailing, Token.Size.shellGutter)
-                .padding(.bottom, Token.Size.shellGutter)
         }
+        // The gutters belong to the column, so the header stands in the same ones
+        // the viewport does. Applied to the viewport alone, the header ran out to
+        // the window's edge and its title sat six points left of the cards it
+        // described.
+        //
+        // No gutter above: the content begins directly under the header band. The
+        // sidebar column carries its own trailing gutter, so a leading one is
+        // needed here only when there is no sidebar.
+        .padding(.leading, isSidebarExpanded ? 0 : Token.Size.shellGutter)
+        .padding(.trailing, Token.Size.shellGutter)
+        .padding(.bottom, Token.Size.shellGutter)
     }
 
     /// Clear of the traffic lights. With the sidebar expanded they sit on its
     /// panel and the band starts at its own gutter; collapsed, they are in this
     /// band and the title would land under them.
     private var headerLeadingInset: CGFloat {
-        isSidebarExpanded ? Token.Size.shellGutter : collapsedLeadingInset
+        guard isSidebarExpanded else {
+            // Measured from the window, and the column already stands in its own
+            // leading gutter, so that much is taken off.
+            return collapsedLeadingInset - Token.Size.shellGutter
+        }
+        return Token.Size.pageGutter
     }
 
     /// The header band: the view's name and its actions, level with the traffic
@@ -231,8 +243,10 @@ struct MainWindow: View {
                     .tint(Token.color(.red))
             }
         }
+        // The page's own gutter, so the title and the actions line up with the
+        // cards under them rather than with the viewport's edge.
         .padding(.leading, headerLeadingInset)
-        .padding(.trailing, Token.Size.shellGutter)
+        .padding(.trailing, Token.Size.pageGutter)
         .frame(height: Token.Size.headerBand)
         // The window moves from here and nowhere else. Behind the controls, so a
         // press on one of them is a press on it rather than the start of a drag.
