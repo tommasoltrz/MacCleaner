@@ -365,37 +365,43 @@ extension View {
 
 /// Shows and hides the sidebar.
 ///
-/// Two treatments, per the design: inside the expanded panel it is a bare glyph,
-/// because the panel it sits on is already a surface and a second one around the
-/// glyph would be a button drawn on a button. Once the sidebar is away the glyph is
-/// alone on the shell with nothing to belong to, so it takes a circular fill to
-/// become a control again.
+/// **One control, not two.** It is positioned over the whole layout rather than
+/// placed in the sidebar and again in the header, so it travels with the sidebar's
+/// edge instead of being removed from one view and inserted into another. The
+/// stock `NavigationSplitView` toggle has the same ownership, and it is what makes
+/// the movement read as one thing moving.
+///
+/// **The circle is only for the collapsed state**, where the glyph is alone on the
+/// shell with nothing to belong to. Expanded, it sits on the sidebar panel, which
+/// is already a surface — a circle there would be a button drawn on a button. Hover
+/// fills a circle either way.
+///
+/// `showsCollapsedChrome` is separate from `isCollapsed` because the circle must
+/// not travel: see `MainWindow`, which adds it after the movement has finished and
+/// takes it off before the return journey begins.
 struct SidebarToggleButton: View {
-    @Binding var isExpanded: Bool
     let isCollapsed: Bool
+    let showsCollapsedChrome: Bool
+    let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
-        Button {
-            isExpanded.toggle()
-        } label: {
-            Image(systemName: "sidebar.leading")
-                .font(.system(size: 14, weight: .regular))
+        Button(action: action) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: Token.Size.sidebarToggleGlyph, weight: .medium))
                 .foregroundStyle(Token.Text.secondary)
-                .frame(width: 28, height: 28)
+                .frame(width: Token.Size.sidebarToggle, height: Token.Size.sidebarToggle)
                 .background {
-                    if isCollapsed {
-                        Circle().fill(isHovering ? Token.Fill.controlHover : Token.Fill.control)
-                    } else if isHovering {
-                        RoundedRectangle(cornerRadius: Token.Radius.sidebarRow, style: .continuous)
-                            .fill(Token.Fill.rowHover)
-                    }
+                    if showsCollapsedChrome { Circle().fill(Token.chrome) }
+                    if isHovering { Circle().fill(Token.Fill.controlHover) }
                 }
-                .contentShape(Rectangle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
-        .help(isExpanded ? "Hide Sidebar" : "Show Sidebar")
+        .keyboardShortcut("s", modifiers: [.command, .control])
+        .help(isCollapsed ? "Show Sidebar" : "Hide Sidebar")
+        .accessibilityLabel(isCollapsed ? "Show Sidebar" : "Hide Sidebar")
     }
 }
 

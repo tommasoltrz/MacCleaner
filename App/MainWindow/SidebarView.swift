@@ -14,9 +14,6 @@ import ScoloCore
 struct SidebarView: View {
     @Bindable var model: AppModel
     var headerBand: CGFloat = 0
-    /// Nil where the sidebar cannot be put away — the Preferences panes reuse
-    /// nothing here, but previews do.
-    var isExpanded: Binding<Bool>?
 
     /// The row the user just pressed, before the app has moved there.
     ///
@@ -33,18 +30,11 @@ struct SidebarView: View {
         // colour and offers no way to change it (`listItemTint(.monochrome)` tints
         // row *content*, not the selection fill).
         VStack(spacing: 0) {
-            // The band the traffic lights sit in. The panel's colour is behind
-            // them; its rows are not.
-            if let isExpanded {
-                HStack {
-                    Spacer(minLength: 0)
-                    SidebarToggleButton(isExpanded: isExpanded, isCollapsed: false)
-                }
-                .padding(.horizontal, Token.Size.sidebarRowInset)
-                .frame(height: headerBand)
-            } else {
-                Color.clear.frame(height: headerBand)
-            }
+            // The band the traffic lights sit in, and the collapse control with
+            // them. The panel's colour is behind both; its rows are not. The
+            // control itself belongs to the window — it has to outlive this panel
+            // to travel when the panel goes away — so this only leaves it room.
+            Color.clear.frame(height: headerBand)
 
             list
         }

@@ -340,6 +340,13 @@ enum Token {
         /// Where the traffic lights end: the last one's centre is at 72 and it is
         /// 14 across. Anything in the header band has to start clear of this.
         static let trafficLightsTrailingEdge: CGFloat = 79
+        /// What anything beside the lights leaves between itself and them.
+        static let trafficLightsClearance: CGFloat = 16
+        /// The collapse control, and its glyph.
+        static let sidebarToggle: CGFloat = 32
+        static let sidebarToggleGlyph: CGFloat = 16
+        /// How far the control sits from the expanded panel's trailing edge.
+        static let expandedToggleTrailingInset: CGFloat = 14
         /// Tall enough for the tallest thing a header carries — the Explorer's
         /// 26pt path control — with the 10pt of breathing room above and below.
         static let pageHeader: CGFloat = 46
