@@ -28,14 +28,33 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     var settings: SettingsStore?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isSidebarExpanded = true
+    /// Whether the collapse control is wearing its circle. Separate from the
+    /// sidebar's own state so the circle does not travel — see `toggleSidebar`.
+    @State private var showsCollapsedChrome = false
+    @State private var chromeRevealTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 0) {
             if isSidebarExpanded { sidebarPanel }
             contentColumn
         }
-        .animation(.smooth(duration: 0.22), value: isSidebarExpanded)
+        // One control for both states, over the layout rather than inside either
+        // half of it, so it travels with the sidebar's edge instead of being
+        // removed from one view and inserted into another.
+        .overlay(alignment: .topLeading) {
+            SidebarToggleButton(
+                isCollapsed: !isSidebarExpanded,
+                showsCollapsedChrome: showsCollapsedChrome,
+                action: toggleSidebar
+            )
+            .position(x: toggleCentreX, y: Token.Size.headerBand / 2)
+            .animation(
+                reduceMotion ? nil : .smooth(duration: Self.sidebarTransition),
+                value: isSidebarExpanded
+            )
+        }
         // The whole layout reaches the top of the window, not just the background
         // behind it. Without this SwiftUI keeps the hidden title bar's height as
         // safe area, so the sidebar panel began about 36pt down and the traffic
@@ -93,16 +112,66 @@ struct MainWindow: View {
         }
     }
 
+    // MARK: - The sidebar's own movement
+
+    private static let sidebarTransition = 0.25
+    /// Long enough that the circle cannot appear while the control is still
+    /// travelling, plus a frame's margin.
+    private static let collapsedChromeDelay = Duration.milliseconds(300)
+
+    /// Where the control sits: inside the expanded panel near its trailing edge,
+    /// and out on the shell clear of the traffic lights once the panel is gone.
+    private var toggleCentreX: CGFloat {
+        if isSidebarExpanded {
+            Token.Size.sidebarColumn
+                - Token.Size.expandedToggleTrailingInset
+                - Token.Size.sidebarToggle / 2
+        } else {
+            collapsedLeadingInset + Token.Size.sidebarToggle / 2
+        }
+    }
+
+    /// What the header leaves clear when there is no sidebar: the traffic lights,
+    /// and the gap the reference keeps after them.
+    private var collapsedLeadingInset: CGFloat {
+        Token.Size.trafficLightsTrailingEdge + Token.Size.trafficLightsClearance
+    }
+
+    private func toggleSidebar() {
+        let willExpand = !isSidebarExpanded
+        if willExpand {
+            // Take the circle off before the control starts moving. Left to the
+            // change below it would be removed *inside* that animation, so it
+            // would draw one frame at the far end of the journey and fade from
+            // there rather than travelling.
+            chromeRevealTask?.cancel()
+            chromeRevealTask = nil
+            showsCollapsedChrome = false
+        }
+        if reduceMotion {
+            isSidebarExpanded = willExpand
+            showsCollapsedChrome = !willExpand
+        } else {
+            withAnimation(.smooth(duration: Self.sidebarTransition)) {
+                isSidebarExpanded = willExpand
+            }
+            guard !willExpand else { return }
+            chromeRevealTask = Task { @MainActor in
+                guard (try? await Task.sleep(for: Self.collapsedChromeDelay)) != nil else {
+                    return
+                }
+                guard !isSidebarExpanded else { return }
+                withAnimation(.easeOut(duration: 0.08)) { showsCollapsedChrome = true }
+            }
+        }
+    }
+
     // MARK: - Panels
 
     /// The sidebar, inset from three edges, its surface running up behind the
     /// traffic lights while its rows begin below the header band.
     private var sidebarPanel: some View {
-        SidebarView(
-            model: model,
-            headerBand: Token.Size.headerBand,
-            isExpanded: $isSidebarExpanded
-        )
+        SidebarView(model: model, headerBand: Token.Size.headerBand)
             .frame(width: Token.Size.sidebarWidth)
             .background(Token.chrome)
             .clipShape(RoundedRectangle(cornerRadius: Token.Size.panelRadius, style: .continuous))
@@ -135,22 +204,20 @@ struct MainWindow: View {
     /// Clear of the traffic lights. With the sidebar expanded they sit on its
     /// panel and the band starts at its own gutter; collapsed, they are in this
     /// band and the title would land under them.
-    ///
-    /// The lights end at 79pt — the third one's centre is at 72 and it is 14
-    /// across — and 16pt of clearance after that is what the reference leaves.
     private var headerLeadingInset: CGFloat {
-        guard !isSidebarExpanded else { return Token.Size.shellGutter }
-        return max(0, Token.Size.trafficLightsTrailingEdge + 16)
+        isSidebarExpanded ? Token.Size.shellGutter : collapsedLeadingInset
     }
 
     /// The header band: the view's name and its actions, level with the traffic
     /// lights, on the shell rather than on any panel.
     private var contentHeader: some View {
         HStack(spacing: 10) {
-            // Only while the sidebar is away: expanded, its own control sits inside
-            // the panel, where the spec puts it.
+            // Room for the control that floats above this band when the sidebar
+            // is away. It belongs to the window, not to this header.
             if !isSidebarExpanded {
-                SidebarToggleButton(isExpanded: $isSidebarExpanded, isCollapsed: true)
+                Color.clear
+                    .frame(width: Token.Size.sidebarToggle, height: Token.Size.sidebarToggle)
+                    .accessibilityHidden(true)
             }
             Text(model.view.title)
                 .font(.mcToolbarTitle)
