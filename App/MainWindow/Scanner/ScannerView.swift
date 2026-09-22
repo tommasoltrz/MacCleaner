@@ -4,6 +4,8 @@ import ScoloCore
 /// Keeps the cleanup filters above the file list.
 struct ScannerView: View {
     @Bindable var model: AppModel
+    @State private var animateEmptyResult = false
+    @State private var resultBeforeScan: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var resultsVisible = true
 
@@ -41,15 +43,21 @@ struct ScannerView: View {
                     .padding(Token.Size.pageGutter)
                     Divider()
                         .opacity(resultsVisible ? 1 : 0)
-                    ScrollView {
-                        VStack(spacing: 12) {
-                            if model.scanFilter == .safeToRemove, !model.runningAppCaches.isEmpty {
-                                runningAppsNotice
-                                    .modifier(resultEntrance(index: 2))
+                    let visibleCategories = categories(of: results, for: model.scanFilter)
+                    let showsRunningApps = model.scanFilter == .safeToRemove && !model.runningAppCaches.isEmpty
+                    let showsEmptyState = hasNoCleanupItems(visibleCategories) && !showsRunningApps
+                    GeometryReader { geometry in
+                        ScrollView {
+                            VStack(spacing: 12) {
+                                if showsRunningApps {
+                                    runningAppsNotice
+                                        .modifier(resultEntrance(index: 2))
+                                }
+                                categoryOutline(visibleCategories)
                             }
-                            categoryOutline(categories(of: results, for: model.scanFilter))
+                            .frame(minHeight: showsEmptyState ? geometry.size.height : 0, alignment: .top)
+                            .padding(showsEmptyState ? 0 : Token.Size.pageGutter)
                         }
-                        .padding(Token.Size.pageGutter)
                     }
                 }
                 .transition(.opacity)
@@ -59,9 +67,21 @@ struct ScannerView: View {
                 } description: {
                     Text("Use Scan to find cleanup items.")
                 }
+                .pageStateLayout()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: model.isScanning, initial: true) { wasRunning, isRunning in
+            if isRunning {
+                resultBeforeScan = model.scanResults?.finishedAt
+                animateEmptyResult = false
+            } else if wasRunning {
+                animateEmptyResult = model.scanResults?.finishedAt != nil
+                    && model.scanResults?.finishedAt != resultBeforeScan
+            }
+        }
+        .onChange(of: model.scanFilter) { _, _ in animateEmptyResult = false }
+        .onDisappear { animateEmptyResult = false }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsOperation)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.cleanupCompletion?.id)
         .task {
@@ -146,8 +166,7 @@ struct ScannerView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.scanProgress)
         .frame(maxWidth: 380)
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationPageLayout()
     }
 
     private func resultEntrance(index: Int) -> ResultEntrance {
@@ -243,15 +262,21 @@ struct ScannerView: View {
             .filter { !$0.entries.isEmpty }
     }
 
+    private func hasNoCleanupItems(_ categories: [ScanCategoryResult]) -> Bool {
+        categories.allSatisfy {
+            $0.entries.isEmpty && $0.unreadableCount == 0
+                && ($0.availability == .available || $0.availability == .empty)
+        }
+    }
+
     @ViewBuilder
     private func categoryOutline(_ categories: [ScanCategoryResult]) -> some View {
-        if categories.isEmpty {
-            Text("The last scan found nothing in this group.")
-                .font(.mcBody)
-                .foregroundStyle(Token.Text.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 20)
-                .modifier(resultEntrance(index: 2))
+        if hasNoCleanupItems(categories) {
+            ScanCompletionView(
+                title: model.scanFilter == .safeToRemove ? "No safe cleanup items found" : "No cleanup items found",
+                detail: "The scan found no items in this group.",
+                animate: animateEmptyResult
+            )
         } else {
             outline(categories)
         }

@@ -98,6 +98,7 @@ public struct PhotoNeighbourGraph: Sendable, Equatable {
         fingerprints: [String: PhotoFingerprint],
         bucketInterval: TimeInterval,
         ceiling: Float,
+        isCancelled: @Sendable () -> Bool = { Task.isCancelled },
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) -> PhotoNeighbourGraph {
         let comparable = assets.filter {
@@ -120,13 +121,13 @@ public struct PhotoNeighbourGraph: Sendable, Equatable {
 
         var edges: [(String, String, Float)] = []
         for (index, bucket) in ordered.enumerated() {
-            if Task.isCancelled { break }
+            if isCancelled() { break }
             defer {
                 doneCost += costs[index]
                 if totalCost > 0 { onProgress?(min(1, doneCost / totalCost)) }
             }
             guard bucket.count > 1 else { continue }
-            edges.append(contentsOf: compare(bucket, fingerprints: fingerprints, ceiling: ceiling))
+            edges.append(contentsOf: compare(bucket, fingerprints: fingerprints, ceiling: ceiling, isCancelled: isCancelled))
         }
 
         return PhotoNeighbourGraph(
@@ -137,7 +138,8 @@ public struct PhotoNeighbourGraph: Sendable, Equatable {
     private static func compare(
         _ bucket: [PhotoAsset],
         fingerprints: [String: PhotoFingerprint],
-        ceiling: Float
+        ceiling: Float,
+        isCancelled: @Sendable () -> Bool
     ) -> [(String, String, Float)] {
         // Hoisted out of the dictionary: the inner loop runs tens of millions of
         // times and the lookup dominated the comparison itself.
@@ -158,11 +160,10 @@ public struct PhotoNeighbourGraph: Sendable, Equatable {
             var local: [(String, String, Float)] = []
             var i = worker
             while i < printsRef.count {
-                // Cancellation reaches every worker: each polls its own rows, so a
-                // Stop lands within a row rather than at the end of the bucket.
-                if Task.isCancelled { break }
-                for j in (i + 1)..<printsRef.count
-                where printsRef[i].isWithin(ceiling, of: printsRef[j]) {
+                if isCancelled() { break }
+                for j in (i + 1)..<printsRef.count {
+                    if j.isMultiple(of: 256), isCancelled() { break }
+                    guard printsRef[i].isWithin(ceiling, of: printsRef[j]) else { continue }
                     // Only for the survivors — 0.02% of pairs — so the full
                     // 768-dimension distance here costs nothing next to the scan.
                     if let d = printsRef[i].distance(to: printsRef[j]) {

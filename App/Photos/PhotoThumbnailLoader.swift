@@ -23,6 +23,7 @@ final class PhotoThumbnailLoader {
 
     private var images: [String: NSImage] = [:]
     private var previews: [String: NSImage] = [:]
+    private var previewThumbnailIDs: Set<String> = []
     private var previewOrder: [String] = []
     private var inFlight: Set<String> = []
     private var previewsInFlight: Set<String> = []
@@ -41,7 +42,7 @@ final class PhotoThumbnailLoader {
             let image = await Self.fetch(assetID)
             guard let self else { return }
             self.inFlight.remove(assetID)
-            guard let image else { return }
+            guard let image, !self.previewThumbnailIDs.contains(assetID) else { return }
             self.images[assetID] = image
         }
     }
@@ -76,12 +77,19 @@ final class PhotoThumbnailLoader {
 
         Task { [weak self] in
             let image = await Self.fetchOriginal(assetID, onProgress: report)
+            let thumbnail = await Task.detached(priority: .userInitiated) {
+                image.flatMap { Self.makeThumbnail(from: $0) }
+            }.value
             guard let self else { return }
             self.previewsInFlight.remove(assetID)
             self.downloadProgress[assetID] = nil
             guard let image else { return }
 
             self.previews[assetID] = image
+            if let thumbnail {
+                self.images[assetID] = thumbnail
+                self.previewThumbnailIDs.insert(assetID)
+            }
             self.previewOrder.append(assetID)
             while self.previewOrder.count > Self.previewCacheLimit {
                 self.previews.removeValue(forKey: self.previewOrder.removeFirst())
@@ -117,13 +125,25 @@ final class PhotoThumbnailLoader {
         )
     }
 
-    private nonisolated static func fetch(
-        _ assetID: String,
-        edge: CGFloat = PhotoThumbnailLoader.edge,
-        mode: PHImageContentMode = .aspectFill
-    ) async -> NSImage? {
+    private nonisolated static func fetch(_ assetID: String) async -> NSImage? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject
         else { return nil }
+
+        let localOptions = PHImageRequestOptions()
+        localOptions.isNetworkAccessAllowed = false
+        localOptions.deliveryMode = .highQualityFormat
+        localOptions.resizeMode = .exact
+
+        // Use the best local image without downloading an original for the grid.
+        if let image = await TimedImageRequest().image(
+            for: asset,
+            size: CGSize(width: edge, height: edge),
+            contentMode: .aspectFill,
+            options: localOptions,
+            timeout: 20
+        ) {
+            return makeThumbnail(from: image)
+        }
 
         let options = PHImageRequestOptions()
         // The sweep has already paid to bring these renditions down, so by the time
@@ -135,12 +155,40 @@ final class PhotoThumbnailLoader {
 
         // Same guard as the preview path: a grid tile that never resolves is a
         // leaked task per photo. Short, because these are fast-format requests.
-        return await TimedImageRequest().image(
+        let image = await TimedImageRequest().image(
             for: asset,
             size: CGSize(width: edge, height: edge),
-            contentMode: mode,
+            contentMode: .aspectFill,
             options: options,
             timeout: 20
         )
+        return image.flatMap { makeThumbnail(from: $0) }
+    }
+
+    /// Stores a small bitmap so the grid does not retain full-resolution previews.
+    private nonisolated static func makeThumbnail(from image: NSImage) -> NSImage? {
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              source.width > 0, source.height > 0,
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: Int(edge),
+                height: Int(edge),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+
+        let scale = max(edge / CGFloat(source.width), edge / CGFloat(source.height))
+        let width = CGFloat(source.width) * scale
+        let height = CGFloat(source.height) * scale
+        context.interpolationQuality = .high
+        context.draw(source, in: CGRect(
+            x: (edge - width) / 2, y: (edge - height) / 2, width: width, height: height
+        ))
+        guard let thumbnail = context.makeImage() else { return nil }
+        return NSImage(cgImage: thumbnail, size: CGSize(width: edge, height: edge))
     }
 }

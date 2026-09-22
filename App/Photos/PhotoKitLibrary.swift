@@ -60,6 +60,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
     // MARK: - Fetch
 
     func fetchAssets() async throws -> [PhotoAsset] {
+        try Task.checkCancellation()
         // `PHAsset` is not Sendable, so it never leaves this scope — the mapping to
         // Core's value type happens inline and only `[PhotoAsset]` crosses out.
         let options = PHFetchOptions()
@@ -72,9 +73,14 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
         var assets: [PhotoAsset] = []
         assets.reserveCapacity(result.count)
 
-        result.enumerateObjects { asset, _, _ in
+        result.enumerateObjects { asset, _, stop in
+            if Task.isCancelled {
+                stop.pointee = true
+                return
+            }
             assets.append(Self.map(asset))
         }
+        try Task.checkCancellation()
         return assets
     }
 
@@ -108,7 +114,8 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
     // MARK: - Fingerprints
 
     func fingerprint(assetID: String) async -> PhotoFingerprint? {
-        guard let image = await thumbnail(for: assetID) else { return nil }
+        guard !Task.isCancelled,
+              let image = await thumbnail(for: assetID), !Task.isCancelled else { return nil }
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }
@@ -180,6 +187,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
     /// Returns nil on timeout, which the sweep counts as skipped — an honest "not
     /// compared" rather than a stall.
     private func thumbnail(for assetID: String) async -> NSImage? {
+        guard !Task.isCancelled else { return nil }
         let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil)
         guard let asset = fetch.firstObject else { return nil }
 
@@ -203,8 +211,12 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
         guard assets.count > 0 else { return }
 
-        try await PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.deleteAssets(assets)
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.deleteAssets(assets)
+            }
+        } catch let error as PHPhotosError where error.code == .userCancelled {
+            throw CancellationError()
         }
     }
 }
@@ -213,7 +225,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
 /// One `PHImageManager` request, bounded by a timeout.
 ///
 /// Exists because the continuation must be resumed exactly once no matter which of
-/// two racing events happens first — PhotoKit's handler, or the deadline. Resuming a
+/// competing events finishes first: PhotoKit, cancellation, or the deadline. Resuming a
 /// `CheckedContinuation` twice traps, and never resuming it leaks the task forever;
 /// both were reachable without this. The lock makes the winner unambiguous.
 final class TimedImageRequest: @unchecked Sendable {
@@ -231,35 +243,41 @@ final class TimedImageRequest: @unchecked Sendable {
         options: PHImageRequestOptions,
         timeout: TimeInterval
     ) async -> NSImage? {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            self.continuation = continuation
-            lock.unlock()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                guard !finished else {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                self.continuation = continuation
+                lock.unlock()
 
-            let id = PHImageManager.default().requestImage(
-                for: asset, targetSize: size, contentMode: contentMode, options: options
-            ) { image, _ in
-                // Strong, deliberately. Nothing else holds this object once the
-                // synchronous part of `withCheckedContinuation` returns, so a weak
-                // capture let it deallocate before the callback — and a continuation
-                // whose owner is gone is never resumed, hanging the task forever.
-                // The retain cycle it creates is broken in `finish`/`expire`.
-                self.finish(with: image)
+                let id = PHImageManager.default().requestImage(
+                    for: asset, targetSize: size, contentMode: contentMode, options: options
+                ) { image, _ in
+                    self.finish(with: image)
+                }
+
+                lock.lock()
+                let alreadyFinished = finished
+                if !alreadyFinished { requestID = id }
+                lock.unlock()
+                if alreadyFinished {
+                    // Cancellation can arrive before PhotoKit returns the request identifier.
+                    PHImageManager.default().cancelImageRequest(id)
+                    return
+                }
+
+                let deadline = DispatchWorkItem { self.expire() }
+                lock.lock()
+                if finished { deadline.cancel() } else { self.timeout = deadline }
+                lock.unlock()
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: deadline)
             }
-
-            lock.lock()
-            // The handler can fire before `requestImage` has even returned, in which
-            // case the request is already over and this id must not be recorded — it
-            // would only be handed to `cancelImageRequest` for a request that no
-            // longer exists.
-            if !finished { requestID = id }
-            lock.unlock()
-
-            let deadline = DispatchWorkItem { self.expire() }
-            lock.lock()
-            if finished { deadline.cancel() } else { self.timeout = deadline }
-            lock.unlock()
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: deadline)
+        } onCancel: {
+            self.expire()
         }
     }
 
@@ -284,12 +302,15 @@ final class TimedImageRequest: @unchecked Sendable {
         finished = true
         let waiting = continuation
         let id = requestID
+        let deadline = timeout
         continuation = nil
+        requestID = nil
         timeout = nil
         lock.unlock()
 
         // Tell PhotoKit to stop, so an abandoned request is not left occupying its
         // queue for the rest of the sweep.
+        deadline?.cancel()
         if let id { PHImageManager.default().cancelImageRequest(id) }
         waiting?.resume(returning: nil)
     }

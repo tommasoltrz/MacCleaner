@@ -735,14 +735,84 @@ struct PageTabPill: View {
     }
 }
 
+/// Keeps operation progress visible for one second. Cancellation ends the wait immediately.
+struct OperationPresentationDuration: Sendable {
+    private let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+
+    func wait() async throws {
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { return }
+        try await ContinuousClock().sleep(until: deadline)
+    }
+}
+
+extension View {
+    /// Places page states below the controls with equal spacing and horizontal centering.
+    func pageStateLayout() -> some View {
+        fixedSize(horizontal: false, vertical: true)
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
+private struct ScanActionBounds: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+extension View {
+    /// Marks the start action so the Stop button can use the same position.
+    func scanActionAnchor() -> some View {
+        anchorPreference(key: ScanActionBounds.self, value: .bounds) { $0 }
+    }
+}
+
+/// Measures the intro without showing it while the scan runs.
+struct ScanProgressPage<Intro: View, Progress: View>: View {
+    @ViewBuilder var intro: () -> Intro
+    @ViewBuilder var progress: (CGFloat?) -> Progress
+
+    var body: some View {
+        intro()
+            .hidden()
+            .disabled(true)
+            .accessibilityHidden(true)
+            .overlayPreferenceValue(ScanActionBounds.self) { anchor in
+                GeometryReader { geometry in
+                    progress(anchor.map { geometry[$0].maxY })
+                }
+            }
+    }
+}
+
+extension View {
+    /// Keeps progress and results in one content area below the page controls.
+    func operationPageLayout(actionBottom: CGFloat? = nil) -> some View {
+        fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 32)
+            .padding(.top, 32)
+            .frame(maxWidth: .infinity, minHeight: actionBottom ?? 320, alignment: .bottom)
+            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
 /// Shows progress in the content area with an optional stop action.
 struct PageProgressView: View {
     let title: String
     var detail: String? = nil
     var progress: Double? = nil
     var onStop: (() -> Void)? = nil
+    var actionBottom: CGFloat? = nil
 
     var body: some View {
+        content.operationPageLayout(actionBottom: actionBottom)
+    }
+
+    private var content: some View {
         VStack(spacing: 18) {
             Text(title)
                 .font(.system(size: 18, weight: .medium))
@@ -763,8 +833,6 @@ struct PageProgressView: View {
             }
         }
         .frame(maxWidth: 380)
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -815,5 +883,80 @@ private struct AnimatedTotal<Value: Equatable>: ViewModifier {
 extension View {
     func animatedTotal<Value: Equatable>(_ value: Value) -> some View {
         modifier(AnimatedTotal(value: value))
+    }
+}
+
+/// Shows a completed scan with no matching items.
+struct ScanCompletionView: View {
+    let title: String
+    var detail: String? = nil
+    var animate = false
+
+    var body: some View {
+        VStack(spacing: 18) {
+            CompletionMark(animate: animate)
+                .padding(.bottom, 4)
+            Text(title)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Token.Text.primary)
+            if let detail {
+                Text(detail)
+                    .font(.mcSubtitle)
+                    .foregroundStyle(Token.Text.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: 420)
+        .operationPageLayout()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+struct CompletionMark: View {
+    var animate = true
+    var isSuccess = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drawn = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 15)
+                .fill(Token.color(isSuccess ? .green : .orange).opacity(0.12))
+            RoundedRectangle(cornerRadius: 15)
+                .strokeBorder(Token.textColor(isSuccess ? .green : .orange).opacity(0.3), lineWidth: 1)
+            if isSuccess {
+                CheckmarkStroke()
+                    .trim(from: 0, to: drawn || !animate ? 1 : 0)
+                    .stroke(Token.textColor(.green), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    .padding(14)
+            } else {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(Token.textColor(.orange))
+            }
+        }
+        .frame(width: 60, height: 60)
+        .scaleEffect(drawn || !animate || reduceMotion ? 1 : 0.94)
+        .opacity(drawn || !animate ? 1 : 0)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: drawn)
+        .task(id: animate) {
+            guard animate else { return }
+            if !reduceMotion {
+                do { try await Task.sleep(for: .milliseconds(30)) }
+                catch { return }
+            }
+            drawn = true
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct CheckmarkStroke: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.4, y: rect.minY + rect.height * 0.75))
+            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.88, y: rect.minY + rect.height * 0.22))
+        }
     }
 }

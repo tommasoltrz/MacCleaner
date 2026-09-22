@@ -1,11 +1,7 @@
 import SwiftUI
 import ScoloCore
 
-/// The clean-up, empty-trash and photo-deletion confirmations.
-///
-/// One shell, three variants. Presented with `.sheet`, so macOS supplies the
-/// attachment below the titlebar, the entrance animation, and Escape/Return
-/// handling — all of which the HTML prototype had to fake.
+/// Confirms permanent erasure or cleanup that needs user review.
 struct ConfirmationSheet: View {
 
     enum Variant {
@@ -23,26 +19,7 @@ struct ConfirmationSheet: View {
             saving: CleanupSaving?
         )
         case emptyTrash(itemCount: Int, totalBytes: Int64)
-        case uninstallApp(
-            applicationName: String,
-            itemCount: Int,
-            totalBytes: Int64,
-            protectedDataCount: Int,
-            applicationOnly: Bool
-        )
-        /// Several applications, each already planned and shown in the batch review.
-        case uninstallApps(
-            applicationCount: Int,
-            itemCount: Int,
-            totalBytes: Int64,
-            protectedDataCount: Int
-        )
-        case deleteDuplicateFiles(count: Int, totalBytes: Int64)
-        case removeStorageItems(count: Int, totalBytes: Int64, cloudItemCount: Int)
-        /// No byte count: `PHAssetResource` exposes no public size, so the sheet
-        /// says how many photographs go and stays silent about megabytes rather
-        /// than inventing a figure.
-        case deletePhotos(count: Int)
+
     }
 
     /// The gap between what a selection occupies and what removing it frees.
@@ -160,14 +137,10 @@ struct ConfirmationSheet: View {
             + "\(plural ? "they do" : "it does")."
     }
 
-    /// Deleting photos is recoverable for 30 days, but it still reaches every device
-    /// on the library — including a phone the user is not looking at — so it carries
-    /// the destructive tint rather than the neutral one.
     private var isDestructive: Bool {
         switch variant {
         case .cleanUp(_, _, let protected, _): protected > 0
-        case .emptyTrash, .deleteDuplicateFiles, .removeStorageItems,
-             .deletePhotos, .uninstallApp, .uninstallApps: true
+        case .emptyTrash: true
         }
     }
 
@@ -181,23 +154,7 @@ struct ConfirmationSheet: View {
             return "Move \(count) \(noun) to the Trash?"
         case .emptyTrash(let count, _):
             return "Permanently erase the \(count) items in the Trash?"
-        case .uninstallApp(let name, _, _, let protected, _):
-            return protected > 0
-                ? "Uninstall \(name) and remove its protected data?"
-                : "Uninstall \(name)?"
-        case .uninstallApps(let applications, _, _, let protected):
-            return protected > 0
-                ? "Uninstall \(applications) applications and remove their protected data?"
-                : "Uninstall \(applications) applications?"
-        case .deletePhotos(let count):
-            let noun = count == 1 ? "photo" : "photos"
-            return "Delete \(count) \(noun) from every device?"
-        case .deleteDuplicateFiles(let count, _):
-            let noun = count == 1 ? "file" : "files"
-            return "Move \(count) duplicate \(noun) to the Trash?"
-        case .removeStorageItems(let count, _, _):
-            let noun = count == 1 ? "item" : "items"
-            return "Move \(count) \(noun) to the Trash?"
+
         }
     }
 
@@ -221,57 +178,7 @@ struct ConfirmationSheet: View {
         case .emptyTrash(_, let bytes):
             return "This erases \(ByteFormatting.string(bytes)) immediately. "
                 + "Items already in the Trash cannot be put back afterwards."
-        case .uninstallApp(_, let count, let bytes, let protected, let applicationOnly):
-            if applicationOnly {
-                return "Only the application (\(ByteFormatting.string(bytes))) will move to the Trash. "
-                    + "Related files will stay on disk."
-            }
-            let related = max(0, count - 1)
-            let noun = related == 1 ? "related item" : "related items"
-            var warning = ""
-            if protected > 0 {
-                let protectedNoun = protected == 1 ? "item" : "items"
-                warning = " This includes \(protected) protected user-data \(protectedNoun); "
-                    + "profiles, logins, history, or settings may be lost."
-            }
-            return "The application and \(related) \(noun) "
-                + "(\(ByteFormatting.string(bytes))) will move to the Trash. "
-                + "If the application cannot move, none of its related files will be touched."
-                + warning
-        case .uninstallApps(let applications, let count, let bytes, let protected):
-            let related = max(0, count - applications)
-            let noun = related == 1 ? "related item" : "related items"
-            var warning = ""
-            if protected > 0 {
-                let protectedNoun = protected == 1 ? "item" : "items"
-                warning = " This includes \(protected) protected user-data \(protectedNoun); "
-                    + "profiles, logins, history, or settings may be lost."
-            }
-            return "\(applications) applications and \(related) \(noun) "
-                + "(\(ByteFormatting.string(bytes))) will move to the Trash, one application "
-                + "at a time. Each is asked to quit first; if one will not quit or cannot "
-                + "move, its files are left alone and the others continue."
-                + warning
-        case .deletePhotos:
-            // Every clause here is something the user would otherwise discover
-            // afterwards: that this is not a local action, and that their iCloud
-            // storage will not move until they finish the job in Photos.
-            return "These move to Recently Deleted in Photos and disappear from your "
-                + "iPhone and every other device on this iCloud library. They stay "
-                + "recoverable for 30 days, and iCloud storage is not freed until you "
-                + "empty Recently Deleted in Photos yourself."
-        case .deleteDuplicateFiles(_, let bytes):
-            return "One verified copy from each set will remain. Up to "
-                + "\(ByteFormatting.string(bytes)) is available because APFS clones can share "
-                + "storage. The selected files will move to the Trash."
-        case .removeStorageItems(_, let bytes, let cloudItemCount):
-            let cloudWarning = cloudItemCount > 0
-                ? " Moving an iCloud item to the Trash also removes it from iCloud and other devices."
-                : ""
-            return "The selected items currently use \(ByteFormatting.string(bytes)). "
-                + "This amount is not a promise of recovered space because files can share storage. "
-                + "Scolo will verify each item again."
-                + cloudWarning
+
         }
     }
 
@@ -314,10 +221,6 @@ struct ConfirmationSheet: View {
         case .cleanUp(_, _, let protected, _):
             return protected > 0 ? "Remove Anyway" : "Move to Trash"
         case .emptyTrash:   return "Erase"
-        case .uninstallApp, .uninstallApps: return "Uninstall"
-        case .deletePhotos: return "Delete Everywhere"
-        case .deleteDuplicateFiles: return "Move to Trash"
-        case .removeStorageItems: return "Move to Trash"
         }
     }
 
@@ -335,11 +238,6 @@ struct ConfirmationSheet: View {
     }
 
     private var iconName: String {
-        if case .deletePhotos = variant { return "photo.badge.minus" }
-        if case .deleteDuplicateFiles = variant { return "doc.on.doc" }
-        if case .removeStorageItems = variant { return "trash" }
-        if case .uninstallApp = variant { return "trash.square" }
-        if case .uninstallApps = variant { return "trash.square" }
         if case .cleanUp(_, _, let protected, _) = variant, protected > 0 {
             return "exclamationmark.triangle"
         }
@@ -387,13 +285,6 @@ struct ConfirmationSheet: View {
             protectedDataCount: 0,
             saving: .init(freedBytes: 0, isMinimum: false)
         ),
-        onConfirm: {}, onCancel: {}
-    )
-}
-
-#Preview("Delete photos") {
-    ConfirmationSheet(
-        variant: .deletePhotos(count: 128),
         onConfirm: {}, onCancel: {}
     )
 }

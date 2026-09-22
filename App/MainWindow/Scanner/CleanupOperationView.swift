@@ -13,7 +13,7 @@ struct CleanupOperationView: View {
     var body: some View {
         VStack(spacing: 18) {
             if isComplete {
-                CleanupCompletionMark()
+                CompletionMark()
                     .padding(.bottom, 4)
             }
             Text(isComplete ? "Moved to Trash" : "Moving items to Trash")
@@ -44,49 +44,47 @@ struct CleanupOperationView: View {
             }
         }
         .frame(maxWidth: 380)
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationPageLayout()
         .accessibilityElement(children: .contain)
     }
 }
 
-private struct CleanupCompletionMark: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drawn = false
+/// Shows a removal result without an additional dialog.
+struct RemovalCompletionView: View {
+    let title: String
+    let detail: String
+    var isSuccess = true
+    var showsActions = true
+    var canContinue = true
+    let onContinue: () -> Void
+    let onViewDashboard: () -> Void
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 15)
-                .fill(Token.color(.green).opacity(0.12))
-            RoundedRectangle(cornerRadius: 15)
-                .strokeBorder(Token.textColor(.green).opacity(0.3), lineWidth: 1)
-            CheckmarkStroke()
-                .trim(from: 0, to: drawn ? 1 : 0)
-                .stroke(Token.textColor(.green), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                .padding(14)
-        }
-        .frame(width: 60, height: 60)
-        .scaleEffect(drawn || reduceMotion ? 1 : 0.94)
-        .opacity(drawn ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: drawn)
-        .task {
-            if !reduceMotion {
-                do { try await Task.sleep(for: .milliseconds(30)) }
-                catch { return }
+        VStack(spacing: 18) {
+            CompletionMark(isSuccess: isSuccess)
+                .padding(.bottom, 4)
+            Text(title)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Token.Text.primary)
+            Text(detail)
+                .font(.mcSubtitle)
+                .foregroundStyle(Token.Text.secondary)
+                .multilineTextAlignment(.center)
+            if showsActions {
+                HStack(spacing: 12) {
+                    Button("Continue", action: onContinue)
+                        .buttonStyle(PageActionButtonStyle(tint: .white, foreground: .black))
+                        .disabled(!canContinue)
+                    Button("View Dashboard", action: onViewDashboard)
+                        .buttonStyle(PageActionButtonStyle())
+                }
+                .padding(.top, 8)
             }
-            drawn = true
         }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct CheckmarkStroke: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.4, y: rect.minY + rect.height * 0.75))
-            path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.88, y: rect.minY + rect.height * 0.22))
-        }
+        .frame(maxWidth: showsActions ? 460 : 420)
+        .operationPageLayout()
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
     }
 }
 

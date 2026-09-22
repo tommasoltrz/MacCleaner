@@ -21,6 +21,7 @@ struct TrashView: View {
                 TrashContent(
                     summary: summary,
                     findRequest: model.findRequest,
+                    selectedItemID: $model.selectedTrashItemID,
                     onPutBack: { item in Task { await model.putBack(item) } }
                 )
             } else if hasLoaded {
@@ -57,7 +58,7 @@ struct TrashView: View {
             }
             .buttonStyle(PageActionButtonStyle())
         }
-        .frame(maxWidth: .infinity, minHeight: 280)
+        .operationPageLayout()
     }
 }
 
@@ -69,6 +70,7 @@ private struct TrashContent: View {
     let summary: TrashSummary
     /// `AppModel.findRequest`: ⌘F moves the focus to the search field.
     var findRequest = 0
+    @Binding var selectedItemID: TrashItem.ID?
     let onPutBack: (TrashItem) -> Void
 
     /// Narrows the rows and nothing else. The header's size and count stay the whole
@@ -90,58 +92,76 @@ private struct TrashContent: View {
         VStack(spacing: 0) {
             summaryHeader
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if summary.items.isEmpty {
-                        emptyNote
-                    } else if visibleItems.isEmpty {
-                        // The list can be capped (`TrashService.summary(limit:)`), and
-                        // then "no match" is only true of the rows that were read.
-                        ContentUnavailableView {
-                            Label("No Results for “\(query)”", systemImage: "magnifyingglass")
-                        } description: {
-                            Text(summary.itemCount > summary.items.count
-                                 ? "Only the \(summary.items.count) largest items were searched."
-                                 : "No item in the Trash has that in its name.")
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 240)
-                    } else {
-                        // Finder's Bin also shows iCloud's Recently Deleted, which are cloud
-                        // records with no bytes on this disk. Saying so heads off "why does
-                        // Finder show more items" — the honest scope here is this disk.
-                        if hasICloudDrive {
-                            Text("Finder's Bin may also show iCloud's Recently Deleted. Those "
-                                 + "items live in iCloud, not on this disk.")
-                                .font(.mcSubtitle)
-                                .foregroundStyle(Token.Text.tertiary)
-                                .padding(.horizontal, 2)
-                        }
-                        GroupedBox {
-                            // Lazy: `TrashService` caps the rows it returns, but the cap is 50 and
-                            // each row carries a button and a hover tracker.
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
-                                    if index > 0 { Hairline() }
-                                    TrashRow(item: item, onPutBack: { onPutBack(item) })
+            ScrollViewReader { proxy in
+                GeometryReader { geometry in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if summary.items.isEmpty {
+                                emptyNote
+                            } else if visibleItems.isEmpty {
+                                // The list can be capped (`TrashService.summary(limit:)`), and
+                                // then "no match" is only true of the rows that were read.
+                                ContentUnavailableView {
+                                    Label("No Results for “\(query)”", systemImage: "magnifyingglass")
+                                } description: {
+                                    Text(summary.itemCount > summary.items.count
+                                         ? "Only the \(summary.items.count) largest items were searched."
+                                         : "No item in the Trash has that in its name.")
+                                }
+                                .operationPageLayout()
+                            } else {
+                                // Finder's Bin also shows iCloud's Recently Deleted, which are cloud
+                                // records with no bytes on this disk. Saying so heads off "why does
+                                // Finder show more items" — the honest scope here is this disk.
+                                if hasICloudDrive {
+                                    Text("Finder's Bin may also show iCloud's Recently Deleted. Those "
+                                         + "items live in iCloud, not on this disk.")
+                                        .font(.mcSubtitle)
+                                        .foregroundStyle(Token.Text.tertiary)
+                                        .padding(.horizontal, 2)
+                                }
+                                GroupedBox {
+                                    // Lazy: `TrashService` caps the rows it returns, but the cap is 50 and
+                                    // each row carries a button and a hover tracker.
+                                    LazyVStack(spacing: 0) {
+                                        ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
+                                            VStack(spacing: 0) {
+                                                if index > 0 { Hairline() }
+                                                TrashRow(
+                                                    item: item,
+                                                    isSelected: selectedItemID == item.id,
+                                                    onSelect: { selectedItemID = item.id },
+                                                    onPutBack: { onPutBack(item) }
+                                                )
+                                            }
+                                            .id(item.id)
+                                        }
+                                    }
+                                    .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
+                                }
+
+                                // Finder shows every item; this list deliberately shows the biggest.
+                                // Said out loud, or the shorter list reads as missing files.
+                                if summary.itemCount > summary.items.count {
+                                    Text("Showing the \(summary.items.count) largest of "
+                                         + "\(summary.itemCount) items. Finder lists them all.")
+                                        .font(.mcSubtitle)
+                                        .foregroundStyle(Token.Text.tertiary)
+                                        .padding(.horizontal, 2)
                                 }
                             }
-                            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
                         }
-
-                        // Finder shows every item; this list deliberately shows the biggest.
-                        // Said out loud, or the shorter list reads as missing files.
-                        if summary.itemCount > summary.items.count {
-                            Text("Showing the \(summary.items.count) largest of "
-                                 + "\(summary.itemCount) items. Finder lists them all.")
-                                .font(.mcSubtitle)
-                                .foregroundStyle(Token.Text.tertiary)
-                                .padding(.horizontal, 2)
-                        }
+                        .frame(minHeight: visibleItems.isEmpty ? geometry.size.height : 0, alignment: .top)
+                        .padding(.horizontal, visibleItems.isEmpty ? 0 : Token.Size.pageGutter)
+                        .padding(.top, visibleItems.isEmpty ? 0 : 14)
+                        .padding(.bottom, visibleItems.isEmpty ? 0 : 22)
                     }
                 }
-                .padding(.horizontal, Token.Size.pageGutter)
-                .padding(.top, 14)
-                .padding(.bottom, 22)
+                .onAppear {
+                    // Reveal the initial selection without scrolling when the user selects another row.
+                    guard let id = selectedItemID else { return }
+                    proxy.scrollTo(id, anchor: .center)
+                }
             }
         }
     }
@@ -200,7 +220,7 @@ private struct TrashContent: View {
                  + "app moves here record their original location. You can put "
                  + "them back.")
         }
-        .frame(maxWidth: .infinity, minHeight: 240)
+        .operationPageLayout()
     }
 }
 
@@ -208,6 +228,8 @@ private struct TrashContent: View {
 
 private struct TrashRow: View {
     let item: TrashItem
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onPutBack: () -> Void
 
     var body: some View {
@@ -238,6 +260,9 @@ private struct TrashRow: View {
         .padding(.horizontal, Metrics.sidePadding)
         .frame(height: Token.Size.trashRow)
         .contentShape(Rectangle())
+        .background(isSelected ? Token.color(.accent).opacity(0.14) : Color.clear)
+        .onTapGesture(perform: onSelect)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .hoverHighlight()
     }
 
@@ -311,6 +336,7 @@ private extension Font {
 #Preview("Trash") {
     TrashContent(
         summary: PreviewTrash.populated,
+        selectedItemID: .constant(nil),
         onPutBack: { _ in }
     )
         .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
@@ -319,7 +345,7 @@ private extension Font {
 }
 
 #Preview("Trash — empty") {
-    TrashContent(summary: TrashSummary(), onPutBack: { _ in })
+    TrashContent(summary: TrashSummary(), selectedItemID: .constant(nil), onPutBack: { _ in })
         .frame(width: Token.Size.windowWidth - Token.Size.sidebarWidth, height: 420)
         .background(Color(nsColor: .windowBackgroundColor))
         .preferredColorScheme(.dark)

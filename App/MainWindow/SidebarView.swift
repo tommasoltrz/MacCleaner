@@ -249,12 +249,9 @@ struct SidebarView: View {
         return "\(used.dropLast(usedUnit.count + 1)) of \(capacity) used"
     }
 
-    /// The design shows a count beside Scanner and Trash only.
+    /// Shows the item count beside Trash.
     private func count(for view: AppModel.View) -> Int? {
         switch view {
-        case .scanner:
-            let categories = model.scanResults?.actionableCategories.count ?? 0
-            return categories > 0 ? categories : nil
         case .trash:
             let items = model.trashSummary?.itemCount ?? 0
             return items > 0 ? items : nil
