@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The capacity card while a measurement is running.
 ///
-/// Same geometry as the real card, drawn in bones: eyebrow, hero figures, the
+/// Same geometry as the real card, drawn in bones: hero figures, the
 /// track, and a two-column legend. Keeping the shape stops the page from jumping
 /// when the figures land, and the pulse says "working" without a spinner.
 struct CapacityCardSkeleton: View {
@@ -10,14 +10,11 @@ struct CapacityCardSkeleton: View {
     var body: some View {
         GroupedBox(radius: Token.Radius.card) {
             VStack(alignment: .leading, spacing: 0) {
-                bone(width: 210, height: 11)
-
                 HStack(alignment: .bottom) {
                     bone(width: 220, height: 34)
                     Spacer(minLength: 12)
                     bone(width: 120, height: 26)
                 }
-                .padding(.top, 10)
 
                 SkeletonTrack()
                     .padding(.top, 16)

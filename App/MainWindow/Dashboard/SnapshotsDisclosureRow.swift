@@ -14,6 +14,7 @@ import ScoloCore
 /// deliberately no delete affordance and no "how to remove it" hint anywhere below:
 /// the only honest thing to do with the boot snapshot is describe it.
 struct SnapshotsDisclosureRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Everything the row needs from a snapshot.
     ///
@@ -80,7 +81,7 @@ struct SnapshotsDisclosureRow: View {
             // SwiftUI's default curve runs ~0.35s, which drags for a disclosure the
             // user is toggling in order to read something. The design's whole
             // animation inventory tops out at 260ms and asks for restraint.
-            withAnimation(.easeOut(duration: 0.18)) { isExpanded.toggle() }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { isExpanded.toggle() }
         } label: {
             HStack(spacing: Metrics.triangleGap) {
                 Image(systemName: "chevron.right")

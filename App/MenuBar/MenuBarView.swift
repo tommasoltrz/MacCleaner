@@ -42,7 +42,7 @@ struct MenuBarView: View {
             }
             .padding(.horizontal, 6)
 
-            Button("Scan for Junk") {
+            Button("Scan for Cleanup Items") {
                 NSApp.activate(ignoringOtherApps: true)
                 model.startScan()
             }

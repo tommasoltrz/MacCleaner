@@ -14,6 +14,14 @@ struct NativePathControl: NSViewRepresentable {
         let control = NSPathControl()
         control.pathStyle = .standard
         control.isEditable = false
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        control.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // It must not take key focus. A path control is clicked, never typed into,
+        // so focus buys it nothing — and while it held first responder the table
+        // below was inactive, which drew every selected row in the *inactive* grey
+        // instead of the accent. A selection that means "this is what Remove will
+        // take" was reading as a hover.
+        control.refusesFirstResponder = true
         control.target = context.coordinator
         control.action = #selector(Coordinator.selectPath(_:))
         control.url = url
@@ -23,6 +31,11 @@ struct NativePathControl: NSViewRepresentable {
     func updateNSView(_ control: NSPathControl, context: Context) {
         control.url = url
         context.coordinator.onSelect = onSelect
+    }
+
+    /// Lets long paths shorten before they reach the folder totals.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPathControl, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? nsView.fittingSize.width, height: 26)
     }
 
     @MainActor

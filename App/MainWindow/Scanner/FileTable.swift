@@ -16,6 +16,7 @@ struct FileTable: View {
     /// answer, `ScanCategoryResult.isCountedSafe`, so the badge and the tile cannot
     /// disagree. A table with no category behind it (a preview) badges nothing.
     var isSafeToRemove: (FileEntry) -> Bool = { _ in false }
+    var showsSafeToRemoveBadges = true
     @Binding var selection: Set<FileEntry.ID>
     @Binding var userDataRemovalOverrides: Set<FileEntry.ID>
     var onUninstallApplication: ((FileEntry) -> Void)? = nil
@@ -118,6 +119,8 @@ struct FileTable: View {
             )
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            Color.clear.frame(width: Metrics.regenerable, height: 0)
+
             SortableColumnHeader(
                 title: "Last opened",
                 isActive: sortKey == .lastOpened,
@@ -143,13 +146,11 @@ struct FileTable: View {
             // rather than above the button.
             Color.clear.frame(width: Metrics.action, height: 0)
         }
-        .font(.mcColumnHeader)
-        .tracking(0.04 * 10.5)
-        .textCase(.uppercase)
-        .foregroundStyle(Token.Text.quaternary)
+        .font(.mcControlLabel)
+        .foregroundStyle(Token.Text.secondary)
         .padding(.leading, Metrics.headerInset)
         .padding(.trailing, Metrics.sidePadding)
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Rows
@@ -163,7 +164,7 @@ struct FileTable: View {
                 if index > 0 { Hairline() }
                 FileRow(
                     entry: entry,
-                    isSafeToRemove: isSafeToRemove(entry),
+                    isSafeToRemove: showsSafeToRemoveBadges && isSafeToRemove(entry),
                     isSelected: selection.contains(entry.id),
                     hasUserDataOverride: userDataRemovalOverrides.contains(entry.id),
                     isExpanded: expandedRows.contains(entry.id),
@@ -181,6 +182,7 @@ struct FileTable: View {
                         Hairline()
                         ChildRow(
                             entry: child,
+                            showsSafeToRemoveBadges: showsSafeToRemoveBadges,
                             isSelected: selection.contains(child.id),
                             hasUserDataOverride: userDataRemovalOverrides.contains(child.id),
                             // A leftover group and a model are each one thing: their
@@ -288,6 +290,11 @@ private struct FileRow: View {
 
     @State private var isRowHovered = false
     @State private var isShowingManualInfo = false
+    @State private var project: FileEntryPresentation.Project?
+
+    private var presentation: FileEntryPresentation {
+        FileEntryPresentation(entry: entry, project: project)
+    }
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
@@ -330,23 +337,12 @@ private struct FileRow: View {
             }
             .frame(width: Metrics.checkbox)
 
-            // An app bundle shows its real icon — the `app` SF symbol is an empty
-            // rounded square that reads as a second, broken checkbox next to the
-            // real one.
-            Group {
-                if entry.kind == .appBundle {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: entry.url.path))
-                        .resizable()
-                        .frame(width: 16, height: 16)
-                } else {
-                    Image(systemName: entry.kind.symbolName)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Token.color(entry.kind.color))
-                }
-            }
+            FileEntryIcon(entry: entry, presentation: presentation)
             .frame(width: Metrics.icon)
 
             nameBlock
+
+            RegenerableTag(isRegenerable: entry.isRegenerable)
 
             Text(lastOpenedDisplay)
                 .font(.mcRowValue)
@@ -372,10 +368,19 @@ private struct FileRow: View {
             )
         }
         .padding(.horizontal, Metrics.sidePadding)
-        .frame(height: Token.Size.fileRow)
+        .frame(minHeight: 52)
         .contentShape(Rectangle())
         .hoverHighlight()
         .onHover { isRowHovered = $0 }
+        .task(id: entry.url) {
+            guard entry.kind == .folder else { return }
+            let url = entry.url
+            let detected = await Task.detached(priority: .utility) {
+                FileEntryPresentation.project(at: url)
+            }.value
+            guard !Task.isCancelled else { return }
+            project = detected
+        }
         // The whole row is a target, not just its smallest control: a row that can
         // disclose discloses, and a plain row toggles its checkbox. The checkbox and
         // reveal button keep their own clicks — SwiftUI gives embedded controls
@@ -447,12 +452,10 @@ private struct FileRow: View {
     }
 
     private var nameBlock: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Middle truncation on both lines: the tail of a filename carries the
-            // extension and the tail of a path carries the folder you recognise.
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(entry.displayName)
-                    .font(.mcBody)
+                    .font(.mcRowTitle)
                     .foregroundStyle(Token.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -484,15 +487,15 @@ private struct FileRow: View {
                 }
             }
 
-            // `parentQualifier`, not `parentDisplay` — the `· 1,204 items` and
-            // `· regenerable` suffixes are most of what makes this line worth reading.
-            Text(entry.parentQualifier)
-                .font(.mcMonoSmall)
-                .foregroundStyle(Token.Text.quaternary)
+            Text(presentation.summary)
+                .font(.mcBody)
+                .foregroundStyle(Token.Text.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
+                .help(entry.url.path)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .help(entry.url.path)
     }
 
     /// `nil` is genuinely rare — the scanner falls back through several date sources
@@ -521,11 +524,13 @@ private struct FileRow: View {
 /// it is protected or already covered by the parent selection.
 private struct ChildRow: View {
     let entry: FileEntry
+    var showsSafeToRemoveBadges = true
     let isSelected: Bool
     let hasUserDataOverride: Bool
     var isReadOnly = false
     let onToggle: (Bool) -> Void
     let onRequestUserDataOverride: () -> Void
+    @State private var isRowHovered = false
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
@@ -553,65 +558,53 @@ private struct ChildRow: View {
             }
                 .frame(width: Metrics.checkbox)
 
-            Image(systemName: entry.kind.symbolName)
-                .font(.system(size: 11))
-                .foregroundStyle(Token.Text.quaternary)
+            FileEntryIcon(entry: entry, presentation: FileEntryPresentation(entry: entry))
                 .frame(width: Metrics.icon)
 
-            HStack(spacing: 8) {
-                // Most children are best identified by their path: Chrome can have
-                // twenty different rows named "Code Cache" across its profiles. A
-                // purpose-built display name is different — it carries meaning the
-                // path cannot, such as "Chrome profiles and settings" for the locked
-                // remainder — so keep that name visible and show the path beside it.
-                if entry.displayName != entry.url.lastPathComponent {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
                     Text(entry.displayName)
-                        .font(.mcBody)
+                        .font(.mcRowTitle)
                         .foregroundStyle(Token.Text.primary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                         .layoutPriority(1)
-                }
 
-                Text(FileEntry.abbreviate(entry.url.path))
-                    .font(.mcMonoSmall)
-                    .foregroundStyle(Token.Text.tertiary)
+                    if entry.protectionReason == .userData {
+                        Badge(text: "user data").fixedSize()
+                    } else if entry.isRegenerable {
+                        // The badge follows the same safety rules as the filter.
+                        if showsSafeToRemoveBadges && entry.regeneratesSafely {
+                            Badge(text: "safe to remove", style: .safe).fixedSize()
+                        }
+                    } else if let caveat = entry.safetyCaveat {
+                        Badge(text: caveat).fixedSize()
+                    }
+                }
+                Text(FileEntryPresentation(entry: entry).summary)
+                    .font(.mcSubtitle)
+                    .foregroundStyle(Token.Text.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-
-                if entry.protectionReason == .userData {
-                    Badge(text: "user data").fixedSize()
-                } else if entry.isRegenerable {
-                    // Green says *safe*, so it asks Core's question, the one the
-                    // tile asks — see `FileEntry.regeneratesSafely`. A cache under
-                    // its running owner still regenerates, so the word stays and
-                    // the colour goes. The owner is not named on each child: the
-                    // parent row a line above already reads "running", and eight
-                    // copies of "Google Chrome is open" said nothing the first had not.
-                    // One word for one claim: the green badge reads "safe to remove"
-                    // on a child as on a row. Held by an open app it is still
-                    // regenerable, which is what the grey one goes on saying.
-                    Badge(text: entry.regeneratesSafely ? "safe to remove" : "regenerable",
-                          style: entry.regeneratesSafely ? .safe : .neutral)
-                        .fixedSize()
-                } else if let caveat = entry.safetyCaveat {
-                    Badge(text: caveat).fixedSize()
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .help("\(childHelp)\n\(entry.url.path)")
 
+            RegenerableTag(isRegenerable: entry.isRegenerable)
+            Color.clear.frame(width: Metrics.lastOpened, height: 0)
+
             Text(ByteFormatting.string(entry.allocatedBytes))
-                .font(.mcMonoSmall)
-                .foregroundStyle(Token.Text.tertiary)
+                .font(.mcMonoPath)
+                .foregroundStyle(Token.Text.secondary)
                 .fixedSize()
                 .frame(width: Metrics.size, alignment: .trailing)
 
-            Color.clear.frame(width: Metrics.action, height: 0)
+            RevealButton(url: entry.url, name: entry.displayName, isRowHovered: isRowHovered)
         }
         .padding(.horizontal, Metrics.sidePadding)
-        .frame(height: 28)
+        .frame(minHeight: 46)
         .contentShape(Rectangle())
         .hoverHighlight()
+        .onHover { isRowHovered = $0 }
         .onTapGesture {
             if isReadOnly {
                 return
@@ -671,13 +664,14 @@ struct ProtectedSelectionControl: View {
     var body: some View {
         Group {
             if !entry.isRemovalLocked || hasUserDataOverride {
-                Toggle(
-                    entry.displayName,
-                    isOn: Binding(get: { isSelected }, set: { onToggle($0) })
+                MonochromeCheckbox(
+                    title: entry.displayName,
+                    state: isSelected ? .on : .off,
+                    showsTitle: false,
+                    isCompact: isCompact,
+                    onChange: onToggle
                 )
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .controlSize(isCompact ? .small : .regular)
+                .fixedSize()
                 .help(help)
             } else if entry.protectionReason == .userData {
                 Button(action: onRequestUserDataOverride) {
@@ -951,22 +945,99 @@ private struct RevealButton: View {
 
 // MARK: - Shared parts
 
+private struct RegenerableTag: View {
+    let isRegenerable: Bool
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Color.clear
+            if isRegenerable {
+                Badge(text: "Regenerable")
+                    .fixedSize()
+            }
+        }
+        .frame(width: Metrics.regenerable, height: 18)
+    }
+}
+
+private struct FileEntryIcon: View {
+    let entry: FileEntry
+    let presentation: FileEntryPresentation
+
+    var body: some View {
+        Group {
+            if entry.kind == .appBundle || entry.kind == .downloadedApp {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: entry.url.path))
+                    .resizable()
+                    .scaledToFit()
+                    // App icons include transparent space around their artwork.
+                    .frame(width: 28, height: 28)
+            } else if presentation.icon == .node {
+                ZStack {
+                    Image(systemName: "hexagon")
+                        .font(.system(size: 21, weight: .medium))
+                    Text("JS")
+                        .font(.system(size: 7, weight: .bold))
+                }
+                .foregroundStyle(Token.textColor(.green))
+            } else {
+                Image(systemName: symbol)
+                    .font(.system(size: 17))
+                    .foregroundStyle(color)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var symbol: String {
+        switch presentation.icon {
+        case .node: "hexagon"
+        case .react: "atom"
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .photo: "photo"
+        case .video: "film"
+        case .music: "music.note"
+        case .cache: "internaldrive"
+        case .log: "doc.text"
+        case .archive: "doc.zipper"
+        case .diskImage: "externaldrive"
+        case .folder: "folder"
+        case .document: "doc"
+        case .application: "app.dashed"
+        case .package: "shippingbox"
+        case .backup: "iphone"
+        }
+    }
+
+    private var color: Color {
+        switch presentation.icon {
+        case .node: Token.textColor(.green)
+        case .react, .folder: Token.textColor(.teal)
+        case .photo, .package: Token.textColor(.orange)
+        case .video, .music: Token.textColor(.pink)
+        case .code, .cache: Token.textColor(.purple)
+        default: Token.Text.secondary
+        }
+    }
+}
+
 private enum Metrics {
     static let sidePadding: CGFloat = 15
     static let gap: CGFloat = 11
     static let disclosureSlot: CGFloat = 11
     static let checkbox: CGFloat = 28
-    static let icon: CGFloat = 15
+    static let icon: CGFloat = 22
     /// Fixed, so the dates and sizes line up down the column while the name flexes
     /// with the window.
     static let lastOpened: CGFloat = 104
+    static let regenerable: CGFloat = 88
     static let size: CGFloat = 82
     /// Apple recommends a 28×28 pt default macOS control target. Both row action
     /// buttons use this directly while their SF Symbols remain visually compact.
     static let action: CGFloat = 28
 
-    /// The header starts at the selection/action control's trailing edge.
-    static var headerInset: CGFloat { sidePadding + disclosureSlot + gap + checkbox }
+    /// The Name header aligns with the file names.
+    static var headerInset: CGFloat { sidePadding + disclosureSlot + checkbox + icon + 3 * gap }
 }
 
 /// One physical pixel. `NSColor.separatorColor` is several times stronger than the

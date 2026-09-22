@@ -37,7 +37,11 @@ final class StorageExplorerModel {
 
     var snapshot: StorageExplorerSnapshot?
     var currentURL: URL?
-    var selection = Set<StorageExplorerItem.ID>()
+    var selection = Set<StorageExplorerItem.ID>() {
+        didSet { finishMapSelection() }
+    }
+    private(set) var isMapSelectionPending = false
+    @ObservationIgnored private var mapSelectionTask: Task<Void, Never>?
     var isLoading = false
     var progress = SizeMeasurement.zero
     var error: StorageExplorerError?
@@ -71,6 +75,25 @@ final class StorageExplorerModel {
 
     var canRemoveSelection: Bool {
         !selectedItems.isEmpty && selectedItems.allSatisfy(\.isRemovable)
+    }
+
+    /// Highlight tiles immediately. Delay only the first activation of the header action.
+    func selectMapItems(_ ids: Set<StorageExplorerItem.ID>) {
+        let wasEnabled = canRemoveSelection && !isMapSelectionPending
+        selection = ids
+        guard !wasEnabled, canRemoveSelection else { return }
+        isMapSelectionPending = true
+        mapSelectionTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval)) }
+            catch { return }
+            self?.finishMapSelection()
+        }
+    }
+
+    func finishMapSelection() {
+        mapSelectionTask?.cancel()
+        mapSelectionTask = nil
+        isMapSelectionPending = false
     }
 
     func prepareLocations() {

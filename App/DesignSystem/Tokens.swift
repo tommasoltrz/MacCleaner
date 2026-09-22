@@ -231,18 +231,10 @@ enum Token {
     // it whichever way round the window is.
 
     enum Fill {
-        /// A card: the topmost of the three darks, standing off the page.
-        ///
-        /// Opaque, where it used to be white at 4.5% over the window. That was a
-        /// deliberate translucency — "so a wallpaper-tinted window shows through
-        /// the card faintly" — and the cost was that no card had a colour of its
-        /// own: each one drifted with the desktop behind the window.
-        ///
-        /// Light still goes the other way, like System Settings: a white card on
-        /// the grey window.
+        /// Shared card color. Dark mode matches the expanded Cleanup file lists.
         static let box = Token.dynamic(
             light: .white.withAlphaComponent(0.85),
-            dark: NSColor(white: 31 / 255, alpha: 1)  // #1F1F1F
+            dark: NSColor(white: 23 / 255, alpha: 1)  // #171717
         )
         /// Also the row rule in every table and the capacity bar's track. Deliberately
         /// weaker than `separatorColor`, which is roughly 0.10 in light: repeated every
@@ -252,14 +244,14 @@ enum Token {
         /// edge to draw, so it becomes the outline that makes the control look raised,
         /// and it needs more weight than the box hairline to do that.
         static let controlBorder = Token.ink(light: 0.13, dark: 0.10)
-        /// A recess — an expanded table body, a callout, the exclusion list. It
-        /// sits back down at the grouped-surface dark, below the card it is cut
-        /// into, which is what makes it read as recessed.
+        /// An inset surface for file lists, callouts, and exclusions.
         static let well = Token.dynamic(
             light: .black.withAlphaComponent(0.04),
             dark: NSColor(white: 23 / 255, alpha: 1)  // #171717
         )
         static let control = Token.ink(light: 0.07, dark: 0.09)
+        /// Disabled controls have less contrast than active controls.
+        static let controlDisabled = Token.ink(light: 0.035, dark: 0.04)
         /// Hover darkens the control in light and lightens it in dark. Same gesture,
         /// opposite direction, which is what `ink` already does.
         static let controlHover = Token.ink(light: 0.12, dark: 0.14)

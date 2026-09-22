@@ -12,7 +12,7 @@ public enum GrowthBaseline: String, Codable, Sendable, CaseIterable {
         switch self {
         case .previousMeasurement: "Previous measurement"
         case .sevenDays:           "7 days"
-        case .lastCleanup:         "Last clean-up"
+        case .lastCleanup:         "Since last cleanup"
         }
     }
 }
@@ -258,6 +258,8 @@ public enum StorageGrowth {
             // date. Silently reporting a two-day change as a week is the lie.
             return older.first { $0.measuredAt <= cutoff } ?? older.last
         case .lastCleanup:
+            // A new cleanup starts the comparison at zero.
+            if latest.trigger == .removal { return latest }
             return older.first { $0.trigger == .removal }
         }
     }

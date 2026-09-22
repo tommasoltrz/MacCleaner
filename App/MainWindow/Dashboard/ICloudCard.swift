@@ -2,20 +2,9 @@ import SwiftUI
 import AppKit
 import ScoloCore
 
-/// The Dashboard's iCloud row.
-///
-/// Deliberately a single bar rather than a second full capacity card. Only one of its
-/// segments is a real measurement — iCloud Drive — and giving three segments the same
-/// visual weight as the disk breakdown's nine would imply we know the account as well
-/// as we know the volume. We do not: Photos, device backups and Mail have no public
-/// API, so they arrive together as `Unmeasured`.
-///
-/// The row opens System Settings, because that is the only place the rest of the
-/// breakdown exists and the only place the account can actually be managed.
+/// Compact iCloud usage beside the cleanup totals.
 struct ICloudCard: View {
     let storage: ICloudStorage
-
-    @State private var isHovered = false
 
     // Binary throughout, and labelled "GB" the way iCloud labels it: the plan
     // tiers are stored as GiB because that is what `brctl` and iCloud's own pages
@@ -29,57 +18,65 @@ struct ICloudCard: View {
     }
 
     var body: some View {
-        GroupedBox(radius: Token.Radius.card) {
-            VStack(alignment: .leading, spacing: 10) {
-                header
-                ICloudBar(segments: storage.segments)
+        Button(action: Self.openICloudSettings) {
+            GroupedBox(radius: Token.Radius.card) {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    Text(ByteFormatting.binaryString(storage.usedBytes))
+                        .animatedTotal(storage.usedBytes)
+                        .font(.mcSecondaryHero)
+                        .foregroundStyle(Token.Text.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .padding(.top, 8)
+                    Text("of \(ByteFormatting.binaryString(storage.totalBytes)) used")
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.tertiary)
+                        .padding(.top, 7)
+                    ICloudBar(segments: storage.segments)
+                        .padding(.top, 10)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 18)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .contentShape(RoundedRectangle(cornerRadius: Token.Radius.card))
         }
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .onTapGesture { Self.openICloudSettings() }
+        .buttonStyle(CardPressButtonStyle())
+        .accessibilityLabel("iCloud")
+        .accessibilityValue(summary + (storage.planWasInferred ? ". Plan size is estimated." : ""))
+        .accessibilityHint("Open iCloud settings")
     }
 
     // The click affordance's hint lives on the header, not the whole card: on the
     // bar it would race the segments' own instant chips.
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "icloud.fill")
-                .font(.system(size: 17))
-                .foregroundStyle(Token.color(.accent))
-
+        HStack(spacing: 6) {
             Text("iCloud")
                 .font(.mcRowTitle)
-                .foregroundStyle(Token.Text.primary)
-
-            Text(summary)
-                .font(.mcSubtitle)
                 .foregroundStyle(Token.Text.secondary)
 
             if storage.planWasInferred {
-                // The plan size is the one figure here with no source at all — macOS
-                // exposes no API for it, so it is inferred from the free space. Saying
-                // so is cheaper than being quietly wrong on an unusual plan.
                 Image(systemName: "questionmark.circle")
                     .font(.system(size: 10))
                     .foregroundStyle(Token.Text.quaternary)
-                    .help("Your plan size is estimated — macOS does not report it. "
-                          + "Set it in Preferences if this is wrong.")
+                    .help("Your plan size is estimated. Set the correct plan in Preferences.")
             }
 
             if storage.isNearlyFull {
-                Badge(text: "Nearly full")
+                Image(systemName: "exclamationmark.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Token.textColor(.orange))
+                    .help("iCloud storage is nearly full.")
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isHovered ? Token.Text.secondary : Token.Text.quaternary)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Token.Text.quaternary)
         }
-        .help("Open iCloud settings, where Photos and backups can be managed")
+        .help("\(summary). Open iCloud settings.")
     }
 
     /// Deep-links to the iCloud pane. Falls back to System Settings itself if the
@@ -162,7 +159,7 @@ private struct ICloudBar: View {
                         .font(.mcSubtitle)
                         .foregroundStyle(Token.Text.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 250, alignment: .leading)
+                        .frame(width: min(250, max(120, totalWidth - 22)), alignment: .leading)
                 }
             }
             .padding(.horizontal, 11)
@@ -220,7 +217,7 @@ private struct ICloudTooltipSize: PreferenceKey {
         documentsOnDiskBytes: 100 * 1024 * 1024
     ))
     .padding()
-    .frame(width: 720)
+    .frame(width: 300)
 }
 
 #Preview("iCloud — nearly full") {
@@ -231,5 +228,5 @@ private struct ICloudTooltipSize: PreferenceKey {
         planWasInferred: false
     ))
     .padding()
-    .frame(width: 720)
+    .frame(width: 300)
 }

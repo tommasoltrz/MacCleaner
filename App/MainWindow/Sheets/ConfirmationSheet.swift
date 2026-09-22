@@ -61,9 +61,6 @@ struct ConfirmationSheet: View {
     }
 
     let variant: Variant
-    /// Whether to keep a removal-log receipt. Ignored by the erase variant, which
-    /// cannot be undone by definition.
-    @Binding var keepReceipt: Bool
     /// Applications that are open right now and own something in this clean-up.
     ///
     /// Non-empty turns the sheet's one decision into two: quit them first, or go
@@ -107,10 +104,6 @@ struct ConfirmationSheet: View {
                         .foregroundStyle(Token.textColor(.orange))
                 }
                 .padding(.top, 14)
-            }
-
-            if showsReceipt {
-                receiptRow.padding(.top, 16)
             }
 
             HStack(spacing: 9) {
@@ -167,17 +160,6 @@ struct ConfirmationSheet: View {
             + "\(plural ? "they do" : "it does")."
     }
 
-    /// Only the Trash keeps a receipt; a deleted photo is recovered in Photos'
-    /// own Recently Deleted, which this app has no hand in.
-    private var showsReceipt: Bool {
-        if case .cleanUp = variant { return true }
-        if case .uninstallApp = variant { return true }
-        if case .uninstallApps = variant { return true }
-        if case .deleteDuplicateFiles = variant { return true }
-        if case .removeStorageItems = variant { return true }
-        return false
-    }
-
     /// Deleting photos is recoverable for 30 days, but it still reaches every device
     /// on the library — including a phone the user is not looking at — so it carries
     /// the destructive tint rather than the neutral one.
@@ -232,14 +214,8 @@ struct ConfirmationSheet: View {
                 warning = ""
             }
             let sharing = Self.sharedStorageClause(selected: bytes, saving: saving)
-            // The receipt line states what the checkbox below it is currently set
-            // to do: promising a removal log while it is unchecked was a lie the
-            // user could see through by unticking the box.
             return "\(ByteFormatting.string(bytes)) will be moved to the Trash. "
-                + "Nothing is erased until you empty it. "
-                + (keepReceipt
-                    ? "Every path is written to the removal log."
-                    : "No receipt will be kept, so Put Back will not be available here.")
+                + "Nothing is erased until you empty it."
                 + sharing
                 + warning
         case .emptyTrash(_, let bytes):
@@ -369,29 +345,6 @@ struct ConfirmationSheet: View {
         }
         return "trash"
     }
-
-    private var receiptRow: some View {
-        Well {
-            Toggle(isOn: $keepReceipt) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Keep a Put Back receipt")
-                        .font(.mcSubtitle)
-                        .foregroundStyle(Token.Text.primary)
-                    Text(
-                        "Records original locations for Scolo’s Put Back. "
-                        + "It does not change what moves to the Trash."
-                    )
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .toggleStyle(.checkbox)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
 }
 
 #Preview("Clean up") {
@@ -400,7 +353,6 @@ struct ConfirmationSheet: View {
             itemCount: 4, totalBytes: 4_512_000_000,
             protectedDataCount: 0, saving: nil
         ),
-        keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
     )
 }
@@ -411,7 +363,6 @@ struct ConfirmationSheet: View {
             itemCount: 6, totalBytes: 14_210_000_000,
             protectedDataCount: 0, saving: nil
         ),
-        keepReceipt: .constant(true),
         runningOwnerNames: ["Google Chrome", "Xcode"],
         onConfirm: {}, onQuitAndConfirm: {}, onCancel: {}
     )
@@ -423,7 +374,6 @@ struct ConfirmationSheet: View {
             itemCount: 2, totalBytes: 2_400_000_000,
             protectedDataCount: 1, saving: nil
         ),
-        keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
     )
 }
@@ -437,7 +387,6 @@ struct ConfirmationSheet: View {
             protectedDataCount: 0,
             saving: .init(freedBytes: 0, isMinimum: false)
         ),
-        keepReceipt: .constant(true),
         onConfirm: {}, onCancel: {}
     )
 }
@@ -445,7 +394,6 @@ struct ConfirmationSheet: View {
 #Preview("Delete photos") {
     ConfirmationSheet(
         variant: .deletePhotos(count: 128),
-        keepReceipt: .constant(false),
         onConfirm: {}, onCancel: {}
     )
 }
@@ -453,7 +401,6 @@ struct ConfirmationSheet: View {
 #Preview("Empty Trash") {
     ConfirmationSheet(
         variant: .emptyTrash(itemCount: 214, totalBytes: 9_040_000_000),
-        keepReceipt: .constant(false),
         onConfirm: {}, onCancel: {}
     )
 }

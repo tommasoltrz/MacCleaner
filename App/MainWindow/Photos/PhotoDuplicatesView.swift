@@ -35,6 +35,7 @@ struct PhotoDuplicatesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationResultAnimation(isRunning: model.isSweepingPhotos)
         .sheet(item: $preview) { item in
             PhotoPreviewSheet(
                 item: item,
@@ -59,7 +60,7 @@ struct PhotoDuplicatesView: View {
                  + "from iCloud at preview size — originals are never downloaded.")
         } actions: {
             Button("Find Duplicates") { model.startPhotoSweep() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.large)
                 // The sweep refuses to start over another disk walk; say so here
                 // rather than swallowing the click.
@@ -74,23 +75,12 @@ struct PhotoDuplicatesView: View {
     }
 
     private var sweeping: some View {
-        centred {
-            ProgressView(value: Double(model.photoProgress?.percent ?? 0), total: 100)
-                .progressViewStyle(.linear)
-                .frame(width: 260)
-            Text(progressLabel)
-                .font(.mcBody)
-                .foregroundStyle(Token.Text.secondary)
-            if let progress = model.photoProgress, progress.fromCache > 0 {
-                // Says plainly that the wait is shorter than last time, and why.
-                Text("\(progress.fromCache.formatted()) already fingerprinted")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.tertiary)
-            }
-            Button("Stop") { model.cancelPhotoSweep() }
-                .buttonStyle(SecondaryButtonStyle())
-                .padding(.top, 4)
-        }
+        PageProgressView(
+            title: "Scanning for duplicate photos",
+            detail: progressLabel,
+            progress: Double(model.photoProgress?.percent ?? 0) / 100,
+            onStop: { model.cancelPhotoSweep() }
+        )
     }
 
     private var progressLabel: String {
@@ -138,14 +128,7 @@ struct PhotoDuplicatesView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
             }
-            // The page where loosening the setting is the obvious next move, so
-            // the setting is on it rather than a sweep away.
-            HStack(spacing: 8) {
-                similarityPicker
-                Button("Scan Again") { model.startPhotoSweep() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.isBusyWithDisk)
-            }
+
         }
     }
 
@@ -161,30 +144,27 @@ struct PhotoDuplicatesView: View {
     }
 
     private var groups: some View {
-        VStack(spacing: 0) {
-            PageHeader {
+        let selectable = Set(model.photoGroups.flatMap(\.removable).map(\.id))
+        return VStack(spacing: 0) {
+            HStack {
+                MonochromeCheckbox(
+                    title: "Select All",
+                    detail: "\(selectable.count) items",
+                    state: !selectable.isEmpty && selectable.isSubset(of: model.photoSelection) ? .on : .off,
+                    isEnabled: !selectable.isEmpty && !model.isBusyWithDisk && !model.isRegroupingPhotos
+                ) { isOn in
+                    if isOn { model.selectAllRemovablePhotos() }
+                    else { model.deselectAllPhotos() }
+                }
+                .fixedSize()
+                Spacer()
                 if let results = model.photoResults, results.skippedCount > 0 {
                     Text(summary(results)).pageHeaderSummary()
                 }
-            } trailing: {
-                // In the slot "Certain Only" had. That button ticked the burst and
-                // identical groups and left every judgement call alone — one fixed
-                // answer to "show me only what you are sure of". This asks the same
-                // question and lets the user put the line where they want it, with
-                // each group's distance beside it to aim by.
-                similarityPicker
-                Button("Select All") { model.selectAllRemovablePhotos() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.photoGroups.isEmpty || model.isRegroupingPhotos)
-                Button("Deselect All") { model.deselectAllPhotos() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.photoSelection.isEmpty)
-                Button("Scan Again") { model.startPhotoSweep() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.isBusyWithDisk)
-                    .help("Looks for photographs added since the last sweep. "
-                          + "Changing how alike \"alike\" means does not need this.")
             }
+            .padding(.horizontal, Token.Size.pageGutter + 15)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -248,39 +228,6 @@ struct PhotoDuplicatesView: View {
                 }
             }
             .padding(12)
-        }
-    }
-
-    /// How alike the similar tier must find two photographs.
-    ///
-    /// Beside the results rather than in Preferences: it is calibrated by looking at
-    /// the distances on the groups it just produced, and a setting you have to leave
-    /// the page to reach cannot be calibrated that way.
-    ///
-    /// It applies at once. Re-grouping needs the assets and the fingerprints, both
-    /// of which the last sweep still has, so it costs the comparing phase and asks
-    /// the photo library for nothing — which is why there is a spinner here and not
-    /// an instruction to scan again.
-    private var similarityPicker: some View {
-        HStack(spacing: 8) {
-            if model.isRegroupingPhotos {
-                ProgressView().controlSize(.small)
-            }
-            Picker("How alike", selection: $model.photoSimilarity) {
-                ForEach(PhotoSimilarity.allCases) { similarity in
-                    // The first entry has no number, because it sets no threshold.
-                    Text(similarity.thresholdLabel.isEmpty
-                         ? similarity.title
-                         : "\(similarity.title) · \(similarity.thresholdLabel)")
-                        .tag(similarity)
-                }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
-            .disabled(model.isSweepingPhotos)
-            .help(model.photoSimilarity.detail
-                  + " Bursts and identical copies are unaffected — neither is decided "
-                  + "by this number.")
         }
     }
 
@@ -399,4 +346,53 @@ struct PhotoDuplicatesView: View {
         VStack(spacing: 10) { content() }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+/// Changes photo matching without another scan.
+struct PhotoSimilarityPicker: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if model.isRegroupingPhotos {
+                ProgressView().controlSize(.small)
+            }
+            Text("Match")
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.secondary)
+            Menu {
+                Picker("Match", selection: $model.photoSimilarity) {
+                    ForEach(PhotoSimilarity.allCases) { similarity in
+                        Text(similarityLabel(similarity)).tag(similarity)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 7) {
+                    Text(similarityLabel(model.photoSimilarity))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(PageActionButtonStyle())
+            .menuIndicator(.hidden)
+            .accessibilityLabel("Match")
+            .accessibilityValue(similarityLabel(model.photoSimilarity))
+            .fixedSize()
+            .disabled(model.isSweepingPhotos)
+            .help(model.photoSimilarity.detail
+                  + " Bursts and identical copies are unaffected — neither is decided "
+                  + "by this number.")
+        }
+    }
+
+    private func similarityLabel(_ similarity: PhotoSimilarity) -> String {
+        similarity.thresholdLabel.isEmpty
+            ? similarity.title
+            : "\(similarity.title) · \(similarity.thresholdLabel)"
+    }
+
 }

@@ -55,6 +55,12 @@ struct AdvancedPane: View {
                 title: "Confirm before every clean-up",
                 isOn: $settings.confirmBeforeCleanup
             )
+            PrefDivider()
+            PrefToggleRow(
+                title: "Keep Put Back receipts",
+                description: "Save original locations so Scolo can put items back from the Trash.",
+                isOn: $settings.keepReceipt
+            )
             // "Follow symlinks while measuring" used to live here. It was removed
             // rather than repaired: following a link counts its target a second
             // time, under a name that does not own those bytes. That breaks the

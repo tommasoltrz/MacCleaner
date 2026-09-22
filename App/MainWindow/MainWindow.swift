@@ -69,17 +69,29 @@ struct MainWindow: View {
         // keeps its glass and its controls. `.disabled` on the detail pane used to
         // do this job, and it reached the toolbar through the environment.
         .overlay {
-            if let activity = model.activity {
+            if let activity = model.activity, !(model.view == .scanner && model.isCleaningUp) {
                 ActivityOverlay(activity: activity)
                     .transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.18), value: model.activity)
-        .task { await model.loadDashboard() }
+        .task {
+            if scenePhase == .active { model.startInitialCleanupScan() }
+            await model.loadDashboard()
+        }
+        .onChange(of: model.view) { _, view in
+            if view == .scanner, scenePhase == .active { model.startInitialCleanupScan() }
+        }
+        .onChange(of: model.isBusyWithDisk) { _, isBusy in
+            if !isBusy, scenePhase == .active { model.startInitialCleanupScan() }
+        }
         // Coming back to the app is the moment stale rows show: the user was just
         // in Finder, doing things this snapshot cannot know about.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.pruneVanishedEntries() }
+            if phase == .active {
+                model.pruneVanishedEntries()
+                model.startInitialCleanupScan()
+            }
         }
         .alert(
             "Allow Access to Other App Data",
@@ -200,9 +212,7 @@ struct MainWindow: View {
         // the window's edge and its title sat six points left of the cards it
         // described.
         //
-        // No gutter above: the content begins directly under the header band. The
-        // sidebar column carries its own trailing gutter, so a leading one is
-        // needed here only when there is no sidebar.
+        // The sidebar supplies the leading gutter when it is visible.
         .padding(.leading, isSidebarExpanded ? 0 : Token.Size.shellGutter)
         .padding(.trailing, Token.Size.shellGutter)
         .padding(.bottom, Token.Size.shellGutter)
@@ -220,27 +230,28 @@ struct MainWindow: View {
         return Token.Size.pageGutter
     }
 
-    /// The header band: the view's name and its actions, level with the traffic
-    /// lights, on the shell rather than on any panel.
+    /// Shows the view name and actions with an outer margin above them.
     private var contentHeader: some View {
-        HStack(spacing: 10) {
-            // Room for the control that floats above this band when the sidebar
-            // is away. It belongs to the window, not to this header.
-            if !isSidebarExpanded {
-                Color.clear
-                    .frame(width: Token.Size.sidebarToggle, height: Token.Size.sidebarToggle)
-                    .accessibilityHidden(true)
+        CenteredHeaderLayout {
+            HStack(spacing: 10) {
+                if !isSidebarExpanded {
+                    Color.clear
+                        .frame(width: Token.Size.sidebarToggle, height: Token.Size.sidebarToggle)
+                        .accessibilityHidden(true)
+                }
+                Text(model.view.title)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
             }
-            Text(model.view.title)
-                .font(.mcToolbarTitle)
-                .foregroundStyle(Token.Text.primary)
-            Spacer(minLength: 12)
-            headerCentre
-            scanButton.buttonStyle(.bordered)
-            if hasRemovalAction {
-                removeButton
-                    .buttonStyle(.borderedProminent)
-                    .tint(Token.color(.red))
+            HStack(spacing: 0) {
+                headerCentre
+            }
+            HStack(spacing: 10) {
+                pageActions
+                if hasRemovalAction {
+                    removeButton
+                }
             }
         }
         // The page's own gutter, so the title and the actions line up with the
@@ -248,6 +259,7 @@ struct MainWindow: View {
         .padding(.leading, headerLeadingInset)
         .padding(.trailing, Token.Size.pageGutter)
         .frame(height: Token.Size.headerBand)
+        .padding(.top, Token.Size.shellGutter)
         // The window moves from here and nowhere else. Behind the controls, so a
         // press on one of them is a press on it rather than the start of a drag.
         .background(WindowDragHandle())
@@ -285,12 +297,7 @@ struct MainWindow: View {
         // sheet laid on it. The sidebar is the only thing the window is divided
         // into, and its hairline is what says so.
         .background(Token.pageBackground)
-        // No footer. It held a status line and each view's buttons. The buttons that
-        // remove things are in the toolbar now, beside Scan, where the window's other
-        // primary action already was; the ones that only choose rows (Select All,
-        // Deselect All) are in each view's own header, next to the list they act on;
-        // and the status line is gone (the owner's call, 21 Sep 2026) — a view shows
-        // its own result, and a failure is an alert, not a caption.
+        // The header contains the actions for the current page.
         // A real sheet, so macOS supplies the titlebar attachment, the entrance
         // animation, and Escape/Return handling.
         .sheet(item: $model.activeSheet) { sheet in
@@ -317,7 +324,6 @@ struct MainWindow: View {
                                 : nil
                         }
                     ),
-                    keepReceipt: $model.keepReceipt,
                     runningOwnerNames: model.pendingCleanUp?.runningOwners.map(\.name) ?? [],
                     onConfirm: { Task { await model.performCleanUp() } },
                     onQuitAndConfirm: {
@@ -328,7 +334,6 @@ struct MainWindow: View {
             case .deletePhotos:
                 ConfirmationSheet(
                     variant: .deletePhotos(count: model.photoSelection.count),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.deleteSelectedPhotos() } },
                     onCancel: { model.activeSheet = nil }
                 )
@@ -338,7 +343,6 @@ struct MainWindow: View {
                         count: model.fileDuplicateSelection.count,
                         totalBytes: model.fileDuplicateSelectionBytes
                     ),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.removeSelectedDuplicateFiles() } },
                     onCancel: { model.activeSheet = nil }
                 )
@@ -353,7 +357,6 @@ struct MainWindow: View {
                             $0.cloudState == .downloaded
                         }.count
                     ),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performStorageExplorerRemoval() } },
                     onCancel: { model.cancelStorageExplorerRemoval() }
                 )
@@ -363,7 +366,6 @@ struct MainWindow: View {
                         itemCount: model.trashSummary?.itemCount ?? 0,
                         totalBytes: model.trashSummary?.totalBytes ?? 0
                     ),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.emptyTrash() } },
                     onCancel: { model.activeSheet = nil }
                 )
@@ -377,7 +379,6 @@ struct MainWindow: View {
                         protectedDataCount: model.pendingAppUninstall?.protectedDataCount ?? 0,
                         applicationOnly: model.pendingAppUninstall?.isApplicationOnly ?? false
                     ),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performAppUninstall() } },
                     onCancel: { model.cancelAppUninstall() }
                 )
@@ -389,7 +390,6 @@ struct MainWindow: View {
                         totalBytes: model.pendingBatchUninstall?.totalBytes ?? 0,
                         protectedDataCount: model.pendingBatchUninstall?.protectedDataCount ?? 0
                     ),
-                    keepReceipt: $model.keepReceipt,
                     onConfirm: { Task { await model.performBatchUninstall() } },
                     onCancel: { model.cancelBatchUninstall() }
                 )
@@ -397,15 +397,9 @@ struct MainWindow: View {
         }
     }
 
-    // MARK: - The toolbar's removal action
+    // MARK: - Page selection actions
 
-    /// Whether the current view has something to remove.
-    ///
-    /// The Dashboard and History describe; they take nothing away, so a button
-    /// there could never become enabled, and a control whose best outcome is
-    /// nothing is worse than no control. Everywhere else it is always present and
-    /// disabled until there is something to act on — its place should not move
-    /// about as a scan finishes or a row is ticked.
+    /// Review steps provide their own actions.
     private var hasRemovalAction: Bool {
         switch model.view {
         case .scanner, .duplicates, .storageExplorer, .trash: true
@@ -417,9 +411,9 @@ struct MainWindow: View {
     }
 
     private var canRemove: Bool {
-        guard model.activity == nil else { return false }
+        guard !model.isBusyWithDisk else { return false }
         switch model.view {
-        case .scanner:         return model.hasSelection
+        case .scanner:         return !model.cleanupSelection(in: .all).isEmpty
         case .duplicates:      return model.duplicateKind == .files
             ? !model.fileDuplicateSelection.isEmpty && !model.isScanningDuplicateFiles
             : !model.photoSelection.isEmpty
@@ -427,6 +421,7 @@ struct MainWindow: View {
             ? !model.selectedApplicationIDs.isEmpty
             : !model.selectedLeftoverIdentifiers.isEmpty
         case .storageExplorer: return model.storageExplorer.canRemoveSelection
+            && !model.storageExplorer.isMapSelectionPending
             && !model.isStorageExplorerMeasurementBlocked
         case .trash:           return (model.trashSummary?.itemCount ?? 0) > 0
         case .dashboard, .history: return false
@@ -435,11 +430,11 @@ struct MainWindow: View {
 
     private func removeTapped() {
         switch model.view {
-        case .scanner:    model.requestCleanUp()
+        case .scanner: model.requestCleanUp(in: .all)
         case .duplicates: model.activeSheet = model.duplicateKind == .files
             ? .deleteDuplicateFiles : .deletePhotos
         case .uninstaller: model.uninstallerTab == .installed
-            ? model.reviewSelectedApplications()
+            ? model.moveSelectedApplicationsToTrash()
             : model.requestLeftoverRemoval()
         case .storageExplorer: Task { await model.requestStorageExplorerRemoval() }
         case .trash:      model.activeSheet = .emptyTrash
@@ -447,12 +442,7 @@ struct MainWindow: View {
         }
     }
 
-    /// The one button that removes things, for the view on screen.
-    ///
-    /// The same size and the same label inset as Scan — the two sit side by side,
-    /// and a pair that differs by a couple of points reads as a mistake. It is
-    /// filled where Scan is bordered, because it is the one destructive control in
-    /// the window and that is worth a difference the eye can catch.
+    /// Names the next action for the current selection.
     private var removeButton: some View {
         Button(action: removeTapped) {
             HStack(spacing: 7) {
@@ -460,60 +450,197 @@ struct MainWindow: View {
                     ProgressView().controlSize(.small)
                 }
                 Text(model.removeLabel)
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .identity : .numericText())
             }
             .toolbarButtonLabel()
         }
         .controlSize(.large)
+        .buttonStyle(HeaderRemovalButtonStyle(
+            tint: Token.color(.red)
+        ))
         .disabled(!canRemove)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.removeLabel)
+        .help(model.view == .scanner
+              ? "Moves selected items from all filters to the Trash."
+              : model.view == .uninstaller && model.uninstallerTab == .installed
+                ? "Moves selected apps and their related files to the Trash."
+                : model.removeLabel)
     }
 
-    /// What the toolbar's principal slot used to carry: the Duplicates picker and
-    /// the running scan's readout. One row, so a junk scan started elsewhere keeps
-    /// its progress and its stop button when the user opens Duplicates.
+    /// Names the operation that blocks scans on the current page.
     @ViewBuilder
     private var headerCentre: some View {
-        if model.view == .duplicates {
-            Picker("Duplicate type", selection: $model.duplicateKind) {
-                ForEach(AppModel.DuplicateKind.allCases) { kind in
-                    Text(kind.title).tag(kind)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-        }
-        if model.isScanning {
-            HStack(spacing: 8) {
-                Text("Measuring \(model.scanProgress)%")
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-                    .monospacedDigit()
-                ProgressView(value: Double(model.scanProgress), total: 100)
-                    .progressViewStyle(.linear)
-                    .frame(width: 126)
-                // The design notes the prototype had no cancel affordance and
-                // that a real scan needs one.
-                Button { model.cancelScan() } label: {
-                    Image(systemName: "stop.fill")
-                }
-                .buttonStyle(.borderless)
-                .help("Stop scanning")
-            }
-            .fixedSize()
+        if model.isScanning, model.view != .scanner {
+            backgroundWorkStatus(
+                title: "Cleanup scan",
+                detail: "\(model.scanProgress)% complete",
+                progress: Double(model.scanProgress) / 100,
+                onStop: { model.cancelScan() }
+            )
+        } else if model.storageExplorer.isLoading, model.view != .storageExplorer {
+            backgroundWorkStatus(
+                title: "Storage Explorer scan",
+                detail: "\(model.storageExplorer.progress.fileCount.formatted()) files · "
+                    + ByteFormatting.string(model.storageExplorer.progress.allocatedBytes),
+                onStop: { model.storageExplorer.cancel() }
+            )
+        } else if model.isScanningDuplicateFiles,
+                  model.view != .duplicates || model.duplicateKind != .files {
+            let progress = model.fileDuplicateProgress
+            backgroundWorkStatus(
+                title: "Duplicate file scan",
+                detail: progress.map { "\($0.completed.formatted()) of \($0.total.formatted()) files" }
+                    ?? "Preparing scan",
+                progress: progress.flatMap { $0.total > 0 ? Double($0.completed) / Double($0.total) : nil },
+                onStop: { model.cancelFileDuplicateScan() }
+            )
+        } else if model.isSweepingPhotos,
+                  model.view != .duplicates || model.duplicateKind != .photos {
+            backgroundWorkStatus(
+                title: "Duplicate photo scan",
+                detail: "\(model.photoProgress?.percent ?? 0)% complete",
+                progress: Double(model.photoProgress?.percent ?? 0) / 100,
+                onStop: { model.cancelPhotoSweep() }
+            )
+        } else if model.isPlanningAppUninstall, model.view != .uninstaller {
+            backgroundWorkStatus(
+                title: "Checking selected apps",
+                detail: model.appUninstallPlanningDetail ?? "Finding related files",
+                onStop: { model.resetAppUninstall() }
+            )
         }
     }
 
-    private var scanButton: some View {
-        Button {
-            model.startScan()
-        } label: {
-            // Plain text, no glyph: the sparkles icon sat on the label's
-            // baseline and dragged the whole line optically off-centre in the
-            // capsule.
-            Text("Scan").toolbarButtonLabel()
+    private func backgroundWorkStatus(
+        title: String, detail: String, progress: Double? = nil,
+        onStop: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+                .tint(Token.Text.primary)
+                .frame(width: 60)
+                .accessibilityLabel(title)
+            Button(action: onStop) {
+                Image(systemName: "stop.fill")
+                    .frame(width: 24, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Stop \(title)")
+            .help("Stop \(title)")
         }
-        .controlSize(.large)
-        .disabled(model.isBusyWithDisk)
-        .help("Scan for reclaimable files")
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .frame(height: 38)
+        .background(Token.Fill.control, in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(Token.Fill.controlBorder, lineWidth: Token.hairline)
+        }
+        .help("\(title): \(detail). Finish or stop this operation to start another scan.")
+        .accessibilityElement(children: .contain)
+    }
+
+    /// Each page provides actions for its own content.
+    @ViewBuilder
+    private var pageActions: some View {
+        switch model.view {
+        case .scanner:
+            Button {
+                if model.isScanning { model.cancelScan() } else { model.startScan() }
+            } label: {
+                Label(
+                    model.isScanning ? "Stop Scan" : "Scan",
+                    systemImage: model.isScanning ? "stop.fill" : "magnifyingglass"
+                )
+            }
+            .buttonStyle(PageActionButtonStyle())
+            .controlSize(.large)
+            .disabled(!model.isScanning && model.isBusyWithDisk)
+        case .dashboard:
+            Button { Task { await model.measureStorage() } } label: {
+                Label("Refresh Overview", systemImage: "arrow.clockwise")
+            }
+                .buttonStyle(PageActionButtonStyle())
+                .disabled(model.isBusyWithDisk || model.isLoadingBreakdown)
+        case .trash:
+            Button { Task { await model.loadTrash() } } label: {
+                Label("Refresh Trash", systemImage: "arrow.clockwise")
+            }
+                .buttonStyle(PageActionButtonStyle())
+                .disabled(model.isBusyWithDisk)
+        case .uninstaller:
+            if model.isShowingUninstallerLibrary {
+                Button {
+                    if model.uninstallerTab == .installed {
+                        model.loadInstalledApplications()
+                    } else {
+                        model.loadApplicationLeftovers()
+                    }
+                } label: {
+                    Label(model.uninstallerTab == .installed ? "Refresh Apps" : "Refresh Leftovers", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PageActionButtonStyle())
+                .disabled(model.isBusyWithDisk || model.isLoadingApplicationLeftovers)
+            }
+        case .duplicates:
+            if model.duplicateKind == .photos,
+               model.photoResults != nil, model.photoUnavailable == nil {
+                Button { model.startPhotoSweep() } label: {
+                    Label("Scan Again", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PageActionButtonStyle())
+                .disabled(model.isBusyWithDisk)
+                .help("Scan the photo library again.")
+            } else if model.duplicateKind == .files, model.fileDuplicateResults != nil {
+                Button { model.startFileDuplicateScan() } label: {
+                    Label("Scan Again", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PageActionButtonStyle())
+                .disabled(model.isBusyWithDisk)
+                .help("Scan the selected folders again.")
+            }
+        case .storageExplorer, .history:
+            EmptyView()
+        }
+    }
+
+}
+
+/// Centers the status and keeps it clear of the title and actions.
+private struct CenteredHeaderLayout: Layout {
+    private let gap: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return CGSize(
+            width: proposal.width ?? sizes.reduce(2 * gap) { $0 + $1.width },
+            height: sizes.map(\.height).max() ?? 38
+        )
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let leading = subviews[0].sizeThatFits(.unspecified)
+        let trailing = subviews[2].sizeThatFits(.unspecified)
+        let available = max(0, bounds.width - leading.width - trailing.width - 2 * gap)
+        let centre = subviews[1].sizeThatFits(ProposedViewSize(width: available, height: bounds.height))
+        let minimumX = bounds.minX + leading.width + gap + centre.width / 2
+        let maximumX = bounds.maxX - trailing.width - gap - centre.width / 2
+        // On narrow windows, the status moves only far enough to keep the actions clear.
+        let centreX = max(minimumX, min(bounds.midX, maximumX))
+
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: .unspecified)
+        subviews[1].place(
+            at: CGPoint(x: centreX, y: bounds.midY), anchor: .center,
+            proposal: ProposedViewSize(width: centre.width, height: bounds.height)
+        )
+        subviews[2].place(at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: .unspecified)
     }
 }
