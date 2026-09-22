@@ -6,8 +6,9 @@ struct CleanupHistoryView: View {
     @Bindable var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Narrows the table only. The header's counts and sizes stay the whole log's.
+    /// Filters the rows and their size total.
     @State private var searchText = ""
+    @State private var filter: HistoryFilter = .all
 
     /// Opens newest first, which is the order the log is read in.
     @State private var sortKey: SortKey = .date
@@ -37,10 +38,18 @@ struct CleanupHistoryView: View {
                 emptyState
             } else if visibleItems.isEmpty {
                 VStack {
-                    ContentUnavailableView.search(text: query)
-                        .frame(maxWidth: .infinity)
+                    if query.isEmpty {
+                        ContentUnavailableView(
+                            "No matching items",
+                            systemImage: filter.symbol,
+                            description: Text("No history items match this filter.")
+                        )
+                    } else {
+                        ContentUnavailableView.search(text: query)
+                    }
                     Spacer()
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.top, 36)
             } else {
                 historyTable
@@ -55,30 +64,38 @@ struct CleanupHistoryView: View {
     }
 
     private var header: some View {
-        PageHeader {
-            headerText
-        } trailing: {
-            FindField(text: $searchText, findRequest: model.findRequest)
-                .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
-                .disabled(items.isEmpty)
-        }
-    }
-
-    private var headerText: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Cleanup History")
-                .mcEyebrowStyle()
-
-            if let summary = model.cleanupHistory {
-                Text(summaryText(summary))
-                    .font(.mcControlLabel)
-                    .foregroundStyle(Token.Text.secondary)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 8) {
+                ForEach(HistoryFilter.allCases) { choice in
+                    PageTabPill(
+                        title: choice.rawValue,
+                        symbol: choice.symbol,
+                        detail: "\(items.filter { choice.includes($0.state) }.count)",
+                        isSelected: filter == choice
+                    ) { filter = choice }
+                    .help(choice.helpText)
+                }
+                Spacer(minLength: 0)
             }
 
-            Text("Scolo saves this history when you keep a Put Back receipt.")
-                .font(.mcSubtitle)
-                .foregroundStyle(Token.Text.quaternary)
+            HStack(spacing: 12) {
+                if let summary = model.cleanupHistory {
+                    let visible = visibleItems
+                    let bytes = visible.reduce(Int64(0)) { $0 + $1.bytes }
+                    Text("\(visible.count) \(visible.count == 1 ? "item" : "items") · \(ByteFormatting.string(bytes))")
+                        .font(.mcControlLabel)
+                        .foregroundStyle(Token.Text.secondary)
+                        .help(summaryText(summary))
+                }
+                Spacer(minLength: 12)
+                FindField(text: $searchText, findRequest: model.findRequest)
+                    .frame(width: 180)
+                    .disabled(items.isEmpty)
+            }
         }
+        .padding(.horizontal, Token.Size.pageGutter)
+        .padding(.top, Token.Size.pageGutter)
+        .padding(.bottom, 12)
     }
 
     /// The Trash view's list, not a native `Table`. `Table` paints its own backdrop —
@@ -94,20 +111,24 @@ struct CleanupHistoryView: View {
                     // Lazy: the log is read 5,000 records deep.
                     LazyVStack(spacing: 0) {
                         ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
-                            if index > 0 { Hairline() }
-                            HistoryRow(item: item)
+                            VStack(spacing: 0) {
+                                if index > 0 { Hairline() }
+                                HistoryRow(item: item)
+                            }
                         }
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
+            .padding(.horizontal, Token.Size.pageGutter)
+            .padding(.top, 2)
             .padding(.bottom, 22)
         }
+        // Reset cached row positions when the visible set changes.
+        .id([filter.rawValue, query])
     }
 
-    /// The Scanner's column header: same face, tracking and tone.
+    /// Column labels use the same style as the other file lists.
     private var columnHeader: some View {
         HStack(spacing: Metrics.gap) {
             sortHeader("Item", .name)
@@ -119,12 +140,10 @@ struct CleanupHistoryView: View {
             sortHeader("Size", .size)
                 .frame(width: Metrics.size, alignment: .trailing)
         }
-        .font(.mcColumnHeader)
-        .tracking(0.04 * 10.5)
-        .textCase(.uppercase)
-        .foregroundStyle(Token.Text.quaternary)
+        .font(.mcControlLabel)
+        .foregroundStyle(Token.Text.tertiary)
         .padding(.horizontal, Metrics.sidePadding)
-        .padding(.vertical, 6)
+        .padding(.vertical, 10)
     }
 
     private func sortHeader(_ title: String, _ key: SortKey) -> some View {
@@ -137,17 +156,7 @@ struct CleanupHistoryView: View {
     }
 
     private var loadingState: some View {
-        VStack {
-            ContentUnavailableView {
-                Label("Reading cleanup history", systemImage: "clock.arrow.circlepath")
-            } description: {
-                Text("Scolo is checking which receipts still match items in the Trash.")
-            }
-            .frame(maxWidth: .infinity)
-
-            Spacer()
-        }
-        .padding(.top, 36)
+        PageProgressView(title: "Reading cleanup history")
     }
 
     private var emptyState: some View {
@@ -155,7 +164,7 @@ struct CleanupHistoryView: View {
             ContentUnavailableView {
                 Label("No cleanup history", systemImage: "clock")
             } description: {
-                Text("Keep a Put Back receipt during cleanup to record removed items and failures.")
+                Text("Enable Put Back receipts in Settings to record removed items and failures.")
             }
             .frame(maxWidth: .infinity)
 
@@ -175,8 +184,9 @@ struct CleanupHistoryView: View {
     /// Name or original folder: "where did that file from Downloads go" is asked by
     /// place as often as by name, and the row shows both.
     private var visibleItems: [CleanupHistoryItem] {
-        let matching = query.isEmpty ? items : items.filter {
-            $0.originalURL.path.localizedCaseInsensitiveContains(query)
+        let matching = items.filter {
+            filter.includes($0.state)
+                && (query.isEmpty || $0.originalURL.path.localizedCaseInsensitiveContains(query))
         }
         return sorted(matching)
     }
@@ -225,6 +235,42 @@ struct CleanupHistoryView: View {
     }
 }
 
+private enum HistoryFilter: String, CaseIterable, Identifiable {
+    case all = "All"
+    case inTrash = "In Trash"
+    case restored = "Restored"
+    case failed = "Failed"
+
+    var id: Self { self }
+
+    var symbol: String {
+        switch self {
+        case .all: "square.grid.2x2"
+        case .inTrash: "trash"
+        case .restored: "arrow.uturn.backward"
+        case .failed: "exclamationmark.circle"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .all: "All recorded removal results."
+        case .inTrash: "Items that are still in the Trash."
+        case .restored: "Items that Scolo restored from the Trash to their original locations."
+        case .failed: "Items that Scolo could not remove."
+        }
+    }
+
+    func includes(_ state: CleanupHistoryState) -> Bool {
+        switch self {
+        case .all: true
+        case .inTrash: state == .availableInTrash || state == .inTrash
+        case .restored: state == .restored
+        case .failed: state == .failed
+        }
+    }
+}
+
 private extension CleanupHistoryState {
     /// What can still be acted on first, then what went wrong, then the settled
     /// outcomes. Alphabetical by label would put "Available in Trash" and "In Trash"
@@ -246,13 +292,13 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.name)
-                    .font(.mcBody)
+                    .font(.mcRowTitle)
                     .foregroundStyle(Token.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(item.originalURL.deletingLastPathComponent().path)
+                Text(FileEntry.abbreviate(item.originalURL.deletingLastPathComponent().path))
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.tertiary)
                     .lineLimit(1)
@@ -265,14 +311,15 @@ private struct HistoryRow: View {
                 .font(.mcSubtitle)
                 .frame(width: Metrics.result, alignment: .leading)
 
-            Text(
-                item.timestamp,
-                format: .dateTime.day().month(.abbreviated).year().hour().minute()
-            )
-                .font(.mcSubtitle)
-                .foregroundStyle(Token.Text.quaternary)
-                .lineLimit(1)
-                .frame(width: Metrics.date, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.timestamp, format: .dateTime.day().month(.abbreviated).year())
+                    .foregroundStyle(Token.Text.secondary)
+                Text(item.timestamp, format: .dateTime.hour().minute())
+                    .foregroundStyle(Token.Text.tertiary)
+            }
+            .font(.mcSubtitle)
+            .lineLimit(1)
+            .frame(width: Metrics.date, alignment: .leading)
 
             Text(item.bytes > 0 ? ByteFormatting.string(item.bytes) : "—")
                 .font(.mcRowValue)
@@ -282,20 +329,18 @@ private struct HistoryRow: View {
                 .frame(width: Metrics.size, alignment: .trailing)
         }
         .padding(.horizontal, Metrics.sidePadding)
-        .frame(height: Token.Size.trashRow)
+        .frame(minHeight: 56)
         .contentShape(Rectangle())
         .hoverHighlight()
     }
 }
 
-/// The Trash list's numbers, so the two pages that show removed items hold the same
-/// columns. `date` is wider than the Trash's relative caption: this one is absolute,
-/// and at 140 pt "20 Sep 2026 at 15:46" was cut to "15:…".
+/// Shared widths keep the column labels and values aligned.
 private enum Metrics {
-    static let sidePadding: CGFloat = 15
+    static let sidePadding: CGFloat = 18
     static let gap: CGFloat = 11
     static let result: CGFloat = 160
-    static let date: CGFloat = 150
+    static let date: CGFloat = 110
     static let size: CGFloat = 78
 }
 
@@ -321,7 +366,7 @@ private struct ResultLabel: View {
         switch state {
         case .availableInTrash: "Available in Trash"
         case .inTrash: "In Trash"
-        case .restored: "Put Back"
+        case .restored: "Restored"
         case .removedPermanently: "Removed permanently"
         case .noLongerInTrash: "No longer in Trash"
         case .failed: "Could not remove"

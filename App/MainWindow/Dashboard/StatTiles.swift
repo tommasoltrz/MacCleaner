@@ -1,17 +1,13 @@
 import SwiftUI
 import ScoloCore
 
-/// The Dashboard's row of three stat tiles.
-///
-/// The "Safe to remove" / "Needs review" split is the design's core claim — the app
-/// separates what it will clean unattended from what needs a human. The two totals
-/// sit side by side at equal weight. The app does not sum them into one number.
+/// Cleanup totals and iCloud usage share one row.
 struct StatTiles: View {
 
     private let safeToRemoveBytes: Int64?
     private let needsReviewBytes: Int64?
     private let lastScanAt: Date?
-    private let reclaimedBytes: Int64?
+    private let iCloudStorage: ICloudStorage?
     /// Tap targets for the two counting tiles. A first-run placeholder stays inert.
     /// A saved scan time gives both tiles a fresh-scan action.
     private let onSafeTap: (() -> Void)?
@@ -20,16 +16,11 @@ struct StatTiles: View {
     private let onScan: (() -> Void)?
 
     /// `nil` results means no scan has run this session: the two counting tiles fall
-    /// back to placeholders. `lastScanAt` fills the third tile on launches where no
-    /// scan has run yet. The timestamp survives relaunch even without results,
-    /// and fresh results win over it.
-    ///
-    /// The clean-up history supplies `reclaimedBytes`. Without this value, the
-    /// "Last scan" tile shows only the timestamp.
+    /// back to placeholders. A saved scan time enables the Scan Again action.
     init(
         results: ScanResults?,
         lastScanAt: Date? = nil,
-        reclaimedBytes: Int64? = nil,
+        iCloudStorage: ICloudStorage? = nil,
         onSafeTap: (() -> Void)? = nil,
         onReviewTap: (() -> Void)? = nil,
         onScan: (() -> Void)? = nil
@@ -37,7 +28,7 @@ struct StatTiles: View {
         self.safeToRemoveBytes = results?.safeToRemoveBytes
         self.needsReviewBytes = results?.needsReviewBytes
         self.lastScanAt = results?.finishedAt ?? lastScanAt
-        self.reclaimedBytes = reclaimedBytes
+        self.iCloudStorage = iCloudStorage
         self.onSafeTap = onSafeTap
         self.onReviewTap = onReviewTap
         self.onScan = onScan
@@ -48,56 +39,44 @@ struct StatTiles: View {
     init(
         safeToRemoveBytes: Int64?,
         needsReviewBytes: Int64?,
-        lastScanAt: Date?,
-        reclaimedBytes: Int64? = nil
+        lastScanAt: Date?
     ) {
         self.safeToRemoveBytes = safeToRemoveBytes
         self.needsReviewBytes = needsReviewBytes
         self.lastScanAt = lastScanAt
-        self.reclaimedBytes = reclaimedBytes
+        self.iCloudStorage = nil
         self.onSafeTap = nil
         self.onReviewTap = nil
         self.onScan = nil
     }
 
     var body: some View {
-        // A Grid rather than an HStack: it sizes every cell in a row to the tallest
-        // one, which is what keeps the tiles level when the descriptions wrap to
-        // different line counts. Widths come from the flexible frame on each tile, so
-        // the three stay equal as the window resizes.
-        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
-            GridRow {
-                // Current figures open their lists. A saved timestamp without
-                // current figures starts a new scan instead.
-                linkedTile(
-                    label: "Safe to remove",
-                    value: safeToRemoveBytes.map { ByteFormatting.string($0) },
-                    emptyValue: savedScanNeedsRefresh ? "Scan again" : nil,
-                    description: "Caches regenerate. Application leftovers have no installed owner.",
-                    action: onSafeTap,
-                    emptyAction: savedScanNeedsRefresh ? onScan : nil
-                )
-                linkedTile(
-                    label: "Needs review",
-                    value: needsReviewBytes.map { ByteFormatting.string($0) },
-                    emptyValue: savedScanNeedsRefresh ? "Scan again" : nil,
-                    description: "Large files and unused apps. You decide, nothing is automatic.",
-                    action: onReviewTap,
-                    emptyAction: savedScanNeedsRefresh ? onScan : nil
-                )
-                StatTile(
-                    label: "Last scan",
-                    value: lastScanAt.map { relativeDescription($0) },
-                    emptyValue: "Never",
-                    description: lastScanAt.map { timestampDescription($0) }
-                        ?? "Nothing measured yet. Run a scan to see what can be reclaimed."
-                )
+        VStack(alignment: .leading, spacing: 12) {
+            Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 0) {
+                GridRow {
+                    linkedTile(
+                        label: "Safe to Remove",
+                        value: safeToRemoveBytes.map { ByteFormatting.string($0) },
+                        emptyValue: savedScanNeedsRefresh ? "Scan Again" : nil,
+                        description: "Files that can be created again when needed.",
+                        action: onSafeTap,
+                        emptyAction: savedScanNeedsRefresh ? onScan : nil
+                    )
+                    linkedTile(
+                        label: "Needs Review",
+                        value: needsReviewBytes.map { ByteFormatting.string($0) },
+                        emptyValue: savedScanNeedsRefresh ? "Scan Again" : nil,
+                        description: "Check these files before removal.",
+                        action: onReviewTap,
+                        emptyAction: savedScanNeedsRefresh ? onScan : nil
+                    )
+                    if let iCloudStorage {
+                        ICloudCard(storage: iCloudStorage)
+                    }
+                }
             }
+            .fixedSize(horizontal: false, vertical: true)
         }
-        // The row is as tall as its tallest tile and no taller — the tiles are
-        // vertically flexible so they fill the grid cell, and without this the whole
-        // row would stretch into whatever height a tall window offers it.
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// A timestamp is safe to keep. File removal candidates are not safe to keep
@@ -138,31 +117,7 @@ struct StatTiles: View {
         }
     }
 
-    /// Show the relative time first because the age of the numbers matters most.
-    /// Show the exact time on the line below.
-    @MainActor
-    private func relativeDescription(_ date: Date) -> String {
-        // Inside a minute the formatter produces "in 0 seconds", which reads as a bug.
-        guard Date.now.timeIntervalSince(date) >= 60 else { return "Just now" }
-        return relativeFormatter.localizedString(for: date, relativeTo: .now)
-    }
-
-    /// `16 Aug at 9:41 AM · 4.2 GB reclaimed`
-    private func timestampDescription(_ date: Date) -> String {
-        let stamp = date.formatted(.dateTime.day().month(.abbreviated))
-            + " at " + date.formatted(date: .omitted, time: .shortened)
-        guard let reclaimedBytes else { return stamp }
-        return stamp + " · " + ByteFormatting.string(reclaimedBytes) + " reclaimed"
-    }
 }
-
-/// One formatter, not one per render: it is expensive to build and this string is
-/// recomputed on every scan-state change.
-@MainActor private let relativeFormatter: RelativeDateTimeFormatter = {
-    let formatter = RelativeDateTimeFormatter()
-    formatter.dateTimeStyle = .named   // "yesterday" over "1 day ago"
-    return formatter
-}()
 
 // MARK: - One tile
 
@@ -180,11 +135,11 @@ private struct StatTile: View {
     private var isPlaceholder: Bool { value == nil }
 
     var body: some View {
-        GroupedBox {
+        GroupedBox(radius: Token.Radius.card) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 0) {
                     Text(label)
-                        .font(.mcControlLabel)
+                        .font(.mcRowTitle)
                         .foregroundStyle(Token.Text.secondary)
                     if showsChevron {
                         Spacer(minLength: 8)
@@ -195,7 +150,8 @@ private struct StatTile: View {
                 }
 
                 Text(value ?? emptyValue ?? "—")
-                    .font(.mcStatValue)
+                    .animatedTotal(value)
+                    .font(.mcSecondaryHero)
                     // A bare placeholder is disabled. A named empty value is an
                     // instruction, and it stays readable as the tile's action.
                     .foregroundStyle(
@@ -216,9 +172,9 @@ private struct StatTile: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, 7)
             }
-            .padding(.top, 14)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 15)
+            .padding(.top, 18)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 18)
             // Flexible in both axes: the grid has already sized the cell to the widest
             // column and the tallest tile, and this fills it so the box matches.
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -232,8 +188,7 @@ private struct StatTile: View {
         StatTiles(
             safeToRemoveBytes: 6_023_000_000,      // 5.61 GB
             needsReviewBytes: 66_712_000_000,      // 62.13 GB
-            lastScanAt: Calendar.current.date(byAdding: .day, value: -2, to: .now),
-            reclaimedBytes: 4_509_715_660          // 4.20 GB
+            lastScanAt: Calendar.current.date(byAdding: .day, value: -2, to: .now)
         )
         StatTiles(results: nil)
         StatTiles(

@@ -6,13 +6,6 @@ import SwiftUI
 struct FileDuplicatesView: View {
     @Bindable var model: AppModel
 
-    private let minimumOptions: [(String, Int64)] = [
-        ("All files (0 MB)", 0),
-        ("At least 1 MB", 1_000_000),
-        ("At least 10 MB", 10_000_000),
-        ("At least 100 MB", 100_000_000)
-    ]
-
     var body: some View {
         Group {
             if model.isScanningDuplicateFiles {
@@ -26,6 +19,7 @@ struct FileDuplicatesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationResultAnimation(isRunning: model.isScanningDuplicateFiles)
     }
 
     private var intro: some View {
@@ -48,29 +42,14 @@ struct FileDuplicatesView: View {
     }
 
     private var scanning: some View {
-        VStack(spacing: 12) {
-            if let progress = model.fileDuplicateProgress, progress.total > 0 {
-                ProgressView(
-                    value: Double(progress.completed),
-                    total: Double(progress.total)
-                )
-                .progressViewStyle(.linear)
-                .frame(width: 280)
-            } else {
-                ProgressView()
-                    .controlSize(.regular)
-            }
-
-            Text(progressLabel)
-                .font(.mcBody)
-                .foregroundStyle(Token.Text.secondary)
-
-            Button("Stop") { model.cancelFileDuplicateScan() }
-                .buttonStyle(SecondaryButtonStyle())
-        }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.top, 110)
+        PageProgressView(
+            title: "Scanning for duplicate files",
+            detail: progressLabel,
+            progress: model.fileDuplicateProgress.flatMap {
+                $0.total > 0 ? Double($0.completed) / Double($0.total) : nil
+            },
+            onStop: { model.cancelFileDuplicateScan() }
+        )
     }
 
     private var progressLabel: String {
@@ -91,11 +70,7 @@ struct FileDuplicatesView: View {
         ContentUnavailableView {
             Label("No duplicate files found", systemImage: "checkmark.circle")
         } description: {
-            if let results = model.fileDuplicateResults {
-                Text(resultSummary(results))
-            }
-        } actions: {
-            scanControls(buttonLabel: "Choose Other Folders")
+            Text("Try another folder or change the minimum file size.")
         }
         .frame(maxWidth: .infinity, minHeight: 320)
         .padding(.horizontal, 14)
@@ -104,29 +79,25 @@ struct FileDuplicatesView: View {
     }
 
     private var groups: some View {
-        VStack(spacing: 0) {
-            PageHeader {
-                if let results = model.fileDuplicateResults {
-                    Text(resultSummary(results)).pageHeaderSummary()
+        let selectable = Set(model.fileDuplicateGroups.flatMap(\.removable).map(\.id))
+        return VStack(spacing: 0) {
+            HStack {
+                MonochromeCheckbox(
+                    title: "Select All",
+                    detail: "\(selectable.count) \(selectable.count == 1 ? "item" : "items")",
+                    state: !selectable.isEmpty && selectable.isSubset(of: model.fileDuplicateSelection) ? .on : .off,
+                    isEnabled: !selectable.isEmpty && !model.isBusyWithDisk
+                ) { isOn in
+                    if isOn { model.selectAllFileDuplicates() }
+                    else { model.deselectAllFileDuplicates() }
                 }
-            } trailing: {
-                // These choose rows, so they belong beside the rows.
-                Button("Select All") { model.selectAllFileDuplicates() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.fileDuplicateGroups.isEmpty
-                        || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
-                Button("Deselect All") { model.deselectAllFileDuplicates() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.fileDuplicateSelection.isEmpty
-                        || model.isScanningDuplicateFiles || model.isRemovingDuplicateFiles)
-                minimumPicker
-                Button("Scan Again") { model.startFileDuplicateScan() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.isBusyWithDisk)
-                Button("Choose Other Folders") { model.chooseFileDuplicateFolders() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(model.isBusyWithDisk)
+                .fixedSize()
+                Spacer()
             }
+            .padding(.horizontal, Token.Size.pageGutter + 15)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+            .help(model.fileDuplicateResults.map { resultSummary($0) } ?? "")
 
             scrollingGroups
         }
@@ -147,7 +118,7 @@ struct FileDuplicatesView: View {
     @ViewBuilder
     private func scanControls(buttonLabel: String) -> some View {
         HStack(spacing: 10) {
-            minimumPicker
+            FileDuplicateMinimumPicker(model: model)
 
             Button { model.chooseFileDuplicateFolders() } label: {
                 Text(buttonLabel)
@@ -155,22 +126,11 @@ struct FileDuplicatesView: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 8)
             }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.large)
                 .fixedSize(horizontal: true, vertical: false)
                 .disabled(model.isBusyWithDisk)
         }
-    }
-
-    private var minimumPicker: some View {
-        Picker("Minimum file size", selection: $model.fileDuplicateMinimumBytes) {
-            ForEach(minimumOptions, id: \.1) { option in
-                Text(option.0).tag(option.1)
-            }
-        }
-        .pickerStyle(.menu)
-        .fixedSize()
-        .help("Set zero to check all files. Small files make the scan slower.")
     }
 
     private func resultSummary(_ results: FileDuplicateResults) -> String {
@@ -233,11 +193,12 @@ struct FileDuplicatesView: View {
                     .frame(width: 28, height: 28)
                     .help("This copy will remain")
             } else {
-                Button { model.toggleFileDuplicate(file.id) } label: {
-                    Image(systemName: selected ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(selected ? Color.accentColor : Token.Text.tertiary)
-                }
-                .buttonStyle(.plain)
+                MonochromeCheckbox(
+                    title: "Select \(file.url.lastPathComponent)",
+                    state: selected ? .on : .off,
+                    isEnabled: !model.isBusyWithDisk,
+                    showsTitle: false
+                ) { _ in model.toggleFileDuplicate(file.id) }
                 .frame(width: 28, height: 28)
                 .help(selected ? "Keep this copy" : "Move this copy to the Trash")
             }
@@ -309,4 +270,50 @@ struct FileDuplicatesView: View {
             model.fileDuplicateSelection.contains($0.id)
         }
     }
+}
+
+/// Uses the same file size menu before and after a scan.
+struct FileDuplicateMinimumPicker: View {
+    @Bindable var model: AppModel
+
+    private let minimumOptions: [(String, Int64)] = [
+        ("All files (0 MB)", 0),
+        ("At least 1 MB", 1_000_000),
+        ("At least 10 MB", 10_000_000),
+        ("At least 100 MB", 100_000_000)
+    ]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Minimum file size")
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.secondary)
+            Menu {
+                Picker("Minimum file size", selection: $model.fileDuplicateMinimumBytes) {
+                    ForEach(minimumOptions, id: \.1) { option in
+                        Text(option.0).tag(option.1)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 7) {
+                    Text(minimumOptions.first { $0.1 == model.fileDuplicateMinimumBytes }?.0
+                         ?? ByteFormatting.string(model.fileDuplicateMinimumBytes))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+            }
+            .menuStyle(.button)
+            .buttonStyle(PageActionButtonStyle())
+            .menuIndicator(.hidden)
+            .disabled(model.isScanningDuplicateFiles)
+            .accessibilityLabel("Minimum file size")
+            .accessibilityValue(minimumOptions.first { $0.1 == model.fileDuplicateMinimumBytes }?.0 ?? "")
+        }
+        .fixedSize()
+        .help("Set zero to check all files. Small files make the scan slower.")
+    }
+
 }

@@ -41,6 +41,7 @@ struct DashboardView: View {
                 StatTiles(
                     results: model.scanResults,
                     lastScanAt: model.lastScanFinishedAt,
+                    iCloudStorage: model.iCloudStorage,
                     // The tiles are a summary of the scan; the scan's own page is
                     // where its rows live, so a tile opens the Scanner on the list
                     // it counted rather than a page of its own.
@@ -57,38 +58,32 @@ struct DashboardView: View {
                     GrowthCard(
                         presentation: GrowthCard.Presentation(growth),
                         baseline: model.growthBaseline,
+                        lastScanAt: model.scanResults?.finishedAt ?? model.lastScanFinishedAt,
+                        canCompareSinceCleanup: model.hasCleanupGrowthBaseline,
                         onSelectBaseline: { model.growthBaseline = $0 },
                         onReveal: { model.revealGrowth($0) }
                     )
                 }
 
-                // After everything about this disk and before the system-level
-                // footnotes, matching where the account sits in the user's mental
-                // model.
-                if let iCloud = model.iCloudStorage {
-                    ICloudCard(storage: iCloud)
-                        // Re-measures when the plan setting changes, so correcting a
-                        // wrong estimate in Preferences is reflected here immediately
-                        // rather than at the next launch.
-                        .task(id: settings?.iCloudPlan) {
-                            model.iCloudPlanBytes = settings?.iCloudPlan.bytes
-                            await model.loadICloud()
-                        }
+                if !model.removableSnapshots.isEmpty {
+                    SnapshotsDisclosureRow(
+                        snapshots: model.snapshots,
+                        isExpanded: $model.snapshotsExpanded
+                    )
                 }
-
-                SnapshotsDisclosureRow(
-                    snapshots: model.snapshots,
-                    isExpanded: $model.snapshotsExpanded
-                )
             }
             // Breathing room wins over exact alignment with the toolbar's own inset:
             // at 5pt the cards aligned with the chevron capsule but sat almost
             // against the sidebar. The Scan button is inset to match this figure, so
             // the trailing edges still line up; the leading chevron group cannot be
             // moved (see MainWindow) and is left slightly proud.
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
+            .padding(.horizontal, Token.Size.pageGutter)
+            .padding(.top, Token.Size.pageGutter)
             .padding(.bottom, 22)
+        }
+        .task(id: settings?.iCloudPlan) {
+            model.iCloudPlanBytes = settings?.iCloudPlan.bytes
+            await model.loadICloud()
         }
     }
 

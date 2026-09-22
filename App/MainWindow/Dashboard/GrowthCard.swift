@@ -39,6 +39,8 @@ struct GrowthCard: View {
 
     let presentation: Presentation
     let baseline: GrowthBaseline
+    var lastScanAt: Date? = nil
+    var canCompareSinceCleanup = true
     var onSelectBaseline: (GrowthBaseline) -> Void = { _ in }
     var onReveal: (GrowthAttribution) -> Void = { _ in }
 
@@ -56,7 +58,7 @@ struct GrowthCard: View {
                 content
             }
             .padding(.vertical, 18)
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -64,26 +66,45 @@ struct GrowthCard: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(eyebrow)
-                .mcEyebrowStyle()
-                .lineLimit(1)
-
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Storage changes")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Token.Text.primary)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(lastScanLabel(at: context.date))
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.tertiary)
+                        .help(lastScanAt.map(Self.stamp) ?? "Run a scan to find cleanup items.")
+                }
+            }
             Spacer(minLength: 8)
-
             baselineMenu
+            if case .report(let report) = presentation {
+                Text(ByteFormatting.signedString(report.usedDeltaBytes))
+                    .font(.mcSecondaryHero)
+                    .monospacedDigit()
+                    .foregroundStyle(Token.Text.emphasis)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .help("Used space change since \(Self.stamp(report.baselineDate))")
+                    .accessibilityLabel("Used space change")
+                    .accessibilityValue("\(ByteFormatting.signedString(report.usedDeltaBytes)) since \(Self.stamp(report.baselineDate))")
+            }
         }
     }
 
-    private var eyebrow: String {
-        guard case .report(let report) = presentation else { return "What grew" }
-        return "Since \(Self.stamp(report.baselineDate))"
+    private func lastScanLabel(at now: Date) -> String {
+        guard let lastScanAt else { return "No scan yet" }
+        guard now.timeIntervalSince(lastScanAt) >= 60 else { return "Last scan · Just now" }
+        return "Last scan · \(growthScanFormatter.localizedString(for: lastScanAt, relativeTo: now))"
     }
 
     private var baselineMenu: some View {
         Menu {
-            ForEach(GrowthBaseline.allCases, id: \.self) { choice in
+            ForEach([GrowthBaseline.lastCleanup, .sevenDays], id: \.self) { choice in
                 Button(choice.displayName) { onSelectBaseline(choice) }
+                    .disabled(choice == .lastCleanup && !canCompareSinceCleanup)
             }
         } label: {
             HStack(spacing: 5) {
@@ -93,12 +114,12 @@ struct GrowthCard: View {
             }
         }
         .menuStyle(.button)
-        .buttonStyle(SecondaryButtonStyle())
+        .buttonStyle(PageActionButtonStyle(compact: true))
         // The label already carries a chevron, drawn at the size the design's
         // controls use rather than the one AppKit picks.
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Choose the measurement to compare against")
+        .help("Choose a comparison period")
     }
 
     // MARK: - Body
@@ -132,110 +153,28 @@ struct GrowthCard: View {
     @ViewBuilder
     private func reportBody(_ report: Report) -> some View {
         let rows = Array(report.attributions.prefix(Self.maximumRows))
-
-        hero(report.usedDeltaBytes)
-        classRow(report.classDeltas)
+        let scale = max(1, rows.map { abs(Double($0.deltaBytes)) }.max() ?? 1)
 
         if rows.isEmpty {
-            // The disk changed and no single folder is large enough to name. Saying
-            // so is the honest answer; the class row above already carries the
-            // change itself.
             Text("No folder changed by enough to name.")
                 .font(.mcSubtitle)
                 .foregroundStyle(Token.Text.tertiary)
                 .padding(.top, 14)
         } else {
             divider
-                .padding(.top, 14)
+                .padding(.top, 16)
 
             VStack(spacing: 0) {
                 ForEach(rows) { attribution in
-                    AttributionRow(attribution: attribution, onReveal: onReveal)
+                    AttributionRow(
+                        attribution: attribution,
+                        scale: scale,
+                        onReveal: onReveal
+                    )
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, 8)
         }
-    }
-
-    // MARK: - Hero
-
-    /// The one figure the disk itself agrees with: used space, then and now.
-    ///
-    /// Kept in the ordinary emphasis colour, not red for growth and green for a
-    /// fall. A disk that filled up is not a fault, and painting it as one would
-    /// push the user toward deleting whatever the card happened to name.
-    private func hero(_ delta: Int64) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            Text("Used space")
-                .font(.growthHeroLabel)
-                .foregroundStyle(Token.Text.tertiary)
-
-            Text(ByteFormatting.signedString(delta))
-                .font(.mcSecondaryHero)
-                .mcTracked(-0.26)   // -0.01em
-                .foregroundStyle(Token.Text.emphasis)
-                .lineLimit(1)
-
-            Spacer(minLength: 8)
-        }
-        .padding(.top, 2)
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: - Classes
-
-    private struct ClassEntry: Identifiable {
-        let growthClass: GrowthClass
-        let delta: Int64
-        var id: String { growthClass.rawValue }
-    }
-
-    /// The five classes that changed, largest first. A class that did not move is
-    /// left out rather than printed as `0 B`, which reads as a measurement of
-    /// nothing instead of nothing to report.
-    private func classEntries(_ deltas: [GrowthClass: Int64]) -> [ClassEntry] {
-        GrowthClass.allCases
-            .map { ClassEntry(growthClass: $0, delta: deltas[$0] ?? 0) }
-            .filter { $0.delta != 0 }
-            .sorted { abs($0.delta) > abs($1.delta) }
-    }
-
-    @ViewBuilder
-    private func classRow(_ deltas: [GrowthClass: Int64]) -> some View {
-        let entries = classEntries(deltas)
-        if !entries.isEmpty {
-            let half = (entries.count + 1) / 2
-            // One line while the window is wide enough for it. A narrow window gets
-            // two lines rather than a row that truncates its own figures.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 16) {
-                    ForEach(entries) { classChip($0) }
-                }
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 16) {
-                        ForEach(entries.prefix(half)) { classChip($0) }
-                    }
-                    HStack(spacing: 16) {
-                        ForEach(entries.dropFirst(half)) { classChip($0) }
-                    }
-                }
-            }
-            .padding(.top, 12)
-        }
-    }
-
-    private func classChip(_ entry: ClassEntry) -> some View {
-        HStack(spacing: 7) {
-            CategoryDot(color: entry.growthClass.color, size: 8)
-            Text(entry.growthClass.displayName)
-                .font(.mcBody)
-                .foregroundStyle(Token.Text.primary)
-            Text(ByteFormatting.signedString(entry.delta))
-                .font(.mcRowValue)
-                .foregroundStyle(Token.Text.secondary)
-        }
-        .fixedSize()
-        .accessibilityElement(children: .combine)
     }
 
     private var divider: some View {
@@ -302,6 +241,7 @@ extension GrowthCard.Presentation {
 
 private struct AttributionRow: View {
     let attribution: GrowthAttribution
+    let scale: Double
     let onReveal: (GrowthAttribution) -> Void
 
     var body: some View {
@@ -328,33 +268,36 @@ private struct AttributionRow: View {
         HStack(spacing: 8) {
             CategoryDot(color: attribution.segment.color, size: 8)
 
-            Text(attribution.segment.displayName)
-                .font(.mcRowTitle)
-                .foregroundStyle(Token.Text.primary)
-                .fixedSize()
-
-            // The middle of a path is the part that repeats; its head names the
-            // category and its tail names the folder that changed.
-            Text(FileEntry.abbreviate(attribution.path))
-                .font(.mcSubtitle)
-                .foregroundStyle(Token.Text.tertiary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            if let badge = Self.badge(for: attribution.kind) {
-                Badge(text: badge.text)
-                    .help(badge.detail)
+            HStack(spacing: 8) {
+                Text(attribution.segment.displayName)
+                    .font(.mcRowTitle)
+                    .foregroundStyle(Token.Text.primary)
                     .fixedSize()
+                Text(FileEntry.abbreviate(attribution.path))
+                    .font(.mcSubtitle)
+                    .foregroundStyle(Token.Text.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let badge = Self.badge(for: attribution.kind) {
+                    Badge(text: badge.text)
+                        .lineLimit(1)
+                        .help(badge.detail)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer(minLength: 12)
+            GrowthChangeBar(deltaBytes: attribution.deltaBytes, scale: scale, tint: Token.color(attribution.segment.color))
+                .frame(width: 104, height: 34)
+                .padding(.horizontal, 12)
 
             Text(ByteFormatting.signedString(attribution.deltaBytes))
                 .font(.mcRowValue)
-                .foregroundStyle(Token.Text.secondary)
-                .fixedSize()   // the path truncates first; the figure never does
+                .foregroundStyle(attribution.deltaBytes < 0 ? Token.textColor(.green) : Token.Text.secondary)
+                .frame(width: 90, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .frame(minHeight: 28)
+        .frame(minHeight: 34)
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -393,11 +336,43 @@ private struct AttributionRow: View {
     }
 }
 
-/// The hero row's leading label. 16pt belongs to this card and the capacity card's
-/// hero clause alone, so it stays out of the shared ramp.
-private extension Font {
-    static let growthHeroLabel = Font.system(size: 16)
+/// Changes extend left or right from a shared zero line.
+private struct GrowthChangeBar: View {
+    let deltaBytes: Int64
+    let scale: Double
+    let tint: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let center = size.width / 2
+            let width = min(1, abs(Double(deltaBytes)) / max(1, scale)) * center
+            let bar = CGRect(
+                x: deltaBytes < 0 ? center - width : center,
+                y: size.height / 2 - 3.5,
+                width: width,
+                height: 7
+            )
+            let shape = UnevenRoundedRectangle(
+                topLeadingRadius: deltaBytes < 0 ? 3.5 : 0,
+                bottomLeadingRadius: deltaBytes < 0 ? 3.5 : 0,
+                bottomTrailingRadius: deltaBytes > 0 ? 3.5 : 0,
+                topTrailingRadius: deltaBytes > 0 ? 3.5 : 0
+            )
+            context.fill(shape.path(in: bar), with: .color(deltaBytes < 0 ? Token.color(.green) : tint))
+            var zero = Path()
+            zero.move(to: CGPoint(x: center, y: 0))
+            zero.addLine(to: CGPoint(x: center, y: size.height))
+            context.stroke(zero, with: .color(Token.Fill.controlBorder), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
+    }
 }
+
+@MainActor private let growthScanFormatter: RelativeDateTimeFormatter = {
+    let formatter = RelativeDateTimeFormatter()
+    formatter.dateTimeStyle = .named
+    return formatter
+}()
 
 // MARK: - Previews
 
@@ -450,7 +425,7 @@ private extension Font {
         GrowthCard(presentation: .insufficientHistory, baseline: .sevenDays)
         GrowthCard(
             presentation: .notComparable(reason: "The measurement rules changed."),
-            baseline: .previousMeasurement
+            baseline: .sevenDays
         )
     }
     .padding(24)

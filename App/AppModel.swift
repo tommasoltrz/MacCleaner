@@ -97,28 +97,19 @@ final class AppModel {
             var id: String { title }
         }
 
-        /// The sidebar's rows, in three groups.
-        ///
-        /// One flat list of seven rows said nothing about what any of them was for,
-        /// and the order had to carry the whole argument. The groups say it outright:
-        /// *Overview* is where the disk is described and nothing is removed;
-        /// *Clean up* is the three ways to remove something, in the order they ask for
-        /// trust — a scan proposes, duplicates need a keeper chosen, an uninstall takes
-        /// an application the user installed on purpose; *Activity* is the record of
-        /// what was removed and the Trash it went to, which is where it ends and so
-        /// where the list ends.
+        /// Cleanup comes first. Tools and storage information follow it.
         static var sidebarSections: [SidebarSection] {
             [
-                SidebarSection(title: "Overview", views: [.dashboard, .storageExplorer]),
-                SidebarSection(title: "Clean up", views: [.scanner, .duplicates, .uninstaller]),
-                SidebarSection(title: "Activity", views: [.history, .trash])
+                SidebarSection(title: "", views: [.scanner]),
+                SidebarSection(title: "Tools", views: [.storageExplorer, .uninstaller, .duplicates]),
+                SidebarSection(title: "Overview", views: [.dashboard, .history, .trash])
             ]
         }
 
         var title: String {
             switch self {
             case .dashboard:    "Dashboard"
-            case .scanner:      "Scanner"
+            case .scanner:      "Cleanup"
             case .storageExplorer: "Storage Explorer"
             case .uninstaller:  "App Uninstaller"
             case .history:      "History"
@@ -130,15 +121,18 @@ final class AppModel {
         /// SF Symbols, per the design's icon table.
         var symbol: String {
             switch self {
-            case .dashboard:    "speedometer"
-            case .scanner:      "magnifyingglass"
+            case .dashboard:    "gauge.with.needle"
+            case .scanner:      "magnifyingglass.circle"
             case .storageExplorer: "externaldrive"
             case .uninstaller:  "xmark.app"
-            case .history:      "clock.arrow.circlepath"
+            case .history:      "clock"
             case .trash:        "trash"
             case .duplicates:   "square.on.square"
             }
         }
+
+        /// Each sidebar symbol has a matching filled variant.
+        var selectedSymbol: String { symbol + ".fill" }
     }
 
     /// Which part of the scan the Scanner is showing.
@@ -202,7 +196,13 @@ final class AppModel {
     /// "the row above or below the one you can already see". The toolbar's arrows
     /// are gone with it — they also meant folders in the Storage Explorer, which
     /// is two things for one control, and those now live in that view's own bar.
-    var view: View = .dashboard
+    var view: View = .scanner {
+        didSet {
+            if oldValue == .scanner, view != .scanner {
+                cleanupCompletion = nil
+            }
+        }
+    }
     var duplicateKind: DuplicateKind = .files
 
     /// Edit › Find (⌘F) bumps this; the view on screen moves focus to its search
@@ -224,7 +224,27 @@ final class AppModel {
         findRequest += 1
     }
 
-    var scanFilter: ScanFilter = .all
+    var scanFilter: ScanFilter = .safeToRemove
+    private(set) var cleanupOutcome: CleanupOutcome?
+    struct CleanupCompletion: Identifiable {
+        let id = UUID()
+        let outcome: CleanupOutcome
+    }
+    private(set) var cleanupCompletion: CleanupCompletion?
+
+    func showDashboardAfterCleanup(_ id: UUID) {
+        guard cleanupCompletion?.id == id else { return }
+        view = .dashboard
+    }
+    private var hasStartedInitialCleanupScan = false
+
+    /// Scan on entry when no current results remain.
+    func startInitialCleanupScan() {
+        guard view == .scanner, scanResults == nil, !hasStartedInitialCleanupScan,
+              cleanupCompletion == nil, !isBusyWithDisk else { return }
+        hasStartedInitialCleanupScan = true
+        startScan(automatic: true, refreshOverview: false)
+    }
 
     // MARK: - Data
 
@@ -343,8 +363,7 @@ final class AppModel {
                 return "\(ByteFormatting.string(bytes)). Each copy and its keeper are "
                     + "verified byte for byte before it goes, so large files take a moment."
             case .waitingForApplicationsToQuit:
-                return "Each application is asked to quit, never forced — answer any "
-                    + "save prompt it shows. Nothing is removed until they are gone."
+                return "Save your work if an app asks. Scolo waits for the apps to close."
             case .reviewingStorageItems:
                 return "Scolo is updating each size and checking each item before confirmation."
             case .uninstalling(_, let applicationOnly, let waiting):
@@ -387,16 +406,16 @@ final class AppModel {
     /// and disable themselves, rather than clicking to no effect.
     var isBusyWithDisk: Bool {
         isScanning || isScanningDuplicateFiles || isSweepingPhotos
-            || storageExplorer.isLoading || activity != nil
+            || storageExplorer.isLoading || isPlanningAppUninstall || activity != nil
     }
 
     private(set) var pendingStorageExplorerItems: [StorageExplorerItem] = []
 
     var storageExplorerRemoveLabel: String {
+        guard !storageExplorer.isMapSelectionPending else { return "Move to Trash" }
         let count = storageExplorer.selectedItems.count
-        guard count > 0 else { return "Remove" }
-        let noun = count == 1 ? "item" : "items"
-        return "Remove \(count) \(noun) (\(ByteFormatting.string(storageExplorer.selectedBytes)))"
+        guard count > 0 else { return "Move to Trash" }
+        return "Move to Trash (\(ByteFormatting.string(storageExplorer.selectedBytes)))"
     }
 
     func requestStorageExplorerRemoval() async {
@@ -519,10 +538,6 @@ final class AppModel {
             .entries.filter { selected.contains($0.id) } ?? []
     }
 
-    private var selectedOrphanBundleIdentifiersFromScanner: Set<String> {
-        Set(selectedOrphanApplicationEntries.compactMap(\.orphanedApplicationBundleIdentifier))
-    }
-
     var selectedBytes: Int64 {
         selectedEntries.reduce(0) { $0 + plannedBytes(for: $1) }
             + selectedOrphanApplicationEntries.reduce(0) { $0 + $1.displayBytes }
@@ -543,16 +558,11 @@ final class AppModel {
         !selectedEntries.isEmpty || !selectedOrphanApplicationEntries.isEmpty
     }
 
-    /// The toolbar's remove button, on every view that removes something.
-    ///
-    /// One shape: the verb, what goes, and how much. The Scanner's selection is a
-    /// mixture of caches, folders and application data with no useful noun between
-    /// them, so it states the size alone; the others can name what they are about
-    /// to take, which is the part the user is agreeing to.
+    /// Names the action for the current page.
     var removeLabel: String {
         switch view {
         case .scanner:
-            hasSelection ? "Remove (\(ByteFormatting.string(selectedBytes)))" : "Remove"
+            "Move to Trash (\(ByteFormatting.string(cleanupSelectionBytes(in: .all))))"
         case .duplicates:
             duplicateKind == .files ? fileDuplicateRemoveLabel : photoRemoveLabel
         case .uninstaller:
@@ -569,29 +579,32 @@ final class AppModel {
     var boot: SnapshotInfo? { snapshots.first(where: \.isBootSnapshot) }
     var removableSnapshots: [SnapshotInfo] { snapshots.filter { !$0.isBootSnapshot } }
 
-    func selectedBytes(in category: CategoryID) -> Int64 {
-        guard let entries = scanResults?.categories.first(where: { $0.categoryID == category })?.entries
+    func selectedBytes(in category: CategoryID, filter: ScanFilter = .all) -> Int64 {
+        let selected = cleanupSelection(in: filter)
+        guard let result = scanResults?.categories.first(where: { $0.categoryID == category })
         else { return 0 }
+        let entries = filter == .all
+            ? result.entries : result.tileRows(safeToRemove: filter == .safeToRemove)
         if category == .applicationLeftovers {
             return entries
-                .filter { scannerSelection.contains($0.id) }
+                .filter { selected.contains($0.id) }
                 .reduce(0) { $0 + $1.displayBytes }
         }
         return entries.reduce(Int64(0)) { total, entry in
-            if scannerSelection.contains(entry.id) {
+            if selected.contains(entry.id) {
                 let targets = plannedTargets(for: entry)
                 let covered = Set(targets.map(\.id))
                 // A protected child may be unlocked individually after selecting
                 // “keep data” for its parent. It is not covered by the parent's
                 // plan, so count that explicit child selection too.
                 let extraChildren = entry.children
-                    .filter { scannerSelection.contains($0.id) && !covered.contains($0.id) }
+                    .filter { selected.contains($0.id) && !covered.contains($0.id) }
                     .reduce(0) { $0 + plannedBytes(for: $1) }
                 return total + targets.reduce(0) { $0 + $1.allocatedBytes } + extraChildren
             }
             // Individually selected children count toward their category's readout.
             return total + entry.children
-                .filter { scannerSelection.contains($0.id) }
+                .filter { selected.contains($0.id) }
                 .reduce(0) { $0 + $1.allocatedBytes }
         }
     }
@@ -682,34 +695,68 @@ final class AppModel {
         view = .scanner
     }
 
-    /// Rows in the filtered list whose checkbox actually works. A locked entry — a
-    /// running app, user data, a manual-removal aggregate — must never be swept into
-    /// a total that would then fail at cleanup.
-    ///
-    /// Empty under `.all`: that list is grouped by category with its own per-category
-    /// controls, and a sweep across every category at once is not something the
-    /// Scanner offers.
-    private var selectableInCurrentView: [FileEntry] {
+    /// Returns the rows shown in the current filter.
+    private var rowsInCurrentView: [FileEntry] {
         switch scanFilter {
-        case .all:
-            []
-        case .safeToRemove:
-            tileEntries(safeToRemove: true).filter {
-                !$0.isRemovalLocked && $0.kind != .appBundle
-            }
-        case .needsReview:
-            tileEntries(safeToRemove: false).filter {
-                !$0.isRemovalLocked && $0.kind != .appBundle
-            }
+        case .all: scanResults?.categories.flatMap(\.entries) ?? []
+        case .safeToRemove: tileEntries(safeToRemove: true)
+        case .needsReview: tileEntries(safeToRemove: false)
         }
     }
 
-    /// Whether the current view offers a Select All at all, and whether it would
-    /// change anything.
+    /// Excludes locked rows and applications from bulk selection.
+    private var selectableInCurrentView: [FileEntry] {
+        let rows = rowsInCurrentView
+        let candidates = scanFilter == .all
+            ? rows + tileEntries(safeToRemove: true) : rows
+        var seen = Set<FileEntry.ID>()
+        let selectable = candidates.filter {
+            !$0.isRemovalLocked && $0.kind != .appBundle && seen.insert($0.id).inserted
+        }
+        let covered = Set(selectable.flatMap(\.children).map(\.id))
+        return selectable.filter { !covered.contains($0.id) }
+    }
+
+    /// Keeps safe cleanup separate from selections that need review.
+    func cleanupSelection(in filter: ScanFilter) -> Set<FileEntry.ID> {
+        let scope: CleanupSelection.Scope = switch filter {
+        case .all: .all
+        case .safeToRemove: .safe
+        case .needsReview: .review
+        }
+        return CleanupSelection.ids(
+            in: scanResults?.categories ?? [], selected: scannerSelection, scope: scope
+        )
+    }
+
+    func cleanupSelectionBytes(in filter: ScanFilter) -> Int64 {
+        let ids = cleanupSelection(in: filter)
+        return selectedEntries.filter { ids.contains($0.id) }
+            .reduce(0) { $0 + plannedBytes(for: $1) }
+            + selectedOrphanApplicationEntries.filter { ids.contains($0.id) }
+                .reduce(0) { $0 + $1.displayBytes }
+    }
+
+    /// Indicates whether bulk selection would add items.
     var canSelectAllInCurrentView: Bool {
         let selectable = selectableInCurrentView
         return !selectable.isEmpty
             && !selectable.allSatisfy { scannerSelection.contains($0.id) }
+    }
+
+    var hasSelectableItemsInCurrentView: Bool { !selectableInCurrentView.isEmpty }
+
+    var hasSelectionInCurrentView: Bool {
+        let rows = rowsInCurrentView
+        return (rows + rows.flatMap(\.children)).contains { scannerSelection.contains($0.id) }
+    }
+
+    /// Clears selection only for items shown in the current filter.
+    func deselectAllInCurrentView() {
+        let rows = rowsInCurrentView
+        let ids = Set((rows + rows.flatMap(\.children)).map(\.id))
+        scannerSelection.subtract(ids)
+        userDataRemovalOverrides.subtract(ids)
     }
 
     /// The scan whose Safe to Remove list has already been pre-selected, so the
@@ -1179,9 +1226,7 @@ final class AppModel {
         let reason: String
     }
 
-    /// Every ticked application planned, before anything is asked. A tick is not a
-    /// review: the batch still finds each application's related files first and
-    /// shows what goes, per application, including how much of it is user data.
+    /// Captures checked application plans and applications that cannot be removed.
     struct BatchUninstallReview {
         let plans: [AppUninstallPlan]
         let setAside: [SetAsideApplication]
@@ -1202,18 +1247,14 @@ final class AppModel {
     private(set) var batchUninstallOutcome: BatchUninstallOutcome?
     /// "Slack · 2 of 5" under the planning spinner; nil for a single application.
     private(set) var appUninstallPlanningDetail: String?
-    /// The plans the sheet was asked about — captured when it opens, like `CleanupPlan`.
+    /// Captures the checked plans before removal starts.
     private(set) var pendingBatchUninstall: BatchUninstallReview?
 
-    /// One ticked application is the ordinary review. Several are planned in turn.
-    func reviewSelectedApplications() {
+    /// Checks selected applications, then moves each valid plan to the Trash.
+    func moveSelectedApplicationsToTrash() {
         let selected = (installedApplications ?? [])
             .filter { selectedApplicationIDs.contains($0.id) }
-        guard !selected.isEmpty, activity == nil else { return }
-        if selected.count == 1 {
-            planAppUninstall(selected[0].url)
-            return
-        }
+        guard !selected.isEmpty, !isBusyWithDisk, !isPlanningAppUninstall else { return }
 
         resetAppUninstall()
         isPlanningAppUninstall = true
@@ -1265,7 +1306,12 @@ final class AppModel {
                 }
             }
             guard !Task.isCancelled, self.appUninstallPlanningID == planningID else { return }
-            self.batchUninstallReview = BatchUninstallReview(plans: plans, setAside: setAside)
+            self.pendingBatchUninstall = BatchUninstallReview(plans: plans, setAside: setAside)
+            self.isPlanningAppUninstall = false
+            self.appUninstallPlanningDetail = nil
+            self.appUninstallPlanningID = nil
+            self.appUninstallTask = nil
+            await self.performBatchUninstall()
         }
     }
 
@@ -1325,8 +1371,8 @@ final class AppModel {
         await refreshAfterRemoval()
     }
 
-    /// Kept on for the receipt checkbox in the clean-up sheet.
-    var keepReceipt = true
+    /// All removal actions use the saved receipt setting.
+    var keepReceipt: Bool { settings?.keepReceipt ?? SettingsStore.Defaults.keepReceipt }
 
     /// Exactly what the confirmation was asked about: which entries, and whether
     /// they go to the Trash.
@@ -1400,17 +1446,15 @@ final class AppModel {
 
     private(set) var pendingCleanUp: CleanupPlan?
 
-    /// The route for every Clean Up button: the confirmation sheet, unless the
-    /// user switched confirmation off in Advanced — their call, made deliberately
-    /// in Preferences, so honouring it is not the app being reckless.
-    func requestCleanUp() {
-        guard activity == nil else { return }
-        let entries = selectedEntries
+    /// Starts cleanup directly unless confirmation is enabled or selected files belong to open apps.
+    func requestCleanUp(in filter: ScanFilter) {
+        guard !isBusyWithDisk else { return }
+        let scope = cleanupSelection(in: filter)
+        let entries = selectedEntries.filter { scope.contains($0.id) }
         let selectedIDs = Set(entries.map(\.id))
-        let orphanedIdentifiers = selectedOrphanBundleIdentifiersFromScanner
-        let orphanedItemPaths = Set(
-            selectedOrphanApplicationEntries.flatMap(\.children).map(\.id)
-        )
+        let orphanedEntries = selectedOrphanApplicationEntries.filter { scope.contains($0.id) }
+        let orphanedIdentifiers = Set(orphanedEntries.compactMap(\.orphanedApplicationBundleIdentifier))
+        let orphanedItemPaths = Set(orphanedEntries.flatMap(\.children).map(\.id))
         let orphanedPlan = scanResults?.categories
             .first(where: { $0.categoryID == .applicationLeftovers })?
             .applicationLeftoverPlan
@@ -1433,10 +1477,8 @@ final class AppModel {
         )
         pendingCleanUp = captured
 
-        // A global "don't ask" preference never suppresses the warning for data the
-        // user had to unlock explicitly — nor the one about open applications,
-        // since the sheet is the only place that offers to quit them.
-        if settings?.confirmBeforeCleanup ?? true || plan.protectedDataCount > 0
+        // Selected protected data follows the confirmation setting. Open apps still offer a quit action.
+        if (settings?.confirmBeforeCleanup ?? SettingsStore.Defaults.confirmBeforeCleanup)
             || !captured.runningOwners.isEmpty {
             activeSheet = .cleanUp
             measureCleanUpSaving(for: plan)
@@ -1476,6 +1518,64 @@ final class AppModel {
         cleanUpSavingTask = nil
         pendingCleanUp = nil
         activeSheet = nil
+    }
+
+    /// The notice tracks only open apps with eligible cache files in this scan.
+    private(set) var cleanupRunningOwners: [FileEntry.RunningOwner] = []
+
+    private var runningCacheCandidates: [FileEntry] {
+        var candidates: [FileEntry] = []
+        var seen: Set<FileEntry.ID> = []
+        func visit(_ entry: FileEntry) {
+            guard entry.removalAction == nil, !entry.removesAsUnit,
+                  entry.manualRemoval == nil, entry.protectionReason != .userData else { return }
+            if !entry.children.isEmpty {
+                entry.children.forEach(visit)
+                return
+            }
+            guard entry.kind != .appBundle, entry.isRegenerable,
+                  !entry.isRemovalLocked, entry.inUseBy != nil,
+                  entry.allocatedBytes > 0, seen.insert(entry.id).inserted else { return }
+            candidates.append(entry)
+        }
+        scanResults?.categories.flatMap(\.entries).forEach(visit)
+        return candidates
+    }
+
+    var runningAppCaches: [FileEntry] {
+        let owners = Set(cleanupRunningOwners)
+        return runningCacheCandidates.filter { entry in
+            entry.inUseBy.map { owners.contains($0) } ?? false
+        }
+    }
+
+    /// Refresh the notice when a scan finishes or an app closes.
+    func refreshCleanupRunningOwners() {
+        let known = Array(Set(runningCacheCandidates.compactMap(\.inUseBy)))
+        let live = Self.stillRunning(known)
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        cleanupRunningOwners = live
+    }
+
+    /// Quit the listed apps and make their caches available in Safe to Remove.
+    func quitAppsForCleanup() async {
+        guard !isBusyWithDisk, pendingCleanUp == nil else { return }
+        refreshCleanupRunningOwners()
+        let owners = cleanupRunningOwners
+        guard !owners.isEmpty else { return }
+
+        let stillOpen = await quit(owners)
+        clearInUse(of: owners.filter { !stillOpen.contains($0) })
+        refreshCleanupRunningOwners()
+        activity = nil
+
+        if !stillOpen.isEmpty {
+            let names = ListFormatter.localizedString(byJoining: stillOpen.map(\.name))
+            report(
+                "Some Apps Are Still Open",
+                "\(names) did not quit. Close these apps, then try Quit Apps again."
+            )
+        }
     }
 
     // MARK: - Open applications
@@ -1576,6 +1676,7 @@ final class AppModel {
     func performCleanUp(quittingOwners: Bool = false) async {
         // The captured plan, never the live settings — see `CleanupPlan`.
         guard let plan = pendingCleanUp, activity == nil else { return }
+        cleanupCompletion = nil
 
         if quittingOwners, !plan.runningOwners.isEmpty {
             cleanUpSavingTask?.cancel()
@@ -1636,7 +1737,10 @@ final class AppModel {
             outcome.merge(orphaned)
         }
 
-        deselectAll()
+        cleanupOutcome = outcome
+        let completedIDs = Set(entries.map(\.id)).subtracting(outcome.failed)
+        scannerSelection.subtract(completedIDs)
+        userDataRemovalOverrides.subtract(completedIDs)
         // The Uninstaller's list of leftovers was read from the disk this changed.
         if applicationLeftovers != nil, !plan.orphanedApplicationBundleIdentifiers.isEmpty {
             selectedLeftoverIdentifiers.subtract(plan.orphanedApplicationBundleIdentifiers)
@@ -1673,8 +1777,20 @@ final class AppModel {
         } else if let unfinished = Self.cleanUpNotice(outcome) {
             notice = unfinished
         }
-        // The removal is over. The window comes back here, before the disk is
-        // walked again — see `activity`.
+        // Show success only when every requested item was moved.
+        if view == .scanner, outcome.failed.isEmpty, outcome.removedCount > 0,
+           outcome.trashedCount == outcome.removedCount, outcome.deletedCount == 0 {
+            cleanupCompletion = CleanupCompletion(outcome: outcome)
+        }
+        if outcome.removedCount > 0 {
+            // File sizes and cache contents can change during removal.
+            scanResults = nil
+            scannerSelection.removeAll()
+            userDataRemovalOverrides.removeAll()
+            cleanupRunningOwners = []
+            scanFilter = .safeToRemove
+            hasStartedInitialCleanupScan = false
+        }
         activity = nil
         await refreshAfterRemoval()
     }
@@ -1850,6 +1966,7 @@ final class AppModel {
     private let lowDiskNotifications = LowDiskNotificationService()
     private let coordinator = ScanCoordinator.standard()
     private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var needsPostCleanupMeasurement = false
 
     /// Last measured figures, shown immediately on launch.
     private(set) var measuredAt: Date?
@@ -1894,9 +2011,18 @@ final class AppModel {
     ///   snapshot, and `removal` is the one "since the last clean-up" reads, so a
     ///   wrong trigger costs the user a baseline rather than a figure.
     func measureStorage(trigger: SnapshotTrigger = .manual) async {
-        guard !isLoadingBreakdown else { return }
+        guard !isLoadingBreakdown else {
+            if trigger == .removal { needsPostCleanupMeasurement = true }
+            return
+        }
         isLoadingBreakdown = true
-        defer { isLoadingBreakdown = false }
+        defer {
+            isLoadingBreakdown = false
+            if needsPostCleanupMeasurement {
+                needsPostCleanupMeasurement = false
+                Task { await measureStorage(trigger: .removal) }
+            }
+        }
 
         // iCloud rides along with every measurement, so the account card stays in
         // step with the main card. Cheap enough to piggyback: one `brctl` call and
@@ -1943,16 +2069,22 @@ final class AppModel {
     /// looked at what is stored.
     private(set) var growth: GrowthComparison?
 
-    /// Which stored measurement the report compares against.
-    ///
-    /// Persisted: it is how the user reads the card, not a per-session choice.
-    var growthBaseline: GrowthBaseline = UserDefaults.standard.string(forKey: "growthBaseline")
-        .flatMap(GrowthBaseline.init(rawValue:)) ?? .sevenDays {
-        didSet {
-            guard growthBaseline != oldValue else { return }
-            UserDefaults.standard.set(growthBaseline.rawValue, forKey: "growthBaseline")
-            // Nothing is measured again. Every baseline is a different subtraction
-            // over the same stored figures.
+    private(set) var hasCleanupGrowthBaseline = false
+
+    /// Keep explicit choices. Without a choice, use the latest cleanup when available.
+    private var preferredGrowthBaseline: GrowthBaseline? = UserDefaults.standard.string(forKey: "growthBaseline")
+        .flatMap(GrowthBaseline.init(rawValue:))
+        .flatMap { $0 == .previousMeasurement ? nil : $0 }
+
+    var growthBaseline: GrowthBaseline {
+        get {
+            preferredGrowthBaseline == .sevenDays || !hasCleanupGrowthBaseline
+                ? .sevenDays : .lastCleanup
+        }
+        set {
+            guard newValue != .previousMeasurement else { return }
+            preferredGrowthBaseline = newValue
+            UserDefaults.standard.set(newValue.rawValue, forKey: "growthBaseline")
             recomputeGrowth()
         }
     }
@@ -1989,6 +2121,7 @@ final class AppModel {
     }
 
     private func recomputeGrowth() {
+        hasCleanupGrowthBaseline = storageHistory.contains { $0.trigger == .removal }
         growth = StorageGrowth.comparison(growthBaseline, in: storageHistory)
     }
 
@@ -2000,7 +2133,7 @@ final class AppModel {
     func clearMeasurementHistory() {
         try? snapshotStore.clear()
         storageHistory = []
-        growth = .insufficientHistory
+        recomputeGrowth()
     }
 
     /// Opens the Storage Explorer at the folder the growth report named.
@@ -2050,16 +2183,19 @@ final class AppModel {
     /// - Parameter automatic: set by the scheduler. A scan the user did not ask for
     ///   must not steal the view they are looking at; the status bar and the
     ///   toolbar's progress readout say it is running.
-    func startScan(automatic: Bool = false) {
+    func startScan(automatic: Bool = false, refreshOverview: Bool = true) {
         // Not during a removal either: a scan replaces the results the removal
         // is about to edit, and the scheduler can fire at any moment.
         guard !isBusyWithDisk else { return }
+        hasStartedInitialCleanupScan = true
         // An override belongs to one reviewed result set. Carrying it into a fresh
         // scan would turn a newly discovered row into an authorized deletion merely
         // because it reused the same path.
         let destructiveOverrides = userDataRemovalOverrides
         scannerSelection.subtract(destructiveOverrides)
         userDataRemovalOverrides.removeAll()
+        cleanupOutcome = nil
+        cleanupCompletion = nil
         isScanning = true
         scanProgress = 0
         if !automatic { view = .scanner }
@@ -2070,7 +2206,9 @@ final class AppModel {
         //
         // The scheduler's scan is the one that fills the ring while nobody is
         // looking, so it is stored under its own trigger.
-        Task { await self.measureStorage(trigger: automatic ? .scheduled : .scan) }
+        if refreshOverview {
+            Task { await self.measureStorage(trigger: automatic ? .scheduled : .scan) }
+        }
 
         scanTask = Task { [weak self] in
             guard let self else { return }
@@ -2181,9 +2319,8 @@ final class AppModel {
 
     var fileDuplicateRemoveLabel: String {
         let count = fileDuplicateSelection.count
-        guard count > 0 else { return "Remove" }
-        let noun = count == 1 ? "duplicate" : "duplicates"
-        return "Remove \(count) \(noun) (\(ByteFormatting.string(fileDuplicateSelectionBytes)))"
+        guard count > 0 else { return "Move to Trash" }
+        return "Move to Trash (\(ByteFormatting.string(fileDuplicateSelectionBytes)))"
     }
 
     func chooseFileDuplicateFolders() {
@@ -2427,25 +2564,18 @@ final class AppModel {
     /// the only invented number in the app.
     var photoRemoveLabel: String {
         let count = photoSelection.count
-        guard count > 0 else { return "Remove" }
-        return "Remove \(count) \(count == 1 ? "photo" : "photos")"
+        guard count > 0 else { return "Delete Photos" }
+        return "Delete \(count) \(count == 1 ? "Photo" : "Photos")"
     }
 
     var uninstallerRemoveLabel: String {
         switch uninstallerTab {
         case .installed:
             let count = selectedApplicationIDs.count
-            guard count > 0 else { return "Remove" }
-            let noun = count == 1 ? "app" : "apps"
-            // The size waits for every card to be measured, rather than showing a
-            // total that would grow while the user reads it.
-            guard let bytes = selectedApplicationBytes else { return "Remove \(count) \(noun)" }
-            return "Remove \(count) \(noun) (\(ByteFormatting.string(bytes)))"
+            guard count > 0 else { return "Move to Trash" }
+            return "Move to Trash (\(count) \(count == 1 ? "app" : "apps"))"
         case .leftovers:
-            let count = selectedLeftoverIdentifiers.count
-            guard count > 0 else { return "Remove" }
-            let noun = count == 1 ? "leftover" : "leftovers"
-            return "Remove \(count) \(noun) (\(ByteFormatting.string(selectedLeftoverBytes)))"
+            return "Move Leftovers to Trash"
         }
     }
 

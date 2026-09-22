@@ -1,109 +1,232 @@
 import SwiftUI
 import ScoloCore
 
-/// The Scanner categories in one grouped outline, each expanding into a
-/// file table.
-///
-/// One box with hairline-separated rows, not the detached cards the Electron
-/// version used — the design is explicit that this should read like Finder or System
-/// Settings, where a list of things is a list, not a scattering of panels.
+/// Keeps the cleanup filters above the file list.
 struct ScannerView: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var resultsVisible = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            // No header before the first scan: "No scan yet · nothing selected yet"
-            // above the empty state said the same thing twice.
-            if model.scanResults != nil { header }
-            scrollingContent
-        }
-        .task { model.pruneVanishedEntries() }
-    }
-
-    private var scrollingContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if let results = model.scanResults {
-                    if results.totalBytes > 0 {
-                        ScanCompositionSummary(results: results)
-                        // Under the bar, never above it: the bar describes the whole
-                        // scan and goes on doing so while the list below it narrows.
-                        filterPicker
+        Group {
+            if case .cleaningUp(let itemCount, let totalBytes) = model.activity {
+                CleanupOperationView(itemCount: itemCount, totalBytes: totalBytes)
+                    .transition(.opacity)
+            } else if let completion = model.cleanupCompletion {
+                CleanupOperationView(
+                    itemCount: completion.outcome.removedCount,
+                    totalBytes: completion.outcome.removedBytes,
+                    isComplete: true,
+                    canScan: !model.isBusyWithDisk,
+                    onScanAgain: { model.startScan() },
+                    onViewDashboard: { model.showDashboardAfterCleanup(completion.id) }
+                )
+                .id(completion.id)
+                .transition(.opacity)
+            } else if model.isScanning {
+                scanProgress
+                    .transition(.opacity)
+            } else if let results = model.scanResults {
+                VStack(spacing: 0) {
+                    VStack(spacing: 12) {
+                        if let outcome = model.cleanupOutcome {
+                            completion(outcome).modifier(resultEntrance(index: 0))
+                        }
+                        filterPicker(results)
+                            .modifier(resultEntrance(index: 0))
+                        listControls(results)
+                            .padding(.top, 8)
+                            .modifier(resultEntrance(index: 1))
                     }
-                    // A scan that found nothing has nothing to filter, and the
-                    // outline is the only one of the three that still has something
-                    // to say — a category's own message, including why it is empty.
-                    let filter = results.totalBytes > 0 ? model.scanFilter : .all
-                    if filter != .all {
-                        FilteredSummary(model: model, filter: filter)
+                    .padding(Token.Size.pageGutter)
+                    Divider()
+                        .opacity(resultsVisible ? 1 : 0)
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            if model.scanFilter == .safeToRemove, !model.runningAppCaches.isEmpty {
+                                runningAppsNotice
+                                    .modifier(resultEntrance(index: 2))
+                            }
+                            categoryOutline(categories(of: results, for: model.scanFilter))
+                        }
+                        .padding(Token.Size.pageGutter)
                     }
-                    // One outline for all three tabs. The other two are this one
-                    // with the rows that tab does not count taken out of each
-                    // category, and the categories left empty taken out with them.
-                    categoryOutline(categories(of: results, for: filter))
-                } else {
-                    emptyState
+                }
+                .transition(.opacity)
+            } else {
+                ContentUnavailableView {
+                    Label("Ready to scan", systemImage: "magnifyingglass")
+                } description: {
+                    Text("Use Scan to find cleanup items.")
                 }
             }
-            .padding(.horizontal, Token.Size.pageGutter)
-            .padding(.top, 12)
-            .padding(.bottom, 22)
         }
-    }
-
-    // MARK: - Header line
-
-    private var header: some View {
-        PageHeader {
-            Text(summaryText).pageHeaderSummary()
-        } trailing: {
-            Text(selectionText).pageHeaderSummary()
-            // Beside the readout they change. A filtered tab promises a sweep —
-            // "safe to remove" especially — and a sweep should not mean ticking
-            // every row by hand. The unfiltered outline is for browsing, so it
-            // offers Deselect All alone.
-            if model.scanFilter != .all {
-                Button("Select All") { model.selectAllInCurrentView() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(!model.canSelectAllInCurrentView || model.isCleaningUp)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsOperation)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.cleanupCompletion?.id)
+        .task {
+            model.pruneVanishedEntries()
+            model.refreshCleanupRunningOwners()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in
+            model.refreshCleanupRunningOwners()
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in
+            model.refreshCleanupRunningOwners()
+        }
+        .task(id: model.isScanning) {
+            if model.isScanning {
+                resultsVisible = false
+                return
             }
-            Button("Deselect All") { model.deselectAll() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(!model.hasSelection || model.isCleaningUp)
+            model.refreshCleanupRunningOwners()
+            guard !resultsVisible else { return }
+            if !reduceMotion {
+                // Show the initial layout before the entrance animation starts.
+                do { try await Task.sleep(for: .milliseconds(30)) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            resultsVisible = true
         }
-        .padding(.horizontal, 2)
+        .onDisappear { resultsVisible = true }
     }
 
-    private var summaryText: String {
-        guard let results = model.scanResults else { return "No scan yet" }
-        let actionable = results.actionableCategories.count
-        let volume = model.volume?.name ?? "this Mac"
-        return "\(actionable) categories · \(ByteFormatting.string(results.totalBytes)) found on \(volume)"
+    private var runningAppsNotice: some View {
+        let names = ListFormatter.localizedString(byJoining: model.cleanupRunningOwners.map(\.name))
+        let bytes = model.runningAppCaches.reduce(Int64(0)) { $0 + $1.allocatedBytes }
+        return GroupedBox {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Some apps are using cached files")
+                        .font(.mcRowTitle)
+                        .foregroundStyle(Token.Text.primary)
+                    Text("\(names) · \(ByteFormatting.string(bytes)) of caches")
+                        .font(.mcControlLabel)
+                        .foregroundStyle(Token.Text.secondary)
+                        .lineLimit(2)
+                        .help(names)
+                    Text("Save your work before you quit these apps. Their caches will appear in Safe to Remove.")
+                        .font(.mcSubtitle)
+                        .foregroundStyle(Token.Text.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("Quit Apps") {
+                    Task { await model.quitAppsForCleanup() }
+                }
+                    .buttonStyle(PageActionButtonStyle())
+                    .fixedSize()
+                    .disabled(model.isBusyWithDisk)
+            }
+            .padding(14)
+        }
     }
 
-    /// Live, and derived rather than stored — the design lists every selection
-    /// readout as computed.
-    private var selectionText: String {
-        let count = model.scannerSelection.count
-        guard count > 0 else { return "nothing selected yet" }
-        let noun = count == 1 ? "item" : "items"
-        return "\(count) \(noun) selected · \(ByteFormatting.string(model.selectedBytes))"
+    private var showsOperation: Bool {
+        model.isScanning || model.isCleaningUp || model.cleanupCompletion != nil
+    }
+
+    private var scanProgress: some View {
+        VStack(spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Scanning for cleanup items")
+                    .font(.system(size: 18, weight: .medium))
+                Spacer()
+                Text("\(model.scanProgress)%")
+                    .font(.mcRowValue)
+                    .foregroundStyle(Token.Text.secondary)
+                    .contentTransition(reduceMotion ? .identity : .numericText())
+            }
+            ProgressView(value: Double(model.scanProgress), total: 100)
+                .progressViewStyle(.linear)
+                .tint(Token.Text.primary)
+                .accessibilityLabel("Cleanup scan")
+                .accessibilityValue("\(model.scanProgress)%")
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.scanProgress)
+        .frame(maxWidth: 380)
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func resultEntrance(index: Int) -> ResultEntrance {
+        ResultEntrance(isVisible: resultsVisible, index: index, reduceMotion: reduceMotion)
+    }
+
+    private func listControls(_ results: ScanResults) -> some View {
+        let visible = categories(of: results, for: model.scanFilter)
+        let count = visible.reduce(0) { $0 + $1.entries.count }
+        return HStack(spacing: 12) {
+            MonochromeCheckbox(
+                title: "Select All",
+                detail: "\(count) \(count == 1 ? "item" : "items")",
+                state: model.hasSelectableItemsInCurrentView && !model.canSelectAllInCurrentView
+                    ? .on : .off,
+                isEnabled: !model.isBusyWithDisk
+                    && (model.hasSelectableItemsInCurrentView || model.hasSelectionInCurrentView)
+            ) { isOn in
+                if isOn { model.selectAllInCurrentView() }
+                else { model.deselectAllInCurrentView() }
+            }
+            .fixedSize()
+            Spacer()
+        }
+        .padding(.leading, 15)
+    }
+
+    private func completion(_ outcome: CleanupOutcome) -> some View {
+        HStack(spacing: 12) {
+            Text("\(ByteFormatting.string(outcome.removedBytes)) moved to Trash")
+                .font(.mcRowTitle)
+            if !outcome.failed.isEmpty {
+                Text("\(outcome.failed.count) items could not be removed.")
+                    .font(.mcCaption)
+                    .foregroundStyle(Token.Text.secondary)
+            }
+            Spacer()
+        }
     }
 
     // MARK: - Filter
 
-    /// Segmented, and sized to its labels rather than the page: this narrows a list,
-    /// it does not switch between three pages.
-    private var filterPicker: some View {
-        Picker("Show", selection: $model.scanFilter) {
+    /// Filters stay visible while the file list scrolls.
+    private func filterPicker(_ results: ScanResults) -> some View {
+        HStack(spacing: 8) {
             ForEach(AppModel.ScanFilter.allCases) { filter in
-                Text(filter.title).tag(filter)
+                filterPill(filter, results: results)
             }
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
-        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(model.isBusyWithDisk)
+    }
+
+    private func filterPill(_ filter: AppModel.ScanFilter, results: ScanResults) -> some View {
+        let isSelected = model.scanFilter == filter
+        let tint: Color = switch filter {
+        case .all: Token.textColor(.accent)
+        case .safeToRemove: Token.textColor(.green)
+        case .needsReview: Token.textColor(.orange)
+        }
+        let symbol = switch filter {
+        case .all: "square.grid.2x2"
+        case .safeToRemove: "checkmark.circle.fill"
+        case .needsReview: "questionmark.circle"
+        }
+        let size = ByteFormatting.string(bytes(in: filter, results: results))
+
+        return PageTabPill(
+            title: filter.title, symbol: symbol, detail: size,
+            isSelected: isSelected, tint: tint
+        ) { model.scanFilter = filter }
+    }
+
+    private func bytes(in filter: AppModel.ScanFilter, results: ScanResults) -> Int64 {
+        switch filter {
+        case .all: results.totalBytes
+        case .safeToRemove: results.safeToRemoveBytes
+        case .needsReview: results.needsReviewBytes
+        }
     }
 
     // MARK: - Sections
@@ -128,24 +251,21 @@ struct ScannerView: View {
                 .foregroundStyle(Token.Text.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 20)
+                .modifier(resultEntrance(index: 2))
         } else {
             outline(categories)
         }
     }
 
     private func outline(_ categories: [ScanCategoryResult]) -> some View {
-        GroupedBox {
-            VStack(spacing: 0) {
-                ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
-                    if index > 0 {
-                        Divider().foregroundStyle(Token.Fill.boxBorder)
-                    }
+        VStack(spacing: 10) {
+            ForEach(Array(categories.enumerated()), id: \.element.id) { index, category in
+                GroupedBox {
                     categorySection(category)
+                        .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
                 }
+                .modifier(resultEntrance(index: index + 2))
             }
-            // Without this the first and last rows' hover fill paints into the
-            // box's rounded corners and squares them off.
-            .clipShape(RoundedRectangle(cornerRadius: Token.Radius.box))
         }
     }
 
@@ -157,7 +277,7 @@ struct ScannerView: View {
             CategoryRow(
                 result: category,
                 isExpanded: isExpanded,
-                selectedBytes: model.selectedBytes(in: category.categoryID),
+                selectedBytes: model.selectedBytes(in: category.categoryID, filter: model.scanFilter),
                 onToggle: { toggle(category) }
             )
 
@@ -165,10 +285,13 @@ struct ScannerView: View {
                 FileTable(
                     entries: category.entries,
                     isSafeToRemove: category.isCountedSafe,
+                    showsSafeToRemoveBadges: model.scanFilter != .safeToRemove,
                     selection: $model.scannerSelection,
                     userDataRemovalOverrides: $model.userDataRemovalOverrides,
                     onUninstallApplication: { model.planAppUninstall($0.url) }
                 )
+                .id(model.scanFilter)
+                .disabled(model.isBusyWithDisk)
             }
         }
     }
@@ -184,137 +307,20 @@ struct ScannerView: View {
         }
     }
 
-    // MARK: - Empty state
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("Nothing scanned yet", systemImage: "magnifyingglass")
-        } description: {
-            Text("Scan for Junk measures caches, unused apps and large files. Nothing is removed without your approval.")
-        } actions: {
-            Button("Scan for Junk") { model.startScan() }
-                .buttonStyle(.borderedProminent)
-                // Large, so every empty state's call to action is the same capsule.
-                .controlSize(.large)
-                .disabled(model.isScanning)
-        }
-        .frame(maxWidth: .infinity, minHeight: 320)
-    }
 }
 
-// MARK: - Scan composition
+private struct ResultEntrance: ViewModifier {
+    var isVisible: Bool
+    var index: Int
+    var reduceMotion: Bool
 
-/// One honest part-to-whole view for the Scanner. The former row bars divided every
-/// category by the largest one, which made one row 100% by definition and duplicated
-/// the size column. Here every width and percentage uses the scan's actual total.
-private struct ScanCompositionSummary: View {
-    let results: ScanResults
-
-    @State private var hoveredCategory: CategoryID?
-    @Environment(\.colorScheme) private var colorScheme
-
-    private var segments: [ScanCategoryResult] {
-        results.categories.filter { $0.totalBytes > 0 }
-    }
-
-    private var totalBytes: Int64 {
-        segments.reduce(0) { $0 + $1.totalBytes }
-    }
-
-    private var hoveredSegment: ScanCategoryResult? {
-        guard let hoveredCategory else { return nil }
-        return segments.first { $0.categoryID == hoveredCategory }
-    }
-
-    /// Lift a hovered colour away from the surrounding surface in either appearance.
-    private var hoverLift: Double { colorScheme == .dark ? 0.12 : -0.10 }
-
-    var body: some View {
-        GroupedBox {
-            VStack(alignment: .leading, spacing: 11) {
-                HStack(spacing: 14) {
-                    Text("Reclaimable space")
-                        .font(.mcRowTitle)
-                        .foregroundStyle(Token.Text.primary)
-
-                    Spacer(minLength: 12)
-
-                    detail
-                }
-
-                GeometryReader { geometry in
-                    HStack(spacing: 0) {
-                        ForEach(segments) { segment in
-                            Rectangle()
-                                .fill(Token.color(segment.categoryID.color))
-                                .brightness(
-                                    hoveredCategory == segment.categoryID ? hoverLift : 0
-                                )
-                                .frame(width: segmentWidth(segment, in: geometry.size.width))
-                                .contentShape(Rectangle())
-                                .onHover { inside in
-                                    if inside {
-                                        hoveredCategory = segment.categoryID
-                                    } else if hoveredCategory == segment.categoryID {
-                                        hoveredCategory = nil
-                                    }
-                                }
-                                .accessibilityLabel(segment.categoryID.displayName)
-                                .accessibilityValue(
-                                    "\(ByteFormatting.string(segment.totalBytes)), "
-                                    + "\(percentageText(for: segment)) of the scan"
-                                )
-                        }
-                    }
-                    .clipShape(Capsule())
-                }
-                .frame(height: Token.Size.capacityBar)
-                .background(Token.Fill.control, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
-                )
-            }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 12)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        if let segment = hoveredSegment {
-            HStack(spacing: 7) {
-                CategoryDot(color: segment.categoryID.color, size: 8)
-                Text(segment.categoryID.displayName)
-                    .font(.mcRowTitle)
-                    .foregroundStyle(Token.Text.primary)
-                Text(
-                    "\(ByteFormatting.string(segment.totalBytes)) · "
-                    + percentageText(for: segment)
-                )
-                .font(.mcRowValue)
-                .foregroundStyle(Token.Text.secondary)
-            }
-            .lineLimit(1)
-            .transition(.opacity)
-        } else {
-            Text("\(ByteFormatting.string(totalBytes)) total")
-                .font(.mcRowValue)
-                .foregroundStyle(Token.Text.secondary)
-                .lineLimit(1)
-        }
-    }
-
-    private func segmentWidth(_ segment: ScanCategoryResult, in available: CGFloat) -> CGFloat {
-        guard totalBytes > 0 else { return 0 }
-        return available * CGFloat(Double(segment.totalBytes) / Double(totalBytes))
-    }
-
-    private func percentageText(for segment: ScanCategoryResult) -> String {
-        guard totalBytes > 0, segment.totalBytes > 0 else { return "0%" }
-        let percentage = Double(segment.totalBytes) / Double(totalBytes) * 100
-        if percentage < 1 { return "<1%" }
-        return "\(Int(percentage.rounded()))%"
+    func body(content: Content) -> some View {
+        content
+            .opacity(isVisible ? 1 : 0)
+            .offset(y: isVisible || reduceMotion ? 0 : 6)
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.24).delay(Double(min(index, 7)) * 0.035),
+                value: isVisible
+            )
     }
 }

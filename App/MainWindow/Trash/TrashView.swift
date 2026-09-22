@@ -23,21 +23,13 @@ struct TrashView: View {
                     findRequest: model.findRequest,
                     onPutBack: { item in Task { await model.putBack(item) } }
                 )
+            } else if hasLoaded {
+                unreadableNote
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if hasLoaded {
-                            unreadableNote
-                        } else {
-                            loadingNote
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 4)
-                    .padding(.bottom, 22)
-                }
+                loadingNote
             }
         }
+        .operationResultAnimation(isRunning: !hasLoaded && model.trashSummary == nil)
         .task {
             await model.loadTrash()
             hasLoaded = true
@@ -45,22 +37,7 @@ struct TrashView: View {
     }
 
     private var loadingNote: some View {
-        GroupedBox {
-            VStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Reading the Trash…")
-                    .font(.mcControlLabel)
-                    .foregroundStyle(Token.Text.secondary)
-                Text("Every item is measured on disk, so a Trash with large folders in it takes a moment.")
-                    .font(.mcSubtitle)
-                    .foregroundStyle(Token.Text.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 380)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 40)
-        }
+        PageProgressView(title: "Reading the Trash")
     }
 
     private var unreadableNote: some View {
@@ -78,7 +55,7 @@ struct TrashView: View {
                 let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
                 NSWorkspace.shared.open(url)
             }
-            .buttonStyle(SecondaryButtonStyle())
+            .buttonStyle(PageActionButtonStyle())
         }
         .frame(maxWidth: .infinity, minHeight: 280)
     }
@@ -162,7 +139,7 @@ private struct TrashContent: View {
                         }
                     }
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, Token.Size.pageGutter)
                 .padding(.top, 14)
                 .padding(.bottom, 22)
             }
@@ -185,11 +162,9 @@ private struct TrashContent: View {
 
     private var summaryFigures: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Trash")
-                .mcEyebrowStyle()
-
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(ByteFormatting.string(summary.totalBytes))
+                    .animatedTotal(summary.totalBytes)
                     .font(.mcSecondaryHero)
                     .mcTracked(-0.26)   // -0.01em
                     .foregroundStyle(Token.Text.emphasis)

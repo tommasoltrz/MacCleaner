@@ -9,14 +9,13 @@ import ScoloCore
 /// to "fix" space that is simply unreadable.
 ///
 /// `isMeasuring` is the measuring state. The volume totals come from `diskutil` and
-/// are always current, so the eyebrow and hero stay real; only what the walk
+/// are always current, so the hero stays real; only what the walk
 /// actually produces goes to bones. Category names are stable across measurements,
 /// so when a previous breakdown is in hand the names and dots stay put and only the
 /// track and each figure pulse; a nil `breakdown` — the first run, nothing cached —
 /// drops the whole legend to bones.
 struct CapacityCard: View {
 
-    private let eyebrow: String
     private let capacityBytes: Int64
     private let usedBytes: Int64
     private let freeBytes: Int64
@@ -25,7 +24,6 @@ struct CapacityCard: View {
 
     init(volume: VolumeInfo, breakdown: StorageBreakdown?, isMeasuring: Bool = false) {
         self.init(
-            eyebrow: volume.eyebrow,
             capacityBytes: volume.capacityBytes,
             usedBytes: volume.usedBytes,
             freeBytes: volume.freeBytes,
@@ -37,14 +35,12 @@ struct CapacityCard: View {
     /// Figures directly. `VolumeInfo` has no public initializer, so a preview outside
     /// `ScoloCore` has no other way in.
     init(
-        eyebrow: String,
         capacityBytes: Int64,
         usedBytes: Int64,
         freeBytes: Int64,
         breakdown: StorageBreakdown?,
         isMeasuring: Bool = false
     ) {
-        self.eyebrow = eyebrow
         self.capacityBytes = capacityBytes
         self.usedBytes = usedBytes
         self.freeBytes = freeBytes
@@ -55,19 +51,6 @@ struct CapacityCard: View {
     var body: some View {
         GroupedBox(radius: Token.Radius.card) {
             VStack(alignment: .leading, spacing: 0) {
-                // No "Measure Again" beside this. Scan for Junk starts a full
-                // breakdown measurement as its first act, in parallel with the
-                // scanners, and the disk is measured at launch and after every
-                // removal besides — so a second button could only ever do less
-                // than the one already in the toolbar. (Preferences › Advanced
-                // still has "Rebuild the size index", which is a different thing:
-                // it throws the cache away first.)
-                Text(eyebrow)
-                    .mcEyebrowStyle()
-
-                // No gap: SwiftUI's line boxes already carry the leading that the
-                // design's `line-height: 1.0` boxes leave out, which is the 7px the
-                // handoff puts between these two lines.
                 hero
 
                 if let breakdown, !isMeasuring {
@@ -99,7 +82,7 @@ struct CapacityCard: View {
                 }
             }
             .padding(.vertical, 20)
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 20)
             // The card is as wide as the content column, whatever the window size.
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -111,6 +94,7 @@ struct CapacityCard: View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(ByteFormatting.string(usedBytes))
+                    .animatedTotal(usedBytes)
                     .font(.mcHero)
                     .mcTracked(-0.68)   // -0.02em
                     .foregroundStyle(Token.Text.emphasis)
@@ -128,8 +112,10 @@ struct CapacityCard: View {
 
             VStack(alignment: .trailing, spacing: 2) {
                 Text("Available")
-                    .mcEyebrowStyle()
+                    .font(.mcSubtitle)
+                    .foregroundStyle(Token.Text.tertiary)
                 Text(ByteFormatting.string(freeBytes))
+                    .animatedTotal(freeBytes)
                     .font(.mcSecondaryHero)
                     .mcTracked(-0.26)   // -0.01em
                     .foregroundStyle(Token.textColor(.green))
@@ -456,7 +442,6 @@ private extension Font {
     let mb: (Double) -> Int64 = { Int64($0 * Double(ByteFormatting.bytesPerMB)) }
 
     CapacityCard(
-        eyebrow: "Macintosh HD · APFS · Encrypted",
         capacityBytes: gb(228.27),
         usedBytes: gb(162.00),
         freeBytes: gb(66.27),

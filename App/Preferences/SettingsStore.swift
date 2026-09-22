@@ -137,7 +137,8 @@ final class SettingsStore {
         static let scanSchedule = ScanSchedule.weekly
         static let idleOnly = true
         static let warnBelowGB = 20
-        static let confirmBeforeCleanup = true
+        static let confirmBeforeCleanup = false
+        static let keepReceipt = true
 
         /// One category ships off. Docker needs Docker Desktop running, so on by
         /// default it would mostly render as an unavailable row.
@@ -195,6 +196,7 @@ final class SettingsStore {
         static let iCloudPlan = "settings.iCloudPlan"
         static let categoryEnabled = "settings.categoryEnabled"
         static let confirmBeforeCleanup = "settings.confirmBeforeCleanup"
+        static let keepReceipt = "settings.keepReceipt"
         static let exclusions = "settings.exclusions"
     }
 
@@ -264,6 +266,10 @@ final class SettingsStore {
 
     var confirmBeforeCleanup: Bool {
         didSet { defaults.set(confirmBeforeCleanup, forKey: Key.confirmBeforeCleanup) }
+    }
+
+    var keepReceipt: Bool {
+        didSet { defaults.set(keepReceipt, forKey: Key.keepReceipt) }
     }
 
     // MARK: Exclusions
@@ -365,6 +371,7 @@ final class SettingsStore {
         )
 
         self.confirmBeforeCleanup = bool(Key.confirmBeforeCleanup, or: Defaults.confirmBeforeCleanup)
+        self.keepReceipt = bool(Key.keepReceipt, or: Defaults.keepReceipt)
 
         let storedExclusions = defaults.data(forKey: Key.exclusions)
             .flatMap { try? JSONDecoder().decode([ExclusionRule].self, from: $0) }
@@ -398,6 +405,7 @@ final class SettingsStore {
             uniqueKeysWithValues: CategoryID.allCases.map { ($0, Defaults.categoryEnabled($0)) }
         )
         confirmBeforeCleanup = Defaults.confirmBeforeCleanup
+        keepReceipt = Defaults.keepReceipt
         exclusions = Defaults.exclusions
     }
 

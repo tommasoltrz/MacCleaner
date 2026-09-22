@@ -2,15 +2,10 @@ import AppKit
 import SwiftUI
 import ScoloCore
 
-/// A dedicated, review-first application uninstaller.
-///
-/// The page opens on the installed applications; choosing one (or dropping an
-/// `.app`) starts its review. Core then attributes only exact
-/// bundle-owned or explicitly curated paths. The inventory is read-only: a dedicated
-/// uninstall always includes every verified related file, and the final confirmation
-/// warns about included user data.
+/// Removes selected applications after checking their related files and ownership.
 struct AppUninstallerView: View {
     @Bindable var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var isDropTargeted = false
     @State private var searchText = ""
@@ -57,6 +52,7 @@ struct AppUninstallerView: View {
                 emptyState
             }
         }
+        .operationResultAnimation(isRunning: model.isPlanningAppUninstall)
         .dropDestination(for: URL.self) { urls, _ in
             guard let application = urls.first(where: {
                 $0.pathExtension.lowercased() == "app"
@@ -68,12 +64,7 @@ struct AppUninstallerView: View {
 
     // MARK: Installed applications
 
-    /// The page opens on what is installed. Clicking a card ticks it; the chevron in
-    /// its corner opens that application's review. A tick is a choice of *which*
-    /// applications, never consent to what goes with them: several ticked
-    /// applications are each planned and listed in a batch review before the sheet.
-    /// Dropping an `.app` still works, for one inside a vendor folder. The page has
-    /// no footer: its actions sit in this header, beside the cards they act on.
+    /// Cards select applications. Each chevron opens an optional file review.
     private var emptyState: some View {
         VStack(spacing: 0) {
             libraryHeader
@@ -121,11 +112,11 @@ struct AppUninstallerView: View {
                             }
                             // One move, when the order changes: the measured sort
                             // arriving, a new sort order, a search narrowing.
-                            .animation(.smooth(duration: 0.4), value: shown.map(\.id))
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: shown.map(\.id))
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Token.Size.pageGutter)
                 .padding(.vertical, 14)
             }
             .overlay {
@@ -154,39 +145,31 @@ struct AppUninstallerView: View {
 
     // MARK: Leftovers
 
-    @ViewBuilder
-    private var leftoversSummaryContent: some View {
-        if model.selectedLeftoverIdentifiers.isEmpty {
-            Text(leftoversSummary)
+    private var leftoversSelectionControls: some View {
+        let identifiers = Set(model.applicationLeftovers?.groups.map(\.bundleIdentifier) ?? [])
+        let selected = identifiers.intersection(model.selectedLeftoverIdentifiers)
+        return HStack(spacing: 12) {
+            MonochromeCheckbox(
+                title: "Select All",
+                detail: "\(identifiers.count) \(identifiers.count == 1 ? "application" : "applications")",
+                state: !identifiers.isEmpty && identifiers.isSubset(of: selected) ? .on : .off,
+                isEnabled: !identifiers.isEmpty && !model.isBusyWithDisk && !model.isLoadingApplicationLeftovers
+            ) { isOn in
+                if isOn { model.selectedLeftoverIdentifiers = identifiers }
+                else { model.selectedLeftoverIdentifiers.removeAll() }
+            }
+            .fixedSize()
+            Spacer(minLength: 12)
+            Text("\(selected.count) selected · \(ByteFormatting.string(model.selectedLeftoverBytes))")
                 .font(.mcCaption)
                 .foregroundStyle(Token.Text.secondary)
-                .lineLimit(1)
-                .help("Files whose application is no longer installed. "
-                    + "They are that application's settings and data: nothing puts them back.")
-        } else {
-            Text("\(model.selectedLeftoverIdentifiers.count) selected · "
-                 + ByteFormatting.string(model.selectedLeftoverBytes))
-                .font(.mcCaption)
-                .foregroundStyle(Token.Text.secondary)
-                .lineLimit(1)
-            Button("Deselect All") { model.selectedLeftoverIdentifiers.removeAll() }
-                .buttonStyle(SecondaryButtonStyle())
+                .animatedTotal(model.selectedLeftoverBytes)
                 .fixedSize()
         }
-    }
-
-    @ViewBuilder
-    private var leftoversActions: some View {
-        // Nothing: removing is the toolbar's button now, beside every other view's.
-        EmptyView()
-    }
-
-    private var leftoversSummary: String {
-        guard let leftovers = model.applicationLeftovers else { return "Looking for leftovers…" }
-        let count = leftovers.groups.count
-        guard count > 0 else { return "No leftovers" }
-        return "\(count) removed \(count == 1 ? "application" : "applications") · "
-            + ByteFormatting.string(leftovers.totalBytes)
+        .padding(.leading, 13)
+        .padding(.horizontal, Token.Size.pageGutter)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
     }
 
     @ViewBuilder
@@ -250,12 +233,13 @@ struct AppUninstallerView: View {
             .buttonStyle(.plain)
             .help("\(group.items.count) files")
 
-            Toggle("", isOn: Binding(
-                get: { isSelected },
-                set: { _ in model.toggleLeftoverSelection(group.bundleIdentifier) }
-            ))
-            .toggleStyle(.checkbox)
-            .labelsHidden()
+            MonochromeCheckbox(
+                title: "Select \(group.displayName ?? group.bundleIdentifier)",
+                state: isSelected ? .on : .off,
+                isEnabled: !model.isBusyWithDisk && !model.isLoadingApplicationLeftovers,
+                showsTitle: false
+            ) { _ in model.toggleLeftoverSelection(group.bundleIdentifier) }
+            .fixedSize()
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -289,27 +273,35 @@ struct AppUninstallerView: View {
         .frame(height: 46)
         .contentShape(Rectangle())
         .hoverHighlight()
-        .onTapGesture { model.toggleLeftoverSelection(group.bundleIdentifier) }
+        .onTapGesture {
+            guard !model.isBusyWithDisk, !model.isLoadingApplicationLeftovers else { return }
+            model.toggleLeftoverSelection(group.bundleIdentifier)
+        }
     }
 
     private var libraryHeader: some View {
-        PageHeader {
-            Picker("Show", selection: $model.uninstallerTab) {
-                ForEach(AppModel.UninstallerTab.allCases, id: \.self) {
-                    Text($0.rawValue).tag($0)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                ForEach(AppModel.UninstallerTab.allCases, id: \.self) { tab in
+                    PageTabPill(
+                        title: tab.rawValue,
+                        symbol: tab == .installed ? "app" : "archivebox",
+                        isSelected: model.uninstallerTab == tab
+                    ) { model.uninstallerTab = tab }
+                }
+                Spacer()
+            }
+            .padding(Token.Size.pageGutter)
+            if tab == .leftovers {
+                leftoversSelectionControls
+            } else {
+                PageHeader {
+                    installedSummaryContent
+                } trailing: {
+                    installedActions
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-
-            if tab == .leftovers { leftoversSummaryContent } else { installedSummaryContent }
-        } trailing: {
-            if tab == .leftovers { leftoversActions } else { installedActions }
         }
-        // Fixed, so the first tick does not push the grid down by the difference
-        // between a line of caption text and a button.
-        .frame(height: Self.headerControlHeight + 20)
     }
 
     @ViewBuilder
@@ -350,7 +342,7 @@ struct AppUninstallerView: View {
     }
 
     /// Tall enough for the header's tallest control, a regular bordered button.
-    private static let headerControlHeight: CGFloat = 24
+    private static let headerControlHeight: CGFloat = 38
 
     /// The total appears only once every card has its figure; a sum of the bundles
     /// measured so far would read as the whole and grow under the user's eyes.
@@ -386,20 +378,10 @@ struct AppUninstallerView: View {
     /// uninstall itself is a removal, and removals are shown by
     /// the window-wide `ActivityOverlay`; a second spinner here said the same thing.
     private var busyState: some View {
-        VStack(spacing: 14) {
-            Spacer()
-            ProgressView().controlSize(.large)
-            Text("Finding related files…")
-                .font(.mcBody)
-                .foregroundStyle(Token.Text.secondary)
-            if let detail = model.appUninstallPlanningDetail {
-                Text(detail)
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.tertiary)
-            }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        PageProgressView(
+            title: "Finding related files",
+            detail: model.appUninstallPlanningDetail
+        )
     }
 
     // MARK: Planning one application
@@ -438,9 +420,8 @@ struct AppUninstallerView: View {
                 // An application-only or Homebrew plan carries a longer label and
                 // will still shift; the ordinary one does not.
                 Button("Uninstall") {}
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.red)))
                     .controlSize(.regular)
-                    .tint(Token.color(.red))
                     .disabled(true)
                     .fixedSize()
             }
@@ -463,7 +444,7 @@ struct AppUninstallerView: View {
                     }
                 }
                 .skeletonPulse()
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Token.Size.pageGutter)
                 .padding(.vertical, 14)
             }
             .scrollDisabled(true)
@@ -534,7 +515,7 @@ struct AppUninstallerView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Token.Size.pageGutter)
                 .padding(.vertical, 14)
             }
 
@@ -562,7 +543,7 @@ struct AppUninstallerView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(package.uninstallCommand, forType: .string)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.regular)
                 .fixedSize()
                 .help(package.uninstallCommand)
@@ -571,9 +552,8 @@ struct AppUninstallerView: View {
                 // repeat it.
                 Button(plan.isApplicationOnly ? "Uninstall Application" : "Uninstall",
                        action: model.requestAppUninstall)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.red)))
                     .controlSize(.regular)
-                    .tint(Token.color(.red))
                     .disabled(model.activity != nil)
                     .fixedSize()
             }
@@ -830,7 +810,7 @@ struct AppUninstallerView: View {
             }
 
             Button("Uninstall Another Application", action: model.resetAppUninstall)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.large)
                 .padding(.top, 4)
             Spacer()
@@ -862,7 +842,7 @@ struct AppUninstallerView: View {
                         setAsideBox(review.setAside, title: "Not part of this uninstall")
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Token.Size.pageGutter)
                 .padding(.vertical, 14)
             }
 
@@ -879,18 +859,17 @@ struct AppUninstallerView: View {
             Spacer()
 
             Button("Back", action: model.resetAppUninstall)
-                .buttonStyle(SecondaryButtonStyle())
+                .buttonStyle(PageActionButtonStyle())
                 .fixedSize()
             Button("Uninstall · \(ByteFormatting.string(review.totalBytes))",
                    action: model.requestBatchUninstall)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.red)))
                 .controlSize(.regular)
-                .tint(Token.color(.red))
                 .disabled(review.plans.isEmpty || model.activity != nil)
                 .fixedSize()
         }
         .frame(height: Self.headerControlHeight)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, Token.Size.pageGutter)
         .padding(.vertical, 10)
     }
 
@@ -991,7 +970,7 @@ struct AppUninstallerView: View {
                         .frame(maxWidth: 460)
                 }
                 Button("Done", action: model.resetAppUninstall)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                     .controlSize(.large)
                     .padding(.top, 4)
             }
@@ -1041,6 +1020,7 @@ private struct ApplicationCard: View {
     let toggle: () -> Void
     let open: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isChevronHovered = false
 
     var body: some View {
@@ -1068,7 +1048,7 @@ private struct ApplicationCard: View {
                     }
                 }
                 .frame(height: 14)
-                .animation(.easeOut(duration: 0.25), value: bytes == nil)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: bytes == nil)
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
@@ -1091,7 +1071,7 @@ private struct ApplicationCard: View {
             }
             .contentShape(shape)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CardPressButtonStyle())
         .accessibilityLabel(bytes.map { "\(application.name), \(ByteFormatting.string($0))" }
             ?? application.name)
         .accessibilityAddTraits(isSelected ? .isSelected : [])

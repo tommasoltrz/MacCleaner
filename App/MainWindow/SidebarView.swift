@@ -45,71 +45,11 @@ struct SidebarView: View {
     private var list: some View {
         List {
             ForEach(AppModel.View.sidebarSections) { section in
-                Section(section.title) {
-                    ForEach(section.views) { view in
-                        Button {
-                            select(view)
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(view.title)
-                                        // Neutral, not accent. A selected row is
-                                        // marked by its fill and by the weight of
-                                        // its label; turning the whole label blue
-                                        // said "chosen" a second time, louder.
-                                        .font(.system(size: 13,
-                                                      weight: isSelected(view) ? .medium : .regular))
-                                        .foregroundStyle(Token.Text.primary)
-                                    Spacer()
-                                    if let count = count(for: view) {
-                                        Text(count, format: .number)
-                                            .font(.mcSidebarCount)
-                                            .foregroundStyle(Token.Text.tertiary)
-                                    }
-                                }
-                            } icon: {
-                                Image(systemName: view.symbol)
-                                    // 18pt in the expanded sidebar. The scale is
-                                    // pinned because a sidebar list sets one through
-                                    // the environment and it multiplies whatever the
-                                    // font says.
-                                    .font(.system(size: 18, weight: .regular))
-                                    .imageScale(.medium)
-                                    .frame(width: 22, alignment: .leading)
-                                    // Outline at rest, solid when chosen: the filled
-                                    // glyph is most of what makes a selected row read
-                                    // brighter, and it does it without colour.
-                                    .symbolVariant(isSelected(view) ? .fill : .none)
-                                    .foregroundStyle(Token.Text.primary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        // Not `.plain`: that style fades the label while the mouse is
-                        // held, and a source list has no pressed state at all.
-                        .buttonStyle(SidebarRowButtonStyle())
-                        // Zero minimum duration, so this is a press recogniser rather than
-                        // a long press: it runs the instant the mouse goes down. A `Button`
-                        // acts on mouse *up*, which left the row looking stuck until the
-                        // release; Finder switches on the way down, and so does this. The
-                        // `Button`'s own action stays for keyboard and assistive
-                        // activation, where there is no mouse to go down. Scrolling is
-                        // untouched — a wheel or a two-finger swipe is not a press — and
-                        // dragging more than 4pt away only ends a selection already made.
-                        .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
-                            if isPressing { select(view) }
-                        } perform: {}
-                        .frame(height: Token.Size.sidebarRow)
-                        .listRowInsets(EdgeInsets())
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(
-                            // Inset from the panel's edge, so the pill floats inside
-                            // it instead of running edge to edge.
-                            RoundedRectangle(cornerRadius: Token.Radius.sidebarRow,
-                                             style: .continuous)
-                                .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
-                                .padding(.horizontal, Token.Size.sidebarRowInset)
-                        )
-                        .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
+                if section.title.isEmpty {
+                    sidebarRows(section.views)
+                } else {
+                    Section(section.title) {
+                        sidebarRows(section.views)
                     }
                 }
             }
@@ -123,6 +63,72 @@ struct SidebarView: View {
         // The panel is already a surface. A sidebar list's own material inside it
         // would be two surfaces claiming one rectangle.
         .scrollContentBackground(.hidden)
+    }
+
+    /// Rows without a group title do not reserve space for a header.
+    private func sidebarRows(_ views: [AppModel.View]) -> some View {
+        ForEach(views) { view in
+            Button {
+                select(view)
+            } label: {
+                Label {
+                    HStack {
+                        Text(view.title)
+                            // Neutral, not accent. A selected row is
+                            // marked by its fill and by the weight of
+                            // its label; turning the whole label blue
+                            // said "chosen" a second time, louder.
+                            .font(.system(size: 13,
+                                          weight: isSelected(view) ? .medium : .regular))
+                            .foregroundStyle(Token.Text.primary)
+                        Spacer()
+                        if let count = count(for: view) {
+                            Text(count, format: .number)
+                                .font(.mcSidebarCount)
+                                .foregroundStyle(Token.Text.tertiary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: isSelected(view) ? view.selectedSymbol : view.symbol)
+                        // 18pt in the expanded sidebar. The scale is
+                        // pinned because a sidebar list sets one through
+                        // the environment and it multiplies whatever the
+                        // font says.
+                        .font(.system(size: 18, weight: .regular))
+                        .imageScale(.medium)
+                        .frame(width: 22, alignment: .leading)
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(Token.Text.primary)
+                }
+                .contentShape(Rectangle())
+            }
+            // Not `.plain`: that style fades the label while the mouse is
+            // held, and a source list has no pressed state at all.
+            .buttonStyle(SidebarRowButtonStyle())
+            // Zero minimum duration, so this is a press recogniser rather than
+            // a long press: it runs the instant the mouse goes down. A `Button`
+            // acts on mouse *up*, which left the row looking stuck until the
+            // release; Finder switches on the way down, and so does this. The
+            // `Button`'s own action stays for keyboard and assistive
+            // activation, where there is no mouse to go down. Scrolling is
+            // untouched — a wheel or a two-finger swipe is not a press — and
+            // dragging more than 4pt away only ends a selection already made.
+            .onLongPressGesture(minimumDuration: 0, maximumDistance: 4) { isPressing in
+                if isPressing { select(view) }
+            } perform: {}
+            .frame(height: Token.Size.sidebarRow)
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(
+                // Inset from the panel's edge, so the pill floats inside
+                // it instead of running edge to edge.
+                RoundedRectangle(cornerRadius: Token.Radius.sidebarRow,
+                                 style: .continuous)
+                    .fill(isSelected(view) ? Token.Fill.sidebarSelection : .clear)
+                    .padding(.horizontal, Token.Size.sidebarRowInset)
+            )
+            .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
+        }
     }
 
     /// Moves to a view, or does nothing if the app is already showing it or already on

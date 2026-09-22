@@ -1,6 +1,140 @@
 import SwiftUI
 import ScoloCore
 
+/// Gives cards immediate feedback while the mouse button is held.
+struct CardPressButtonStyle: ButtonStyle {
+    var cornerRadius: CGFloat = Token.Radius.card
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Token.Text.primary.opacity(configuration.isPressed ? 0.08 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(
+                reduceMotion || configuration.isPressed ? nil : .easeOut(duration: 0.12),
+                value: configuration.isPressed
+            )
+    }
+}
+
+/// Animates the removal action without delaying its disabled state.
+struct HeaderRemovalButtonStyle: ButtonStyle {
+    var tint: Color
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 12)
+            .frame(minHeight: 38)
+            .foregroundStyle(isEnabled ? Color.white : Token.Text.disabled)
+            .background(isEnabled ? tint : Token.Fill.controlDisabled, in: Capsule())
+            .contentShape(Capsule())
+            .opacity(isEnabled && configuration.isPressed ? 0.85 : 1)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isEnabled)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+}
+
+/// Keeps native checkbox behavior with colors that follow the current theme.
+struct MonochromeCheckbox: NSViewRepresentable {
+    var title: String
+    var detail: String? = nil
+    var state: NSControl.StateValue
+    var isEnabled = true
+    var showsTitle = true
+    var isCompact = false
+    var onChange: (Bool) -> Void
+    @Environment(\.isEnabled) private var environmentEnabled
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.cell = MonochromeCheckboxCell(textCell: "")
+        button.setButtonType(.switch)
+        button.allowsMixedState = true
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.toggle)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        button.title = showsTitle ? title : ""
+        button.imagePosition = showsTitle ? .imageLeading : .imageOnly
+        button.setAccessibilityLabel(title)
+        button.controlSize = isCompact ? .small : .regular
+        button.font = .systemFont(ofSize: 14, weight: .medium)
+        if showsTitle, let detail {
+            let label = NSMutableAttributedString(string: title, attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .medium),
+                .foregroundColor: NSColor.labelColor
+            ])
+            label.append(NSAttributedString(string: "   " + detail, attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .regular),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]))
+            button.attributedTitle = label
+            button.setAccessibilityLabel("\(title), \(detail)")
+        }
+        button.state = state
+        button.isEnabled = isEnabled && environmentEnabled
+        button.invalidateIntrinsicContentSize()
+        button.needsDisplay = true
+        context.coordinator.onChange = { onChange(state != .on) }
+    }
+
+    final class Coordinator: NSObject {
+        var onChange: (() -> Void)?
+
+        @objc func toggle(_ sender: NSButton) { onChange?() }
+    }
+}
+
+private final class MonochromeCheckboxCell: NSButtonCell {
+    override func drawImage(_ image: NSImage, withFrame frame: NSRect, in controlView: NSView) {
+        let dark = controlView.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let ink: NSColor = dark ? .white : .black
+        let opposite: NSColor = dark ? .black : .white
+        let alpha: CGFloat = isEnabled ? (isHighlighted ? 0.75 : 1) : 0.35
+        let side: CGFloat = controlSize == .small ? 12 : 15
+        let box = NSRect(x: frame.midX - side / 2, y: frame.midY - side / 2,
+                         width: side, height: side)
+        let shape = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+        if state == .off {
+            ink.withAlphaComponent(0.06 * alpha).setFill()
+            shape.fill()
+            ink.withAlphaComponent(0.45 * alpha).setStroke()
+            shape.lineWidth = 1
+            shape.stroke()
+        } else {
+            ink.withAlphaComponent(alpha).setFill()
+            shape.fill()
+            let mark = NSBezierPath()
+            func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+                NSPoint(x: box.minX + side * x,
+                        y: box.minY + side * (controlView.isFlipped ? y : 1 - y))
+            }
+            if state == .mixed {
+                mark.move(to: point(0.25, 0.5))
+                mark.line(to: point(0.75, 0.5))
+            } else {
+                mark.move(to: point(0.23, 0.51))
+                mark.line(to: point(0.43, 0.72))
+                mark.line(to: point(0.78, 0.28))
+            }
+            opposite.withAlphaComponent(alpha).setStroke()
+            mark.lineWidth = 1.8
+            mark.lineCapStyle = .round
+            mark.lineJoinStyle = .round
+            mark.stroke()
+        }
+    }
+}
+
 // MARK: - Grouped box
 
 /// The design's grouped box: a rounded, hairline-bordered container.
@@ -85,52 +219,52 @@ struct SidebarRowButtonStyle: ButtonStyle {
     }
 }
 
-/// Secondary button — the design's gradient-filled control with a specular top edge.
+/// A compact action for controls inside cards and rows.
 struct SecondaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.mcControlLabel)
-            .foregroundStyle(Token.Text.primary)
+            .foregroundStyle(isEnabled ? Token.Text.primary : Token.Text.disabled)
             .padding(.horizontal, 12)
-            .frame(height: Token.Size.control)
+            .frame(minHeight: 28)
             .background(
-                isHovering ? Token.Fill.controlHover : Token.Fill.control,
-                in: RoundedRectangle(cornerRadius: Token.Radius.control)
+                isEnabled ? (isHovering ? Token.Fill.controlHover : Token.Fill.control) : Token.Fill.controlDisabled,
+                in: Capsule()
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: Token.Radius.control)
-                    .strokeBorder(Token.Fill.controlBorder, lineWidth: Token.hairline)
-            )
-            // Pressing darkens in both appearances. In light that is the platform's
-            // own pressed state; in dark it is the design's.
-            .brightness(configuration.isPressed ? -0.05 : 0)
-            .onHover { isHovering = $0 }
+            .contentShape(Capsule())
+            .opacity(isEnabled && configuration.isPressed ? 0.8 : 1)
+            .onHover { isHovering = isEnabled && $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isEnabled)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
     }
 }
 
 /// Destructive button — red at low alpha with a tinted label, per the design's
 /// Empty Trash and Reset controls.
 struct DestructiveButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.mcControlLabel.weight(.medium))
-            .foregroundStyle(Token.Text.destructive)
+            .foregroundStyle(isEnabled ? Token.Text.destructive : Token.Text.disabled)
             .padding(.horizontal, 14)
             .frame(height: 26)
             .background(
-                Token.color(.red).opacity(isHovering ? 0.26 : 0.16),
+                isEnabled ? Token.color(.red).opacity(isHovering ? 0.26 : 0.16) : Token.Fill.controlDisabled,
                 in: RoundedRectangle(cornerRadius: Token.Radius.control)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Token.Radius.control)
-                    .strokeBorder(Token.color(.red).opacity(0.40), lineWidth: Token.hairline)
+                    .strokeBorder(isEnabled ? Token.color(.red).opacity(0.40) : .clear, lineWidth: Token.hairline)
             )
-            .brightness(configuration.isPressed ? -0.05 : 0)
-            .onHover { isHovering = $0 }
+            .brightness(isEnabled && configuration.isPressed ? -0.05 : 0)
+            .onHover { isHovering = isEnabled && $0 }
     }
 }
 
@@ -364,7 +498,9 @@ extension View {
     /// and the other did not, which made the pair differ in both width and height
     /// for no reason a reader could see.
     func toolbarButtonLabel() -> some View {
-        padding(.vertical, 1).padding(.horizontal, 8)
+        font(.system(size: 14, weight: .medium))
+            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
     }
 }
 
@@ -515,5 +651,169 @@ struct WindowDragHandle: NSViewRepresentable {
                 window.performDrag(with: event)
             }
         }
+    }
+}
+
+/// Uses the same action size and response across pages.
+struct PageActionButtonStyle: ButtonStyle {
+    var tint: Color? = nil
+    var compact = false
+    var foreground: Color? = nil
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.modifier(PageActionSurface(
+            tint: tint, compact: compact, isPressed: configuration.isPressed,
+            foreground: foreground
+        ))
+    }
+}
+
+/// Gives buttons and menus the same size, colors, and hover response.
+struct PageActionSurface: ViewModifier {
+    var tint: Color? = nil
+    var compact = false
+    var isPressed = false
+    var foreground: Color? = nil
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: compact ? 12 : 14, weight: .medium))
+            .padding(.horizontal, compact ? 12 : 20)
+            .frame(minHeight: compact ? 28 : 38)
+            .foregroundStyle(isEnabled ? (foreground ?? (tint == nil ? Token.Text.primary : Color.white)) : Token.Text.disabled)
+            .background(isEnabled ? (tint ?? (isHovering ? Token.Fill.controlHover : Token.Fill.control)) : Token.Fill.controlDisabled, in: Capsule())
+            .contentShape(Capsule())
+            .opacity(isEnabled && isPressed ? 0.8 : 1)
+            .onHover { isHovering = isEnabled && $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isEnabled)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
+    }
+}
+
+/// A separate pill for each page filter or presentation.
+struct PageTabPill: View {
+    let title: String
+    let symbol: String
+    var detail: String? = nil
+    let isSelected: Bool
+    var tint: Color = Token.textColor(.accent)
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol).accessibilityHidden(true)
+                Text(title)
+                if let detail {
+                    Text(detail).monospacedDigit().opacity(isSelected ? 1 : 0.75)
+                }
+            }
+            .font(.mcRowTitle)
+            .foregroundStyle(isSelected ? tint : Token.Text.secondary)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(isSelected ? tint.opacity(0.12) : Token.Fill.control, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(
+                    isSelected ? tint.opacity(0.3) : Token.Fill.controlBorder,
+                    lineWidth: Token.hairline
+                )
+            }
+            .contentShape(Capsule())
+            .opacity(isEnabled ? 1 : 0.5)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(detail ?? "")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelected)
+    }
+}
+
+/// Shows progress in the content area with an optional stop action.
+struct PageProgressView: View {
+    let title: String
+    var detail: String? = nil
+    var progress: Double? = nil
+    var onStop: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text(title)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Token.Text.primary)
+            if let detail {
+                Text(detail)
+                    .font(.mcSubtitle)
+                    .foregroundStyle(Token.Text.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            ProgressView(value: progress)
+                .progressViewStyle(.linear)
+                .tint(Token.Text.primary)
+                .accessibilityLabel(title)
+            if let onStop {
+                Button(action: onStop) { Label("Stop", systemImage: "stop.fill") }
+                    .buttonStyle(PageActionButtonStyle())
+            }
+        }
+        .frame(maxWidth: 380)
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Reveals results after work ends without replaying on page navigation.
+private struct OperationResultAnimation: ViewModifier {
+    let isRunning: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isVisible = true
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isRunning || isVisible ? 1 : 0)
+            .offset(y: isRunning || isVisible || reduceMotion ? 0 : 6)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: isVisible)
+            .task(id: isRunning) {
+                if isRunning { isVisible = false; return }
+                guard !isVisible else { return }
+                if !reduceMotion {
+                    do { try await Task.sleep(for: .milliseconds(30)) }
+                    catch { return }
+                }
+                guard !Task.isCancelled else { return }
+                isVisible = true
+            }
+            .onDisappear { isVisible = true }
+    }
+}
+
+extension View {
+    func operationResultAnimation(isRunning: Bool) -> some View {
+        modifier(OperationResultAnimation(isRunning: isRunning))
+    }
+}
+
+/// Animates changing totals without moving the surrounding layout.
+private struct AnimatedTotal<Value: Equatable>: ViewModifier {
+    let value: Value
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: value)
+    }
+}
+
+extension View {
+    func animatedTotal<Value: Equatable>(_ value: Value) -> some View {
+        modifier(AnimatedTotal(value: value))
     }
 }

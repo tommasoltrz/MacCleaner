@@ -65,8 +65,8 @@ struct ScoloApp: App {
         .menuBarExtraStyle(.window)
         .commands {
             // The design's Scan menu, with key equivalents.
-            CommandMenu("Scan") {
-                Button("Scan for Junk") { model.startScan() }
+            CommandMenu("Cleanup") {
+                Button("Scan for Cleanup Items") { model.startScan() }
                     .keyboardShortcut("r")
                     .disabled(model.isBusyWithDisk)
                 Button("Stop Scan") { model.cancelScan() }

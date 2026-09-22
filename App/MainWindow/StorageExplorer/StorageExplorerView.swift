@@ -1,13 +1,16 @@
 import AppKit
 import ScoloCore
 import QuickLook
+import QuickLookUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Browses measured folders with native macOS table and path controls.
 struct StorageExplorerView: View {
     @Bindable var model: StorageExplorerModel
     let isMeasurementBlocked: Bool
     @State private var previewURL: URL?
+    @State private var previewNavigation = StoragePreviewNavigation()
     @State private var presentation = StorageExplorerPresentation.list
     @State private var sortOrder = [
         KeyPathComparator(\StorageExplorerItem.allocatedBytes, order: .reverse)
@@ -16,18 +19,73 @@ struct StorageExplorerView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let currentURL = model.currentURL {
-                browserBar(currentURL)
+                header
+                pathBar(currentURL)
             }
 
             content
+                .operationResultAnimation(isRunning: model.isLoading)
         }
         .task { model.prepareLocations() }
-        .quickLookPreview($previewURL)
-        .onKeyPress(.space) {
-            guard let item = model.selectedItems.first else { return .ignored }
-            previewURL = item.url
-            return .handled
+        .onChange(of: presentation) { _, _ in model.finishMapSelection() }
+        .onDisappear {
+            model.finishMapSelection()
+            previewNavigation.stop()
+            previewURL = nil
         }
+        .quickLookPreview($previewURL, in: sortedItems.map(\.url))
+        .onChange(of: previewURL) { _, url in
+            guard let url else {
+                previewNavigation.stop()
+                return
+            }
+            guard let index = sortedItems.firstIndex(where: { $0.url == url }) else { return }
+            let item = sortedItems[index]
+            if !model.selection.contains(item.id) {
+                model.selection = [item.id]
+            }
+            previewNavigation.scrollToRow(index)
+        }
+        .onChange(of: model.selection) { _, selection in
+            guard previewURL != nil else { return }
+            if let current = sortedItems.first(where: { $0.url == previewURL }),
+               selection.contains(current.id) { return }
+            previewURL = sortedItems.first(where: { selection.contains($0.id) })?.url
+        }
+        .onChange(of: model.currentURL) { _, _ in previewURL = nil }
+        // Space previews the selection, as it does in Finder.
+        //
+        // `onKeyPress(.space)` cannot do this and did not: `NSTableView` consumes
+        // space in `keyDown` for type-select, so the key never reached SwiftUI. A
+        // keyboard shortcut is installed as a key equivalent instead, which is
+        // offered the event before the responder chain ever sees it. Disabled with
+        // no selection, so the shortcut does not fire on nothing.
+        .background(alignment: .topLeading) {
+            Button("Quick Look") { previewSelection() }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(model.selectedItems.isEmpty)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func previewSelection() {
+        guard let item = model.selectedItems.first else { return }
+        showPreview(item)
+    }
+
+    private func showPreview(_ item: StorageExplorerItem) {
+        previewNavigation.start { direction in
+            let items = sortedItems
+            guard let index = items.firstIndex(where: { $0.url == previewURL }) else { return }
+            let next = index + direction
+            guard items.indices.contains(next) else { return }
+            model.selection = [items[next].id]
+            previewURL = items[next].url
+            previewNavigation.scrollToRow(next)
+        }
+        previewURL = item.url
     }
 
     @ViewBuilder
@@ -49,13 +107,59 @@ struct StorageExplorerView: View {
         }
     }
 
-    private func browserBar(_ url: URL) -> some View {
+    /// What this folder holds, and the controls that act on the page.
+    ///
+    /// The path used to sit in the leading slot here and it could not: a path
+    /// control does not compress, so it took the width the trailing controls needed
+    /// and drew straight over them. It has a row of its own below.
+    ///
+    /// There is no selection readout and no Deselect All: the highlighted rows say
+    /// what is picked, the Remove button says what it would take, and clicking away
+    /// from the rows clears them, as it does in any table on this platform.
+    private var header: some View {
         PageHeader {
-            // Folder history, which used to be the window's toolbar arrows. Those
-            // meant pages everywhere else and folders here — one control with two
-            // meanings — so they went, and this is the half that was doing real
-            // work: the path control beside it only ever walks *up*, and going back
-            // to a folder you looked at earlier has no other route.
+            HStack(spacing: 8) {
+                ForEach(StorageExplorerPresentation.allCases) { option in
+                    PageTabPill(
+                        title: option.rawValue,
+                        symbol: option == .list ? "list.bullet" : "square.grid.2x2",
+                        isSelected: presentation == option
+                    ) { presentation = option }
+                }
+            }
+        } trailing: {
+            Button {
+                model.refresh()
+            } label: {
+                Label("Measure Again", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(PageActionButtonStyle())
+            .fixedSize()
+            .disabled(isMeasurementBlocked || model.isLoading)
+
+            locationMenu
+                .fixedSize()
+        }
+    }
+
+    private var summaryText: String {
+        guard let snapshot = model.snapshot else {
+            return model.currentURL?.lastPathComponent.nonEmpty ?? "This Mac"
+        }
+        let count = snapshot.items.count
+        let noun = count == 1 ? "item" : "items"
+        return "\(count) \(noun) · \(ByteFormatting.string(snapshot.allocatedBytes))"
+    }
+
+    /// Where you are, and the two ways back — a row of its own, because both are
+    /// navigation and neither survives being squeezed.
+    ///
+    /// The arrows used to be the window's toolbar pair. Those meant pages everywhere
+    /// else and folders here — one control with two meanings — so they went, and
+    /// this is the half that was doing real work: the path control beside them only
+    /// ever walks *up*, and returning to a folder seen earlier has no other route.
+    private func pathBar(_ url: URL) -> some View {
+        HStack(spacing: 8) {
             HStack(spacing: 2) {
                 Button { model.goBack() } label: { Image(systemName: "chevron.left") }
                     .disabled(!model.canGoBack || isMeasurementBlocked)
@@ -68,42 +172,24 @@ struct StorageExplorerView: View {
             .fixedSize()
 
             NativePathControl(url: url, onSelect: model.navigate)
-                .frame(minWidth: 260, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
                 .disabled(isMeasurementBlocked || model.isLoading)
-        } trailing: {
-            // The selection's readout and its undo, from the window's footer, which
-            // is gone. Only while there is a selection: this bar is already full.
-            if !model.selectedItems.isEmpty {
-                Text("\(model.selectedItems.count) selected · "
-                     + ByteFormatting.string(model.selectedBytes))
-                    .font(.mcCaption)
-                    .foregroundStyle(Token.Text.secondary)
-                    .lineLimit(1)
+
+            if model.snapshot != nil {
+                Text(summaryText)
+                    .pageHeaderSummary()
+                    .monospacedDigit()
                     .fixedSize()
-                Button("Deselect All") { model.selection.removeAll() }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .fixedSize()
-                    .disabled(isMeasurementBlocked)
+                    .layoutPriority(1)
             }
-
-            Picker("Presentation", selection: $presentation) {
-                ForEach(StorageExplorerPresentation.allCases) { presentation in
-                    Text(presentation.rawValue).tag(presentation)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 124)
-
-            Button {
-                model.refresh()
-            } label: {
-                Label("Measure Again", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
-            .disabled(isMeasurementBlocked || model.isLoading)
-
-            locationMenu
+        }
+        .padding(.horizontal, Token.Size.pageGutter)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Token.separator)
+                .frame(height: Token.hairline)
         }
     }
 
@@ -123,20 +209,11 @@ struct StorageExplorerView: View {
     }
 
     private var loadingView: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.large)
-            Text("Measuring \(model.currentURL?.lastPathComponent.nonEmpty ?? "the selected folder")")
-                .font(.headline)
-            Text(progressText)
-                .foregroundStyle(.secondary)
-            Button("Stop") { model.cancel() }
-                .buttonStyle(.bordered)
-        }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        PageProgressView(
+            title: "Measuring \(model.currentURL?.lastPathComponent.nonEmpty ?? "the selected folder")",
+            detail: progressText,
+            onStop: { model.cancel() }
+        )
     }
 
     private var progressText: String {
@@ -151,10 +228,12 @@ struct StorageExplorerView: View {
         } description: {
             Text(errorDescription(error))
         } actions: {
-            Button("Try Again") { model.refresh() }
-                .buttonStyle(.borderedProminent)
-            Button("Choose Another Folder") { model.chooseFolder() }
-                .buttonStyle(.bordered)
+            HStack(spacing: 10) {
+                Button("Try Again") { model.refresh() }
+                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
+                Button("Choose Another Folder") { model.chooseFolder() }
+                    .buttonStyle(PageActionButtonStyle())
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -165,10 +244,12 @@ struct StorageExplorerView: View {
         } description: {
             Text("Measure this folder again or choose another location.")
         } actions: {
-            Button("Measure Again") { model.refresh() }
-                .buttonStyle(.borderedProminent)
-            Button("Choose Another Folder") { model.chooseFolder() }
-                .buttonStyle(.bordered)
+            HStack(spacing: 10) {
+                Button("Measure Again") { model.refresh() }
+                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
+                Button("Choose Another Folder") { model.chooseFolder() }
+                    .buttonStyle(PageActionButtonStyle())
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -253,7 +334,7 @@ struct StorageExplorerView: View {
                     .disabled(isMeasurementBlocked)
             }
             if selection.count == 1, let item = firstItem(in: selection) {
-                Button("Quick Look") { previewURL = item.url }
+                Button("Quick Look") { showPreview(item) }
             }
             if !selection.isEmpty {
                 Button("Show in Finder") {
@@ -265,7 +346,7 @@ struct StorageExplorerView: View {
             if item.opensAsDirectory {
                 if !isMeasurementBlocked { model.open(item) }
             } else {
-                previewURL = item.url
+                showPreview(item)
             }
         }
     }
@@ -275,11 +356,11 @@ struct StorageExplorerView: View {
             items: model.snapshot?.items ?? [],
             selection: Binding(
                 get: { model.selection },
-                set: { model.selection = $0 }
+                set: { model.selectMapItems($0) }
             ),
             isNavigationDisabled: isMeasurementBlocked,
             onOpen: { model.open($0) },
-            onPreview: { previewURL = $0.url }
+            onPreview: { showPreview($0) }
         )
     }
 
@@ -289,10 +370,7 @@ struct StorageExplorerView: View {
 
     private func nameCell(_ item: StorageExplorerItem) -> some View {
         HStack(spacing: 8) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 18, height: 18)
+            StorageItemIcon(item: item, size: 18)
 
             Text(item.name)
                 .lineLimit(1)
@@ -355,9 +433,16 @@ struct StorageExplorerView: View {
                 Label("Choose Folder…", systemImage: "folder.badge.plus")
             }
         } label: {
-            Label("Choose Location", systemImage: "folder")
+            HStack(spacing: 7) {
+                Label("Choose Location", systemImage: "folder")
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .accessibilityHidden(true)
+            }
         }
         .menuStyle(.button)
+        .buttonStyle(PageActionButtonStyle())
+        .menuIndicator(.hidden)
         .disabled(isMeasurementBlocked || model.isLoading)
     }
 
@@ -429,6 +514,77 @@ private enum StorageExplorerPresentation: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+/// Gives known file types the same icon in the list and map.
+private struct StorageItemIcon: View {
+    let item: StorageExplorerItem
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let appearance {
+                Image(systemName: appearance.symbol)
+                    .font(.system(size: size >= 32 ? size * 0.62 : size * 0.9, weight: .regular))
+                    .foregroundStyle(appearance.color)
+                    .frame(width: size, height: size)
+                    .background {
+                        if size >= 32 {
+                            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                                .fill(appearance.color.opacity(0.10))
+                        }
+                    }
+            } else {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var appearance: (symbol: String, color: Color)? {
+        guard item.kind == .file || item.kind == .package else { return nil }
+        let ext = item.url.pathExtension.lowercased()
+        let type = UTType(filenameExtension: ext)
+        if type?.conforms(to: .movie) == true || type?.conforms(to: .video) == true
+            || ["mkv", "webm", "avi", "imovielibrary", "fcpbundle"].contains(ext) {
+            return ("play.rectangle.fill", Token.textColor(.pink))
+        }
+        if type?.conforms(to: .image) == true || ["photoslibrary", "photolibrary", "raw"].contains(ext) {
+            return ("photo.fill", Token.textColor(.orange))
+        }
+        if type?.conforms(to: .audio) == true || ["flac", "ogg", "opus"].contains(ext) {
+            return ("waveform", Token.textColor(.pink))
+        }
+        if type?.conforms(to: .pdf) == true {
+            return ("doc.richtext.fill", Token.textColor(.red))
+        }
+        if type?.conforms(to: .sourceCode) == true
+            || ["js", "jsx", "ts", "tsx", "py", "rs", "go", "css", "json", "yaml", "yml"].contains(ext) {
+            return ("chevron.left.forwardslash.chevron.right", Token.textColor(.purple))
+        }
+        if type?.conforms(to: .spreadsheet) == true || ["csv", "numbers", "xlsx", "xls"].contains(ext) {
+            return ("tablecells.fill", Token.textColor(.green))
+        }
+        if type?.conforms(to: .presentation) == true || ["key", "pptx", "ppt"].contains(ext) {
+            return ("rectangle.on.rectangle", Token.textColor(.orange))
+        }
+        if type?.conforms(to: .text) == true || ["pages", "doc", "docx", "odt"].contains(ext) {
+            return ("doc.text.fill", Token.textColor(.accent))
+        }
+        if type?.conforms(to: .archive) == true || ["7z", "rar", "gz", "bz2", "xz"].contains(ext) {
+            return ("doc.zipper", Token.textColor(.orange))
+        }
+        if type?.conforms(to: .diskImage) == true || ["dmg", "iso", "sparsebundle"].contains(ext) {
+            return ("externaldrive.fill", Token.Text.secondary)
+        }
+        if ext == "pkg" {
+            return ("shippingbox.fill", Token.textColor(.orange))
+        }
+        return nil
+    }
+}
+
 /// Shows the current Storage Explorer level as proportional tiles.
 private struct StorageTreemapView: View {
     let items: [StorageExplorerItem]
@@ -440,19 +596,10 @@ private struct StorageTreemapView: View {
     @State private var hoveredID: StorageExplorerItem.ID?
     @State private var hoverPoint: CGPoint?
 
-    private let outerPadding: CGFloat = 10
-    private let tileGap: CGFloat = 2
-    private let palette: [NSColor] = [
-        .systemBlue,
-        .systemTeal,
-        .systemIndigo,
-        .systemOrange,
-        .systemPurple,
-        .systemGreen,
-        .systemPink,
-        .systemRed,
-        .systemYellow,
-    ]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let tileGap: CGFloat = 8
+    private var outerPadding: CGFloat { Token.Size.pageGutter - tileGap / 2 }
 
     @ViewBuilder
     var body: some View {
@@ -464,7 +611,7 @@ private struct StorageTreemapView: View {
                 let itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
 
                 ZStack(alignment: .topLeading) {
-                    Token.Fill.well
+                    Token.pageBackground
 
                     ForEach(cells) { cell in
                         if let item = itemsByID[cell.id] {
@@ -497,37 +644,88 @@ private struct StorageTreemapView: View {
     }
 
     private func tile(_ item: StorageExplorerItem, frame: CGRect) -> some View {
-        let size = frame.size
+        let gap = min(tileGap, min(frame.width, frame.height) * 0.12)
+        let size = CGSize(width: max(0, frame.width - gap), height: max(0, frame.height - gap))
         let isSelected = selection.contains(item.id)
         let isHovered = hoveredID == item.id
-        let shape = RoundedRectangle(cornerRadius: Token.Radius.well, style: .continuous)
+        let isFullCard = size.width >= 150 && size.height >= 138
+        let shape = RoundedRectangle(
+            cornerRadius: min(Token.Radius.card, min(size.width, size.height) / 4),
+            style: .continuous
+        )
 
         return Button {
             select(item)
         } label: {
-            ZStack(alignment: .topLeading) {
-                shape.fill(.regularMaterial)
-                shape.fill(tileColor(item).opacity(tileOpacity(item, hovered: isHovered)))
-
+            ZStack {
+                shape.fill(isSelected ? Token.color(.accent).opacity(0.10) : Token.Fill.box)
+                if isHovered {
+                    shape.fill(Token.Fill.controlHover.opacity(0.5))
+                }
                 if size.width >= 54, size.height >= 30 {
                     tileLabel(item, size: size)
                 }
             }
             .contentShape(shape)
         }
-        .buttonStyle(.plain)
-        .overlay(
-            shape.strokeBorder(
-                isSelected ? Color.accentColor : Token.Fill.boxBorder,
-                lineWidth: isSelected ? 2 : Token.hairline
-            )
+        .buttonStyle(CardPressButtonStyle(
+            cornerRadius: min(Token.Radius.card, min(size.width, size.height) / 4)
+        ))
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded { activate(item) }
         )
-        .padding(tileGap / 2)
+        .overlay {
+            shape.strokeBorder(
+                isSelected ? Token.color(.accent) : Token.Fill.boxBorder,
+                lineWidth: isSelected ? 1.5 : Token.hairline
+            )
+            .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            if isFullCard {
+                HStack(spacing: 6) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(isSelected ? Token.color(.accent) : Token.Text.disabled)
+                    if !item.isRemovable {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 10))
+                    }
+                    if item.cloudState != .none {
+                        Image(systemName: cloudSymbol(item.cloudState))
+                            .font(.system(size: 11))
+                    }
+                }
+                .foregroundStyle(Token.Text.tertiary)
+                .padding(10)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isFullCard {
+                Button { activate(item) } label: {
+                    Image(systemName: item.opensAsDirectory ? "chevron.right" : "eye")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Token.Text.tertiary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(item.opensAsDirectory && isNavigationDisabled)
+                .padding(5)
+                .help(item.opensAsDirectory ? "Open this folder" : "Preview this file")
+                .accessibilityLabel("\(item.opensAsDirectory ? "Open" : "Preview") \(item.name)")
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isSelected)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovered)
+        .padding(gap / 2)
         .onContinuousHover(coordinateSpace: .named("StorageExplorerTreemap")) { phase in
             switch phase {
             case let .active(location):
                 hoveredID = item.id
-                hoverPoint = location
+                hoverPoint = needsTooltip(item, size: size) ? location : nil
             case .ended:
                 if hoveredID == item.id {
                     hoveredID = nil
@@ -535,9 +733,11 @@ private struct StorageTreemapView: View {
                 }
             }
         }
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded { activate(item) }
-        )
+        .onChange(of: size) { _, updatedSize in
+            if hoveredID == item.id, !needsTooltip(item, size: updatedSize) {
+                hoverPoint = nil
+            }
+        }
         .contextMenu {
             if item.opensAsDirectory {
                 Button("Open") { open(item) }
@@ -563,43 +763,70 @@ private struct StorageTreemapView: View {
 
     @ViewBuilder
     private func tileLabel(_ item: StorageExplorerItem, size: CGSize) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                if size.width >= 82 {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 16, height: 16)
-                }
+        if size.width >= 110, size.height >= 110 {
+            let iconSize: CGFloat = size.width >= 150 && size.height >= 138 ? 48 : 32
+            VStack(spacing: 6) {
+                StorageItemIcon(item: item, size: iconSize)
+                    .padding(.bottom, 2)
                 Text(item.name)
                     .font(.mcRowTitle)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                if item.cloudState != .none, size.width >= 112 {
-                    Image(systemName: cloudSymbol(item.cloudState))
-                        .foregroundStyle(Token.Text.secondary)
-                }
-                if !item.isRemovable, size.width >= 92 {
-                    Image(systemName: "lock.fill")
-                        .foregroundStyle(Token.Text.secondary)
-                }
-            }
-
-            if size.height >= 58 {
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .multilineTextAlignment(.center)
                 Text(ByteFormatting.string(item.allocatedBytes))
-                    .font(.mcRowValue)
+                    .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)
-                    .monospacedDigit()
+                    .lineLimit(1)
             }
-
-            if size.width >= 120, size.height >= 82 {
-                Text(item.kindTitle)
-                    .font(.mcBadge)
-                    .foregroundStyle(Token.Text.tertiary)
+            .padding(.horizontal, 12)
+            .padding(.top, size.height >= 138 ? 12 : 0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 5) {
+                    if size.width >= 100 {
+                        StorageItemIcon(item: item, size: 18)
+                    }
+                    Text(item.name)
+                        .font(.mcRowTitle)
+                        .foregroundStyle(Token.Text.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if size.height >= 58 {
+                    Text(ByteFormatting.string(item.allocatedBytes))
+                        .font(.mcCaption)
+                        .foregroundStyle(Token.Text.secondary)
+                        .lineLimit(1)
+                }
             }
+            .padding(8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(8)
+    }
+
+    /// Match the label width, font, and line count before showing extra information.
+    private func needsTooltip(_ item: StorageExplorerItem, size: CGSize) -> Bool {
+        guard size.width >= 54, size.height >= 58 else { return true }
+        let isCentered = size.width >= 110 && size.height >= 110
+        let width = max(0, size.width - (isCentered ? 24 : 16))
+        let nameWidth = max(0, width - (!isCentered && size.width >= 100 ? 23 : 0))
+        let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .regular)
+        let name = item.name as NSString
+        let value = ByteFormatting.string(item.allocatedBytes) as NSString
+        if value.size(withAttributes: [.font: valueFont]).width > width { return true }
+        if !isCentered {
+            return name.size(withAttributes: [.font: nameFont]).width > nameWidth
+        }
+        let nameBounds = name.boundingRect(
+            with: CGSize(width: nameWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: nameFont]
+        )
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: nameFont)
+        return ceil(nameBounds.height) > ceil(lineHeight * 2)
     }
 
     @ViewBuilder
@@ -610,10 +837,25 @@ private struct StorageTreemapView: View {
            let item = itemsByID[hoveredID],
            let hoverPoint {
             TreemapTooltipLayout(anchor: hoverPoint) {
-                HoverTip(
-                    primary: tooltipName(item.name),
-                    secondary: treemapDetail(item)
-                )
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name)
+                        .font(.mcRowTitle)
+                        .foregroundStyle(Token.Text.primary)
+                    Text(treemapDetail(item))
+                        .font(.mcCaption)
+                        .foregroundStyle(Token.Text.secondary)
+                }
+                .frame(maxWidth: 320, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Token.Fill.box, in: RoundedRectangle(cornerRadius: Token.Radius.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Token.Radius.control)
+                        .strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+                }
+                .shadow(color: Token.chipShadow, radius: 8, y: 2)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -629,8 +871,11 @@ private struct StorageTreemapView: View {
                 .foregroundStyle(Token.Text.secondary)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 6)
-                .background(.regularMaterial, in: Capsule())
-                .padding(12)
+                .background(Token.Fill.box, in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Token.Fill.boxBorder, lineWidth: Token.hairline)
+                }
+                .padding(Token.Size.pageGutter)
         }
     }
 
@@ -667,25 +912,6 @@ private struct StorageTreemapView: View {
         onOpen(item)
     }
 
-    private func tileColor(_ item: StorageExplorerItem) -> Color {
-        Color(nsColor: palette[stablePaletteIndex(for: item.id)])
-    }
-
-    private func stablePaletteIndex(for path: String) -> Int {
-        // FNV-1a keeps each path mapped to the same color across launches.
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in path.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return Int(hash % UInt64(palette.count))
-    }
-
-    private func tileOpacity(_ item: StorageExplorerItem, hovered: Bool) -> Double {
-        if !item.isRemovable { return hovered ? 0.20 : 0.13 }
-        return hovered ? 0.34 : 0.24
-    }
-
     private func cloudSymbol(_ state: StorageExplorerItem.CloudState) -> String {
         switch state {
         case .none, .downloaded:
@@ -716,12 +942,6 @@ private struct StorageTreemapView: View {
         case .cloudOnly:          "Cloud-only contents"
         case .unavailable:        "Unavailable"
         }
-    }
-
-    private func tooltipName(_ name: String) -> String {
-        let maximumLength = 48
-        guard name.count > maximumLength else { return name }
-        return String(name.prefix(maximumLength - 1)) + "…"
     }
 
     private func accessibilityValue(_ item: StorageExplorerItem) -> String {
@@ -800,6 +1020,46 @@ extension StorageExplorerItem {
     }
     var modificationSortValue: TimeInterval {
         modificationDate?.timeIntervalSinceReferenceDate ?? -.greatestFiniteMagnitude
+    }
+}
+
+/// Keeps Quick Look navigation aligned with the displayed table order.
+@MainActor
+private final class StoragePreviewNavigation {
+    private var keyMonitor: Any?
+    private weak var sourceTable: NSTableView?
+
+    func start(onMove: @escaping @MainActor (Int) -> Void) {
+        if let table = NSApp.keyWindow?.firstResponder as? NSTableView {
+            sourceTable = table
+        }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let handled = MainActor.assumeIsolated {
+                guard event.window is QLPreviewPanel,
+                      !(event.window?.firstResponder is NSTextView),
+                      event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+                else { return false }
+                switch event.keyCode {
+                case 125: onMove(1)
+                case 126: onMove(-1)
+                default: return false
+                }
+                return true
+            }
+            return handled ? nil : event
+        }
+    }
+
+    func scrollToRow(_ index: Int) {
+        guard let sourceTable, index >= 0, index < sourceTable.numberOfRows else { return }
+        sourceTable.scrollRowToVisible(index)
+    }
+
+    func stop() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        sourceTable = nil
     }
 }
 
