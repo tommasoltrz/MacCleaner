@@ -37,7 +37,7 @@ struct CleanupHistoryView: View {
             } else if items.isEmpty {
                 emptyState
             } else if visibleItems.isEmpty {
-                VStack {
+                Group {
                     if query.isEmpty {
                         ContentUnavailableView(
                             "No matching items",
@@ -47,10 +47,8 @@ struct CleanupHistoryView: View {
                     } else {
                         ContentUnavailableView.search(text: query)
                     }
-                    Spacer()
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 36)
+                .operationPageLayout()
             } else {
                 historyTable
             }
@@ -113,7 +111,7 @@ struct CleanupHistoryView: View {
                         ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
                             VStack(spacing: 0) {
                                 if index > 0 { Hairline() }
-                                HistoryRow(item: item)
+                                HistoryRow(item: item, onShowInTrash: { model.showInTrash(item) })
                             }
                         }
                     }
@@ -160,17 +158,12 @@ struct CleanupHistoryView: View {
     }
 
     private var emptyState: some View {
-        VStack {
-            ContentUnavailableView {
-                Label("No cleanup history", systemImage: "clock")
-            } description: {
-                Text("Enable Put Back receipts in Settings to record removed items and failures.")
-            }
-            .frame(maxWidth: .infinity)
-
-            Spacer()
+        ContentUnavailableView {
+            Label("No cleanup history", systemImage: "clock")
+        } description: {
+            Text("Enable Put Back receipts in Settings to record removed items and failures.")
         }
-        .padding(.top, 36)
+        .operationPageLayout()
     }
 
     private var items: [CleanupHistoryItem] {
@@ -289,6 +282,7 @@ private extension CleanupHistoryState {
 
 private struct HistoryRow: View {
     let item: CleanupHistoryItem
+    let onShowInTrash: () -> Void
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
@@ -307,9 +301,20 @@ private struct HistoryRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(item.originalURL.path)
 
-            ResultLabel(state: item.state)
-                .font(.mcSubtitle)
-                .frame(width: Metrics.result, alignment: .leading)
+            Group {
+                if item.state == .availableInTrash, item.trashedURL != nil {
+                    Button(action: onShowInTrash) {
+                        Label("Show in Trash", systemImage: "trash")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .help("Open the Trash and select this item.")
+                    .accessibilityHint("Selects \(item.name) in the Trash view.")
+                } else {
+                    ResultLabel(state: item.state)
+                }
+            }
+            .font(.mcSubtitle)
+            .frame(width: Metrics.result, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.timestamp, format: .dateTime.day().month(.abbreviated).year())

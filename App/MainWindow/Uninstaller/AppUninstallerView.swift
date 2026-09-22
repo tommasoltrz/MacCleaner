@@ -70,54 +70,57 @@ struct AppUninstallerView: View {
             libraryHeader
             HairlineDivider()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if let error = model.appUninstallError {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(.mcSubtitle)
-                            .foregroundStyle(Token.textColor(.orange))
-                    }
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let error = model.appUninstallError {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.mcSubtitle)
+                                .foregroundStyle(Token.textColor(.orange))
+                        }
 
-                    if tab == .leftovers {
-                        leftoversList
-                    } else if let applications = model.installedApplications {
-                        let shown = visibleApplications(applications)
-                        if shown.isEmpty {
-                            ContentUnavailableView {
-                                Label(
-                                    applications.isEmpty ? "No Applications" : "No Results",
-                                    systemImage: "xmark.app"
-                                )
-                            } description: {
-                                Text(applications.isEmpty
-                                    ? "Nothing removable was found in /Applications or ~/Applications."
-                                    : "No application matches “\(searchText)”.")
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 320)
-                        } else {
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)],
-                                spacing: 10
-                            ) {
-                                ForEach(shown) { application in
-                                    ApplicationCard(
-                                        application: application,
-                                        bytes: model.installedApplicationBytes[application.id],
-                                        isSelected: model.selectedApplicationIDs
-                                            .contains(application.id),
-                                        toggle: { model.toggleApplicationSelection(application) },
-                                        open: { model.planAppUninstall(application.url) }
+                        if tab == .leftovers {
+                            leftoversList
+                        } else if let applications = model.installedApplications {
+                            let shown = visibleApplications(applications)
+                            if shown.isEmpty {
+                                ContentUnavailableView {
+                                    Label(
+                                        applications.isEmpty ? "No Applications" : "No Results",
+                                        systemImage: "xmark.app"
                                     )
+                                } description: {
+                                    Text(applications.isEmpty
+                                        ? "Nothing removable was found in /Applications or ~/Applications."
+                                        : "No application matches “\(searchText)”.")
                                 }
+                                .operationPageLayout()
+                            } else {
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10)],
+                                    spacing: 10
+                                ) {
+                                    ForEach(shown) { application in
+                                        ApplicationCard(
+                                            application: application,
+                                            bytes: model.installedApplicationBytes[application.id],
+                                            isSelected: model.selectedApplicationIDs
+                                                .contains(application.id),
+                                            toggle: { model.toggleApplicationSelection(application) },
+                                            open: { model.planAppUninstall(application.url) }
+                                        )
+                                    }
+                                }
+                                // One move, when the order changes: the measured sort
+                                // arriving, a new sort order, a search narrowing.
+                                .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: shown.map(\.id))
                             }
-                            // One move, when the order changes: the measured sort
-                            // arriving, a new sort order, a search narrowing.
-                            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: shown.map(\.id))
                         }
                     }
+                    .frame(minHeight: isLibraryEmpty ? geometry.size.height : 0, alignment: .top)
+                    .padding(.horizontal, isLibraryEmpty ? 0 : Token.Size.pageGutter)
+                    .padding(.vertical, isLibraryEmpty ? 0 : 14)
                 }
-                .padding(.horizontal, Token.Size.pageGutter)
-                .padding(.vertical, 14)
             }
             .overlay {
                 if isDropTargeted {
@@ -141,6 +144,13 @@ struct AppUninstallerView: View {
         .onChange(of: tab) { _, newTab in
             if newTab == .leftovers { model.loadApplicationLeftovers() }
         }
+    }
+
+    private var isLibraryEmpty: Bool {
+        if tab == .leftovers {
+            return model.applicationLeftovers?.groups.isEmpty == true
+        }
+        return model.installedApplications.map { visibleApplications($0).isEmpty } ?? false
     }
 
     // MARK: Leftovers
@@ -181,7 +191,7 @@ struct AppUninstallerView: View {
                 } description: {
                     Text("Nothing was found that a removed application left behind.")
                 }
-                .frame(maxWidth: .infinity, minHeight: 320)
+                .operationPageLayout()
             } else {
                 // Never ticked for the user: whether a removed application's
                 // settings matter depends on whether it is coming back.
@@ -782,16 +792,11 @@ struct AppUninstallerView: View {
         let failed = outcome.failed
         let applicationFailed = model.appUninstallError != nil && outcome.removedCount == 0
 
-        return VStack(spacing: 15) {
-            Spacer()
-            Image(systemName: applicationFailed
-                ? "exclamationmark.triangle.fill"
-                : (failed.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
-                .font(.system(size: 54))
-                .foregroundStyle(failed.isEmpty && !applicationFailed
-                    ? Token.color(.green) : Token.color(.orange))
+        return VStack(spacing: 18) {
+            CompletionMark(isSuccess: failed.isEmpty && !applicationFailed)
+                .padding(.bottom, 4)
             Text(applicationFailed ? "Could not uninstall \(applicationName)" : "\(applicationName) uninstalled")
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(Token.Text.primary)
             Text("Moved \(ByteFormatting.string(outcome.removedBytes)) to the Trash.")
                 .font(.mcBody)
@@ -809,14 +814,10 @@ struct AppUninstallerView: View {
                     .foregroundStyle(Token.textColor(.orange))
             }
 
-            Button("Uninstall Another Application", action: model.resetAppUninstall)
-                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
-                .controlSize(.large)
-                .padding(.top, 4)
-            Spacer()
+            completionActions
+                .padding(.top, 8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(28)
+        .operationPageLayout()
     }
 
     // MARK: Several applications
@@ -941,14 +942,13 @@ struct AppUninstallerView: View {
         let clean = outcome.setAside.isEmpty && outcome.survivorCount == 0
         let count = outcome.uninstalled.count
         return ScrollView {
-            VStack(spacing: 15) {
-                Image(systemName: clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 54))
-                    .foregroundStyle(clean ? Token.color(.green) : Token.color(.orange))
+            VStack(spacing: 18) {
+                CompletionMark(isSuccess: clean && count > 0)
+                    .padding(.bottom, 4)
                 Text(count == 0
                     ? "No applications were uninstalled"
                     : "\(count) \(count == 1 ? "application" : "applications") uninstalled")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Token.Text.primary)
                 if count > 0 {
                     Text("\(ListFormatter.localizedString(byJoining: outcome.uninstalled)). "
@@ -969,13 +969,25 @@ struct AppUninstallerView: View {
                     setAsideBox(outcome.setAside, title: "Still installed")
                         .frame(maxWidth: 460)
                 }
-                Button("Done", action: model.resetAppUninstall)
-                    .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
-                    .controlSize(.large)
-                    .padding(.top, 4)
+                completionActions
+                    .padding(.top, 8)
             }
-            .frame(maxWidth: .infinity)
-            .padding(28)
+            .operationPageLayout()
+        }
+    }
+
+    private var completionActions: some View {
+        HStack(spacing: 12) {
+            Button("Continue") {
+                model.resetAppUninstall()
+                model.loadInstalledApplications()
+            }
+            .buttonStyle(PageActionButtonStyle(tint: .white, foreground: .black))
+            Button("View Dashboard") {
+                model.resetAppUninstall()
+                model.view = .dashboard
+            }
+            .buttonStyle(PageActionButtonStyle())
         }
     }
 

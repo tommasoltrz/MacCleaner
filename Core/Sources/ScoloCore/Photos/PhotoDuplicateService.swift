@@ -46,6 +46,8 @@ public actor PhotoDuplicateService {
     private let visionRevision: UInt32
     private let cacheDirectory: URL?
     private var running: Task<Sweep, Error>?
+    private var runningID: UUID?
+    private var runningCancellation: SweepCancellation?
     /// What the last finished sweep grouped, kept so that changing the similarity
     /// setting costs nothing at all.
     ///
@@ -74,8 +76,8 @@ public actor PhotoDuplicateService {
     public var isSweeping: Bool { running != nil }
 
     public func cancel() {
+        runningCancellation?.cancel()
         running?.cancel()
-        running = nil
     }
 
     /// Sweeps the library, or joins the sweep already in flight.
@@ -93,7 +95,30 @@ public actor PhotoDuplicateService {
         similarity: PhotoSimilarity = .default,
         onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> PhotoDuplicateResults {
-        if let running { return try await running.value.results }
+        try Task.checkCancellation()
+        if let running {
+            if running.isCancelled {
+                // Finish canceled work before another sweep uses the same cache.
+                let previousID = runningID
+                _ = try? await running.value
+                try Task.checkCancellation()
+                if runningID == previousID {
+                    self.running = nil
+                    runningID = nil
+                    runningCancellation = nil
+                }
+                return try await sweep(minimumAssets: minimumAssets, similarity: similarity, onProgress: onProgress)
+            }
+            let cancellation = runningCancellation
+            let result = try await withTaskCancellationHandler {
+                try await running.value
+            } onCancel: {
+                cancellation?.cancel()
+                running.cancel()
+            }
+            try Task.checkCancellation()
+            return result.results
+        }
 
         // Everything the injected grouper was given, with the one option that is
         // the user's to set replaced. Built here rather than at init so that
@@ -103,9 +128,13 @@ public actor PhotoDuplicateService {
         similarity.apply(to: &options)
         let grouper = DuplicateGrouper(options: options)
 
-        let task = Task { [library, grouper, visionRevision, cacheDirectory] in
+        let id = UUID()
+        let cancellation = SweepCancellation()
+        let task = Task.detached { [library, grouper, visionRevision, cacheDirectory] in
+            try Task.checkCancellation()
             let startedAt = Date()
             let access = await library.authorize()
+            try Task.checkCancellation()
             guard access.canSweep else { throw PhotoSweepUnavailable.access(access) }
 
             onProgress?(Progress(stage: .fetching, percent: 0))
@@ -126,6 +155,7 @@ public actor PhotoDuplicateService {
             // bursts only.
             onProgress?(Progress(stage: .grouping, percent: 5))
             let bursts = grouper.group(assets: assets)
+            try Task.checkCancellation()
             let claimed = Set(bursts.flatMap(\.assets).map(\.id))
 
             let candidates = assets.filter {
@@ -134,6 +164,7 @@ public actor PhotoDuplicateService {
 
             var cache = FingerprintCache.load(expectingRevision: visionRevision, in: cacheDirectory)
                 ?? FingerprintCache(visionRevision: visionRevision, elementCount: 0)
+            try Task.checkCancellation()
             cache.retaining(Set(assets.map(\.id)))
 
             let needed = candidates.filter { cache[$0.id] == nil }
@@ -160,7 +191,7 @@ public actor PhotoDuplicateService {
             await withTaskGroup(of: (String, PhotoFingerprint?).self) { group in
                 var next = needed.startIndex
                 func addTask() {
-                    guard next < needed.endIndex else { return }
+                    guard !Task.isCancelled, next < needed.endIndex else { return }
                     let assetID = needed[next].id
                     next = needed.index(after: next)
                     group.addTask { (assetID, await library.fingerprint(assetID: assetID)) }
@@ -208,7 +239,8 @@ public actor PhotoDuplicateService {
                 assets: assets,
                 fingerprints: cache.prints,
                 bucketInterval: grouper.options.bucketInterval,
-                ceiling: PhotoSimilarity.ceiling
+                ceiling: PhotoSimilarity.ceiling,
+                isCancelled: { cancellation.isCancelled }
             ) { fraction in
                 onProgress?(Progress(
                     stage: .grouping,
@@ -252,8 +284,23 @@ public actor PhotoDuplicateService {
         }
 
         running = task
-        defer { running = nil }
-        let sweep = try await task.value
+        runningID = id
+        runningCancellation = cancellation
+        defer {
+            if runningID == id {
+                running = nil
+                runningID = nil
+                runningCancellation = nil
+            }
+        }
+        let sweep = try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            cancellation.cancel()
+            task.cancel()
+        }
+        try Task.checkCancellation()
+        guard !cancellation.isCancelled else { throw CancellationError() }
         lastSweep = (sweep.assets, sweep.graph)
         return sweep.results
     }
@@ -263,6 +310,16 @@ public actor PhotoDuplicateService {
         var results: PhotoDuplicateResults
         var assets: [PhotoAsset]
         var graph: PhotoNeighbourGraph
+    }
+
+    /// Shares cancellation with dispatch workers that have no Swift task context.
+    private final class SweepCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        var isCancelled: Bool { lock.withLock { cancelled } }
+
+        func cancel() { lock.withLock { cancelled = true } }
     }
 
     /// Re-groups the last sweep at a different similarity, without sweeping.

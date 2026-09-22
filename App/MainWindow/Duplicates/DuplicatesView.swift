@@ -33,11 +33,20 @@ struct DuplicatesView: View {
                         .disabled(model.isBusyWithDisk)
                 }
             }
+            .disabled(model.activity != nil || model.isDeletingPhotos || model.removalCompletion?.destination == .duplicates)
+            .frame(minHeight: 38)
             .padding(Token.Size.pageGutter)
             Divider()
-            switch model.duplicateKind {
-            case .files: FileDuplicatesView(model: model)
-            case .photos: PhotoDuplicatesView(model: model)
+            Group {
+                switch model.duplicateKind {
+                case .files: FileDuplicatesView(model: model)
+                case .photos: PhotoDuplicatesView(model: model)
+                }
+            }
+            .allowsHitTesting(model.removalCompletion?.destination != .duplicates)
+            .accessibilityHidden(model.removalCompletion?.destination == .duplicates)
+            .overlay {
+                RemovalOperationSurface(model: model, fadesOnDismiss: true)
             }
         }
     }

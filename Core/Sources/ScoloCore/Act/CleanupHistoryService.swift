@@ -15,6 +15,8 @@ public struct CleanupHistoryItem: Sendable, Identifiable, Equatable {
     public let id: String
     public let timestamp: Date
     public let originalURL: URL
+    public let trashedURL: URL?
+    public let trashedIdentity: String?
     public let bytes: Int64
     public let state: CleanupHistoryState
 
@@ -25,6 +27,8 @@ public struct CleanupHistoryItem: Sendable, Identifiable, Equatable {
     init(record: RemovalRecord, state: CleanupHistoryState, occurrence: Int) {
         timestamp = record.timestamp
         originalURL = URL(fileURLWithPath: record.originalPath)
+        trashedURL = record.trashedPath.map { URL(fileURLWithPath: $0) }
+        trashedIdentity = record.trashedIdentity
         bytes = record.bytes
         self.state = state
         id = ([

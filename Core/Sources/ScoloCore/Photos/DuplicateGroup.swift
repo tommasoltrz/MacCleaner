@@ -58,6 +58,9 @@ public struct DuplicateGroup: Sendable, Equatable, Identifiable {
     /// screen, and one of them is the reason the threshold wants moving.
     public let maximumDistance: Float?
 
+    /// Keeps the display order unchanged when the user chooses another keeper.
+    public private(set) var assets: [PhotoAsset]
+
     public init(
         id: String,
         kind: Kind,
@@ -72,6 +75,7 @@ public struct DuplicateGroup: Sendable, Equatable, Identifiable {
         self.keeperReason = keeperReason
         self.removable = removable
         self.maximumDistance = maximumDistance
+        self.assets = [keeper] + removable
     }
 
     /// Re-nominates `assetID` as the one to keep, demoting the current keeper.
@@ -86,20 +90,18 @@ public struct DuplicateGroup: Sendable, Equatable, Identifiable {
               let promoted = removable.first(where: { $0.id == assetID })
         else { return nil }
 
-        // Keeps the grid's order stable: the demoted keeper takes the promoted
-        // photo's slot rather than jumping to the front.
+        // Replace the promoted photo in the removal list without changing the display order.
         let demoted = removable.map { $0.id == assetID ? keeper : $0 }
 
-        return DuplicateGroup(
+        var group = DuplicateGroup(
             id: id, kind: kind, keeper: promoted, keeperReason: .chosenByYou,
             // Promoting changes which member is kept, never which members there
             // are, so the group's diameter is the same measurement as before.
             removable: demoted, maximumDistance: maximumDistance
         )
+        group.assets = assets
+        return group
     }
-
-    /// Every member, keeper first — the order the grid renders.
-    public var assets: [PhotoAsset] { [keeper] + removable }
 
     public var count: Int { removable.count + 1 }
 

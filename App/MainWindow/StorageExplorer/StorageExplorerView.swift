@@ -8,6 +8,8 @@ import UniformTypeIdentifiers
 /// Browses measured folders with native macOS table and path controls.
 struct StorageExplorerView: View {
     @Bindable var model: StorageExplorerModel
+    @State private var animateEmptyResult = false
+    @State private var resultBeforeScan: Date?
     let isMeasurementBlocked: Bool
     @State private var previewURL: URL?
     @State private var previewNavigation = StoragePreviewNavigation()
@@ -27,6 +29,17 @@ struct StorageExplorerView: View {
                 .operationResultAnimation(isRunning: model.isLoading)
         }
         .task { model.prepareLocations() }
+        .onChange(of: model.isLoading, initial: true) { wasRunning, isRunning in
+            if isRunning {
+                resultBeforeScan = model.snapshot?.measuredAt
+                animateEmptyResult = false
+            } else if wasRunning {
+                animateEmptyResult = model.snapshot?.measuredAt != nil
+                    && model.snapshot?.measuredAt != resultBeforeScan
+            }
+        }
+        .onChange(of: model.currentURL) { _, _ in animateEmptyResult = false }
+        .onDisappear { animateEmptyResult = false }
         .onChange(of: presentation) { _, _ in model.finishMapSelection() }
         .onDisappear {
             model.finishMapSelection()
@@ -202,10 +215,7 @@ struct StorageExplorerView: View {
             locationMenu
                 .controlSize(.large)
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .pageStateLayout()
     }
 
     private var loadingView: some View {
@@ -235,7 +245,7 @@ struct StorageExplorerView: View {
                     .buttonStyle(PageActionButtonStyle())
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationPageLayout()
     }
 
     private var cancelledView: some View {
@@ -251,20 +261,20 @@ struct StorageExplorerView: View {
                     .buttonStyle(PageActionButtonStyle())
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .operationPageLayout()
     }
 
     private var emptyView: some View {
-        ContentUnavailableView {
-            Label("This folder is empty", systemImage: "folder")
-        } description: {
-            Text("Choose another folder or return to the previous folder.")
-        } actions: {
+        VStack(spacing: 18) {
+            ScanCompletionView(
+                title: "No files found",
+                detail: "Choose another folder or return to the previous folder.",
+                animate: animateEmptyResult
+            )
+            .fixedSize(horizontal: false, vertical: true)
             locationMenu
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
+        .padding(.bottom, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
@@ -636,10 +646,7 @@ private struct StorageTreemapView: View {
             } description: {
                 Text("Switch to List to see items that use 0 B.")
             }
-            .frame(maxWidth: .infinity, minHeight: 320)
-            .padding(.horizontal, 14)
-            .padding(.top, 4)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .operationPageLayout()
         }
     }
 
@@ -1037,9 +1044,13 @@ private final class StoragePreviewNavigation {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             let handled = MainActor.assumeIsolated {
                 guard event.window is QLPreviewPanel,
-                      !(event.window?.firstResponder is NSTextView),
                       event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
                 else { return false }
+                // Read-only text previews must still allow navigation between files.
+                if let textView = event.window?.firstResponder as? NSTextView,
+                   textView.isEditable || textView.isFieldEditor {
+                    return false
+                }
                 switch event.keyCode {
                 case 125: onMove(1)
                 case 126: onMove(-1)

@@ -5,6 +5,8 @@ import SwiftUI
 /// Reviews files that match by size, hashes, and a final byte comparison.
 struct FileDuplicatesView: View {
     @Bindable var model: AppModel
+    @State private var animateEmptyResult = false
+    @State private var resultBeforeScan: Date?
 
     var body: some View {
         Group {
@@ -20,6 +22,17 @@ struct FileDuplicatesView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .operationResultAnimation(isRunning: model.isScanningDuplicateFiles)
+        .onChange(of: model.isScanningDuplicateFiles, initial: true) { wasRunning, isRunning in
+            if isRunning {
+                resultBeforeScan = model.fileDuplicateResults?.finishedAt
+                animateEmptyResult = false
+            } else if wasRunning {
+                animateEmptyResult = model.fileDuplicateResults?.finishedAt != nil
+                    && model.fileDuplicateResults?.finishedAt != resultBeforeScan
+            }
+        }
+        .onChange(of: model.fileDuplicateMinimumBytes) { _, _ in animateEmptyResult = false }
+        .onDisappear { animateEmptyResult = false }
     }
 
     private var intro: some View {
@@ -35,21 +48,23 @@ struct FileDuplicatesView: View {
         } actions: {
             scanControls(buttonLabel: "Choose Folders")
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .pageStateLayout()
     }
 
     private var scanning: some View {
-        PageProgressView(
-            title: "Scanning for duplicate files",
-            detail: progressLabel,
-            progress: model.fileDuplicateProgress.flatMap {
-                $0.total > 0 ? Double($0.completed) / Double($0.total) : nil
-            },
-            onStop: { model.cancelFileDuplicateScan() }
-        )
+        ScanProgressPage {
+            intro
+        } progress: { actionBottom in
+            PageProgressView(
+                title: "Scanning for duplicate files",
+                detail: progressLabel,
+                progress: model.fileDuplicateProgress.flatMap {
+                    $0.total > 0 ? Double($0.completed) / Double($0.total) : nil
+                },
+                onStop: { model.cancelFileDuplicateScan() },
+                actionBottom: actionBottom
+            )
+        }
     }
 
     private var progressLabel: String {
@@ -66,16 +81,26 @@ struct FileDuplicatesView: View {
         }
     }
 
+    @ViewBuilder
     private var nothingFound: some View {
-        ContentUnavailableView {
-            Label("No duplicate files found", systemImage: "checkmark.circle")
-        } description: {
-            Text("Try another folder or change the minimum file size.")
+        if hasFilteredResults {
+            ContentUnavailableView {
+                Label("No duplicates match this size", systemImage: "line.3.horizontal.decrease")
+            } description: {
+                Text("Choose a smaller minimum file size to show more results.")
+            }
+            .operationPageLayout()
+        } else {
+            ScanCompletionView(
+                title: "No duplicate files found",
+                detail: model.fileDuplicateResults.map { resultSummary($0) },
+                animate: animateEmptyResult
+            )
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var hasFilteredResults: Bool {
+        !(model.fileDuplicateResults?.groups.isEmpty ?? true)
     }
 
     private var groups: some View {
@@ -129,13 +154,14 @@ struct FileDuplicatesView: View {
                 .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.large)
                 .fixedSize(horizontal: true, vertical: false)
+                .scanActionAnchor()
                 .disabled(model.isBusyWithDisk)
         }
     }
 
     private func resultSummary(_ results: FileDuplicateResults) -> String {
         var text = "Checked \(results.examinedCount.formatted()) files. "
-            + "\(results.eligibleCount.formatted()) met the minimum size."
+            + "\(results.eligibleCount.formatted()) were eligible for comparison."
         if !results.groups.isEmpty {
             text += " Found \(results.groups.count.formatted()) verified duplicate sets."
         }
@@ -149,7 +175,6 @@ struct FileDuplicatesView: View {
         GroupedBox {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    Badge(text: "verified", style: .safe)
                     Text("\(group.count) identical files · keeping 1")
                         .font(.mcRowTitle)
                         .foregroundStyle(Token.Text.primary)
@@ -308,12 +333,12 @@ struct FileDuplicateMinimumPicker: View {
             .menuStyle(.button)
             .buttonStyle(PageActionButtonStyle())
             .menuIndicator(.hidden)
-            .disabled(model.isScanningDuplicateFiles)
+            .disabled(model.isBusyWithDisk)
             .accessibilityLabel("Minimum file size")
             .accessibilityValue(minimumOptions.first { $0.1 == model.fileDuplicateMinimumBytes }?.0 ?? "")
         }
         .fixedSize()
-        .help("Set zero to check all files. Small files make the scan slower.")
+        .help("Filter results by file size. The scan checks all eligible file sizes.")
     }
 
 }

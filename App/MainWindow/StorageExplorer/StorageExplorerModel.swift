@@ -236,6 +236,7 @@ final class StorageExplorerModel {
         let excludedPatterns = settings?.excludedPatterns ?? []
         scanTask = Task { [weak self] in
             guard let self else { return }
+            let presentation = OperationPresentationDuration()
             do {
                 let snapshot = try await service.scan(
                     directory: url,
@@ -252,6 +253,7 @@ final class StorageExplorerModel {
                         }
                     }
                 )
+                try await presentation.wait()
                 guard scanGeneration == generation else { return }
                 self.snapshot = snapshot
                 store(snapshot)
@@ -264,11 +266,13 @@ final class StorageExplorerModel {
                 isLoading = false
                 scanTask = nil
             } catch let explorerError as StorageExplorerError {
+                try? await presentation.wait()
                 guard scanGeneration == generation else { return }
                 error = explorerError
                 isLoading = false
                 scanTask = nil
             } catch {
+                try? await presentation.wait()
                 guard scanGeneration == generation else { return }
                 self.error = .unavailable(url.path)
                 isLoading = false

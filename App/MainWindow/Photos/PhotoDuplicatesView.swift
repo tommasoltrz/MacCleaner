@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import ScoloCore
 
@@ -9,7 +10,7 @@ import ScoloCore
 /// its keeper next to its casualties at the same size, and the keeper is not
 /// selectable from here at all.
 struct PhotoDuplicatesView: View {
-    /// Which photograph the preview sheet is showing, and the group it came from.
+    /// Identifies the photo and group shown in the preview window.
     struct Preview: Identifiable {
         let groupID: String
         let asset: PhotoAsset
@@ -17,15 +18,16 @@ struct PhotoDuplicatesView: View {
     }
 
     @Bindable var model: AppModel
-    @State private var thumbnails = PhotoThumbnailLoader()
-    @State private var preview: Preview?
+    @State private var animateEmptyResult = false
+    @State private var resultBeforeScan: Date?
+    private var thumbnails: PhotoThumbnailLoader { model.photoThumbnails }
 
     var body: some View {
         Group {
-            if let reason = model.photoUnavailable {
-                unavailable(reason)
-            } else if model.isSweepingPhotos {
+            if model.isSweepingPhotos {
                 sweeping
+            } else if let reason = model.photoUnavailable {
+                unavailable(reason)
             } else if model.photoResults == nil {
                 intro
             } else if model.photoGroups.isEmpty {
@@ -35,16 +37,19 @@ struct PhotoDuplicatesView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .disabled(model.isDeletingPhotos)
         .operationResultAnimation(isRunning: model.isSweepingPhotos)
-        .sheet(item: $preview) { item in
-            PhotoPreviewSheet(
-                item: item,
-                group: model.photoGroups.first { $0.id == item.groupID },
-                model: model,
-                thumbnails: thumbnails,
-                onClose: { preview = nil }
-            )
+        .onChange(of: model.isSweepingPhotos, initial: true) { wasRunning, isRunning in
+            if isRunning {
+                resultBeforeScan = model.photoResults?.finishedAt
+                animateEmptyResult = false
+            } else if wasRunning {
+                animateEmptyResult = model.photoResults?.finishedAt != nil
+                    && model.photoResults?.finishedAt != resultBeforeScan
+            }
         }
+        .onChange(of: model.photoSimilarity) { _, _ in animateEmptyResult = false }
+        .onDisappear { animateEmptyResult = false }
     }
 
     // MARK: - States
@@ -62,25 +67,26 @@ struct PhotoDuplicatesView: View {
             Button("Find Duplicates") { model.startPhotoSweep() }
                 .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                 .controlSize(.large)
+                .scanActionAnchor()
                 // The sweep refuses to start over another disk walk; say so here
                 // rather than swallowing the click.
                 .disabled(model.isBusyWithDisk)
         }
-        // The Scanner's empty-state geometry exactly: a 320pt block pinned to the
-        // top of the page, not a message floating in the middle of it.
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .pageStateLayout()
     }
 
     private var sweeping: some View {
-        PageProgressView(
-            title: "Scanning for duplicate photos",
-            detail: progressLabel,
-            progress: Double(model.photoProgress?.percent ?? 0) / 100,
-            onStop: { model.cancelPhotoSweep() }
-        )
+        ScanProgressPage {
+            intro
+        } progress: { actionBottom in
+            PageProgressView(
+                title: "Scanning for duplicate photos",
+                detail: "\(progressLabel)\nThis may take a few minutes.",
+                progress: Double(model.photoProgress?.percent ?? 0) / 100,
+                onStop: { model.cancelPhotoSweep() },
+                actionBottom: actionBottom
+            )
+        }
     }
 
     private var progressLabel: String {
@@ -114,22 +120,11 @@ struct PhotoDuplicatesView: View {
     }
 
     private var nothingFound: some View {
-        centred {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 32))
-                .foregroundStyle(Token.textColor(.green))
-            Text("No duplicates found")
-                .font(.mcToolbarTitle)
-                .foregroundStyle(Token.Text.primary)
-            if let results = model.photoResults {
-                Text(summary(results))
-                    .font(.mcBody)
-                    .foregroundStyle(Token.Text.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 420)
-            }
-
-        }
+        ScanCompletionView(
+            title: "No duplicate photos found",
+            detail: model.photoResults.map { summary($0) },
+            animate: animateEmptyResult
+        )
     }
 
     /// A skipped photo was never compared, so the result is a floor rather than a
@@ -261,16 +256,67 @@ struct PhotoDuplicatesView: View {
         let selected = model.photoSelection.contains(asset.id)
 
         return VStack(spacing: 5) {
-            ZStack(alignment: .topTrailing) {
-                thumbnail(asset)
-                    // Tapping the picture opens it. Everything here looks alike at
-                    // 108pt, which is precisely why a decision to delete should not
-                    // have to be made at 108pt.
-                    .onTapGesture { preview = Preview(groupID: group.id, asset: asset) }
-
-                if !isKeeper {
-                    // Selection lives on the checkmark alone, so opening a photo to
-                    // look at it can never arm or disarm it by accident.
+            thumbnail(asset)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Token.Radius.well, style: .continuous)
+                        .strokeBorder(
+                            isKeeper ? Token.color(.green).opacity(0.7)
+                                : (selected ? Token.color(.red) : Token.Fill.boxBorder),
+                            lineWidth: isKeeper || selected ? 2 : 1
+                        )
+                        .allowsHitTesting(false)
+                }
+            Text(isKeeper ? "Keep" : (selected ? "Delete" : "Keeping"))
+                .font(.mcBadge)
+                .foregroundStyle(
+                    isKeeper ? Token.textColor(.green)
+                        : (selected ? Token.textColor(.red) : Token.Text.tertiary)
+                )
+        }
+        .contentShape(Rectangle())
+        .overlay {
+            PhotoThumbnailClickTarget(
+                isSelected: Binding(
+                    get: { model.photoSelection.contains(asset.id) },
+                    set: { isSelected in
+                        guard !isKeeper else { return }
+                        if isSelected { model.photoSelection.insert(asset.id) }
+                        else { model.photoSelection.remove(asset.id) }
+                    }
+                ),
+                isSelectable: !isKeeper,
+                onPreview: { model.photoPreview = Preview(groupID: group.id, asset: asset) }
+            )
+        }
+        .help(isKeeper ? "Double-click to preview" : "Click to select. Double-click to preview.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(isKeeper ? "Photo to keep" : "Photo")
+        .accessibilityValue(selected ? "Selected for deletion" : "Not selected for deletion")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            if !isKeeper { model.togglePhoto(asset.id) }
+        }
+        .accessibilityAction(named: Text("Preview photo")) {
+            model.photoPreview = Preview(groupID: group.id, asset: asset)
+        }
+        .overlay(alignment: .top) {
+            if !isKeeper {
+                HStack(spacing: 4) {
+                    Button {
+                        model.keepInstead(groupID: group.id, assetID: asset.id)
+                    } label: {
+                        Text("Keep")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .frame(height: 24)
+                            .background(Color.black.opacity(0.65), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Keep this photo instead")
+                    .help("Choose this photo as the copy to keep")
+                    Spacer(minLength: 0)
                     Button {
                         model.togglePhoto(asset.id)
                     } label: {
@@ -281,35 +327,23 @@ struct PhotoDuplicatesView: View {
                                 selected ? Color.white : Color.white.opacity(0.9),
                                 selected ? Token.color(.red) : Color.black.opacity(0.35)
                             )
+                            .frame(width: 24, height: 24)
+                            .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
-                    .padding(5)
-                    .help(selected ? "Keep this photo" : "Delete this photo")
+                    .accessibilityLabel(selected ? "Deselect photo" : "Select photo for deletion")
+                    .help(selected ? "Deselect photo" : "Select photo for deletion")
+                }
+                .padding(5)
+            }
+        }
+        .contextMenu {
+            if !isKeeper {
+                Button("Keep This One Instead") {
+                    model.keepInstead(groupID: group.id, assetID: asset.id)
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: Token.Radius.well, style: .continuous)
-                    .strokeBorder(
-                        isKeeper ? Token.color(.green).opacity(0.7)
-                            : (selected ? Token.color(.red) : Token.Fill.boxBorder),
-                        lineWidth: isKeeper || selected ? 2 : 1
-                    )
-            )
-            .contextMenu {
-                if !isKeeper {
-                    Button("Keep This One Instead") {
-                        model.keepInstead(groupID: group.id, assetID: asset.id)
-                    }
-                }
-                Button("Open") { preview = Preview(groupID: group.id, asset: asset) }
-            }
-
-            Text(isKeeper ? "Keep" : (selected ? "Delete" : "Keeping"))
-                .font(.mcBadge)
-                .foregroundStyle(
-                    isKeeper ? Token.textColor(.green)
-                        : (selected ? Token.textColor(.red) : Token.Text.tertiary)
-                )
+            Button("Open") { model.photoPreview = Preview(groupID: group.id, asset: asset) }
         }
     }
 
@@ -343,8 +377,55 @@ struct PhotoDuplicatesView: View {
     }
 
     private func centred<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 10) { content() }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 18) { content() }
+            .operationPageLayout()
+    }
+}
+
+/// Selects immediately and restores the prior selection when a double-click opens the preview.
+private struct PhotoThumbnailClickTarget: NSViewRepresentable {
+    @Binding var isSelected: Bool
+    let isSelectable: Bool
+    let onPreview: () -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeNSView(context: Context) -> ClickView {
+        let view = ClickView()
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ nsView: ClickView, context: Context) {
+        nsView.isEnabled = isEnabled
+        nsView.allowsSelection = isSelectable
+        nsView.selection = $isSelected
+        nsView.onPreview = onPreview
+    }
+
+    final class ClickView: NSView {
+        var isEnabled = true
+        var allowsSelection = true
+        var selection: Binding<Bool>?
+        var onPreview: (() -> Void)?
+        private var selectionBeforeClick: Bool?
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            guard isEnabled else { return }
+            if event.clickCount == 1 {
+                selectionBeforeClick = selection?.wrappedValue
+                if allowsSelection, let selection {
+                    selection.wrappedValue.toggle()
+                }
+            } else if event.clickCount == 2 {
+                if allowsSelection, let selectionBeforeClick {
+                    selection?.wrappedValue = selectionBeforeClick
+                }
+                selectionBeforeClick = nil
+                onPreview?()
+            }
+        }
     }
 }
 
@@ -382,7 +463,7 @@ struct PhotoSimilarityPicker: View {
             .accessibilityLabel("Match")
             .accessibilityValue(similarityLabel(model.photoSimilarity))
             .fixedSize()
-            .disabled(model.isSweepingPhotos)
+            .disabled(model.isBusyWithDisk)
             .help(model.photoSimilarity.detail
                   + " Bursts and identical copies are unaffected — neither is decided "
                   + "by this number.")

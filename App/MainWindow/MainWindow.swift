@@ -65,21 +65,18 @@ struct MainWindow: View {
         // Traffic-light geometry, and the window's drag turned off — see
         // `WindowChrome`, which explains why a nested opt-out cannot do it.
         .background(WindowChrome(headerBand: Token.Size.headerBand))
-        // Over the whole content area, inside the safe area, so the toolbar above
-        // keeps its glass and its controls. `.disabled` on the detail pane used to
-        // do this job, and it reached the toolbar through the environment.
-        .overlay {
-            if let activity = model.activity, !(model.view == .scanner && model.isCleaningUp) {
-                ActivityOverlay(activity: activity)
-                    .transition(.opacity)
-            }
+        .disabled(model.activity != nil || model.isDeletingPhotos)
+        .background(PhotoPreviewWindowPresenter(item: model.photoPreview, model: model))
+        .onChange(of: model.duplicateKind) { _, _ in model.photoPreview = nil }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            model.photoPreview = nil
         }
-        .animation(.easeInOut(duration: 0.18), value: model.activity)
         .task {
             if scenePhase == .active { model.startInitialCleanupScan() }
             await model.loadDashboard()
         }
         .onChange(of: model.view) { _, view in
+            model.photoPreview = nil
             if view == .scanner, scenePhase == .active { model.startInitialCleanupScan() }
         }
         .onChange(of: model.isBusyWithDisk) { _, isBusy in
@@ -248,11 +245,14 @@ struct MainWindow: View {
                 headerCentre
             }
             HStack(spacing: 10) {
-                pageActions
-                if hasRemovalAction {
-                    removeButton
+                if model.view == .duplicates || model.removalCompletion?.destination != model.view {
+                    pageActions
+                    if hasRemovalAction {
+                        removeButton
+                    }
                 }
             }
+            .disabled(model.removalCompletion?.destination == model.view)
         }
         // The page's own gutter, so the title and the actions line up with the
         // cards under them rather than with the viewport's edge.
@@ -286,6 +286,13 @@ struct MainWindow: View {
                 TrashView(model: model)
             case .duplicates:
                 DuplicatesView(model: model)
+            }
+        }
+        .allowsHitTesting(model.view == .duplicates || model.removalCompletion?.destination != model.view)
+        .accessibilityHidden(model.view != .duplicates && model.removalCompletion?.destination == model.view)
+        .overlay {
+            if model.view != .duplicates {
+                RemovalOperationSurface(model: model)
             }
         }
         .frame(minWidth: Token.Size.minimumContentWidth)
@@ -331,35 +338,6 @@ struct MainWindow: View {
                     },
                     onCancel: { model.cancelCleanUp() }
                 )
-            case .deletePhotos:
-                ConfirmationSheet(
-                    variant: .deletePhotos(count: model.photoSelection.count),
-                    onConfirm: { Task { await model.deleteSelectedPhotos() } },
-                    onCancel: { model.activeSheet = nil }
-                )
-            case .deleteDuplicateFiles:
-                ConfirmationSheet(
-                    variant: .deleteDuplicateFiles(
-                        count: model.fileDuplicateSelection.count,
-                        totalBytes: model.fileDuplicateSelectionBytes
-                    ),
-                    onConfirm: { Task { await model.removeSelectedDuplicateFiles() } },
-                    onCancel: { model.activeSheet = nil }
-                )
-            case .removeStorageItems:
-                ConfirmationSheet(
-                    variant: .removeStorageItems(
-                        count: model.pendingStorageExplorerItems.count,
-                        totalBytes: model.pendingStorageExplorerItems.reduce(0) {
-                            $0 + $1.allocatedBytes
-                        },
-                        cloudItemCount: model.pendingStorageExplorerItems.filter {
-                            $0.cloudState == .downloaded
-                        }.count
-                    ),
-                    onConfirm: { Task { await model.performStorageExplorerRemoval() } },
-                    onCancel: { model.cancelStorageExplorerRemoval() }
-                )
             case .emptyTrash:
                 ConfirmationSheet(
                     variant: .emptyTrash(
@@ -368,30 +346,6 @@ struct MainWindow: View {
                     ),
                     onConfirm: { Task { await model.emptyTrash() } },
                     onCancel: { model.activeSheet = nil }
-                )
-            case .uninstallApp:
-                ConfirmationSheet(
-                    variant: .uninstallApp(
-                        applicationName: model.pendingAppUninstall?.plan.applicationName
-                            ?? "this application",
-                        itemCount: model.pendingAppUninstall?.itemCount ?? 0,
-                        totalBytes: model.pendingAppUninstall?.totalBytes ?? 0,
-                        protectedDataCount: model.pendingAppUninstall?.protectedDataCount ?? 0,
-                        applicationOnly: model.pendingAppUninstall?.isApplicationOnly ?? false
-                    ),
-                    onConfirm: { Task { await model.performAppUninstall() } },
-                    onCancel: { model.cancelAppUninstall() }
-                )
-            case .uninstallApps:
-                ConfirmationSheet(
-                    variant: .uninstallApps(
-                        applicationCount: model.pendingBatchUninstall?.plans.count ?? 0,
-                        itemCount: model.pendingBatchUninstall?.itemCount ?? 0,
-                        totalBytes: model.pendingBatchUninstall?.totalBytes ?? 0,
-                        protectedDataCount: model.pendingBatchUninstall?.protectedDataCount ?? 0
-                    ),
-                    onConfirm: { Task { await model.performBatchUninstall() } },
-                    onCancel: { model.cancelBatchUninstall() }
                 )
             }
         }
@@ -416,10 +370,10 @@ struct MainWindow: View {
         case .scanner:         return !model.cleanupSelection(in: .all).isEmpty
         case .duplicates:      return model.duplicateKind == .files
             ? !model.fileDuplicateSelection.isEmpty && !model.isScanningDuplicateFiles
-            : !model.photoSelection.isEmpty
+            : !model.photoSelection.isEmpty && !model.isRegroupingPhotos
         case .uninstaller:     return model.uninstallerTab == .installed
             ? !model.selectedApplicationIDs.isEmpty
-            : !model.selectedLeftoverIdentifiers.isEmpty
+            : !model.selectedLeftoverIdentifiers.isEmpty && !model.isLoadingApplicationLeftovers
         case .storageExplorer: return model.storageExplorer.canRemoveSelection
             && !model.storageExplorer.isMapSelectionPending
             && !model.isStorageExplorerMeasurementBlocked
@@ -431,11 +385,18 @@ struct MainWindow: View {
     private func removeTapped() {
         switch model.view {
         case .scanner: model.requestCleanUp(in: .all)
-        case .duplicates: model.activeSheet = model.duplicateKind == .files
-            ? .deleteDuplicateFiles : .deletePhotos
-        case .uninstaller: model.uninstallerTab == .installed
-            ? model.moveSelectedApplicationsToTrash()
-            : model.requestLeftoverRemoval()
+        case .duplicates:
+            if model.duplicateKind == .files {
+                Task { await model.removeSelectedDuplicateFiles() }
+            } else {
+                Task { await model.deleteSelectedPhotos() }
+            }
+        case .uninstaller:
+            if model.uninstallerTab == .installed {
+                model.moveSelectedApplicationsToTrash()
+            } else {
+                Task { await model.requestLeftoverRemoval() }
+            }
         case .storageExplorer: Task { await model.requestStorageExplorerRemoval() }
         case .trash:      model.activeSheet = .emptyTrash
         case .dashboard, .history: break
