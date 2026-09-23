@@ -72,11 +72,6 @@ public struct HiddenDataScanner: CategoryScanner {
         static let mobileDocuments = ["Library", "Mobile Documents"]
         static let cloudKit = ["Library", "CloudKit"]
         static let photosLibrary = ["Pictures", "Photos Library.photoslibrary"]
-        /// Thumbnail and preview pyramids, which Photos rebuilds on demand.
-        static let photosCaches: [[String]] = [
-            photosLibrary + ["resources", "derivatives"],
-            photosLibrary + ["resources", "renders"]
-        ]
     }
 
     /// `scanHiddenDirs` skipped these: `.Trash` and `.cache` are listed in their own
@@ -91,7 +86,7 @@ public struct HiddenDataScanner: CategoryScanner {
     /// to err on: a row offering `~/.cargo` whole is an offer to uninstall Rust.
     static let dotDirectorySkipList: Set<String> = [
         ".Trash", ".cache", ".npm", ".yarn", ".gradle", ".local",
-        ".pnpm-store",
+        ".pnpm-store", ".codex", ".claude",
         ".bun", ".cargo", ".ivy2", ".bundle", ".nuget", ".hex", ".cabal", ".pub-cache"
     ]
 
@@ -112,6 +107,7 @@ public struct HiddenDataScanner: CategoryScanner {
         // once inside `~/.Trash` and again as a file of its own — a double count the
         // predecessor made every time.
         var claimed = context.excludedPaths
+        claimed += [".codex", ".claude", ".cursor"].map { home.appendingPathComponent($0).path }
 
         // 1. The Trash is claimed and not listed. It was a row until 20 Sep 2026, and
         // a row here is a checkbox in front of Clean Up, which knows nothing about
@@ -157,14 +153,11 @@ public struct HiddenDataScanner: CategoryScanner {
                                        context: context, to: &found)
         }
 
-        // 7. Photos. The predecessor offered the entire `.photoslibrary` — every
-        // original the user owns — as a removal candidate. Only the rebuildable
-        // derivative caches inside it are offered here; the library as a whole is
-        // claimed so the archive sweep does not walk back into it either.
+        // Photos manages these library files. Show their size without offering direct removal.
         claimed.append(url(Root.photosLibrary).path)
-        for components in Root.photosCaches {
-            try await measureAndAppend(url(components), kind: .cache,
-                                       minimumBytes: Threshold.any, isRegenerable: true,
+        for rule in StorageRuleRegistry.photosLibraryResourceRules {
+            try await measureAndAppend(home.appendingPathComponent(rule.path), kind: .folder,
+                                       minimumBytes: Threshold.any, storageRule: rule,
                                        context: context, to: &found)
         }
 
@@ -472,6 +465,7 @@ public struct HiddenDataScanner: CategoryScanner {
         kind: FileEntry.Kind,
         minimumBytes: Int64,
         isRegenerable: Bool = false,
+        storageRule: StorageRule? = nil,
         context: ScanContext,
         to found: inout Found
     ) async throws {
@@ -483,7 +477,7 @@ public struct HiddenDataScanner: CategoryScanner {
 
         let measurement = try await context.measurer.measure(url)
         append(url, kind: kind, measurement: measurement, lastOpened: lastOpened,
-               minimumBytes: minimumBytes, isRegenerable: isRegenerable,
+               minimumBytes: minimumBytes, isRegenerable: isRegenerable, storageRule: storageRule,
                context: context, to: &found)
     }
 
@@ -500,6 +494,7 @@ public struct HiddenDataScanner: CategoryScanner {
         lastOpened: Date?,
         minimumBytes: Int64,
         isRegenerable: Bool = false,
+        storageRule: StorageRule? = nil,
         context: ScanContext,
         to found: inout Found
     ) {
@@ -512,14 +507,15 @@ public struct HiddenDataScanner: CategoryScanner {
         // See `SizeMeasurement.containsProtectedPattern`.
         guard !measurement.containsProtectedPattern else { return }
 
-        found.entries.append(FileEntry(
+        let entry = FileEntry(
             url: url,
             kind: kind,
             allocatedBytes: measurement.allocatedBytes,
             lastOpened: lastOpened,
             isRegenerable: isRegenerable,
             childCount: (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
-        ))
+        )
+        found.entries.append(storageRule?.apply(to: entry, context: context) ?? entry)
     }
 }
 

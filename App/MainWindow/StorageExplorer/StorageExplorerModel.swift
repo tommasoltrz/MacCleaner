@@ -3,6 +3,20 @@ import Foundation
 import ScoloCore
 import Observation
 
+protocol StorageExplorerScanning: Sendable {
+    func scan(
+        directory: URL, excludedPaths: [String], excludedPatterns: [String],
+        progress: (@Sendable (SizeMeasurement) -> Void)?,
+        onUpdate: (@Sendable (StorageExplorerScanUpdate) -> Void)?
+    ) async throws -> StorageExplorerSnapshot
+    func reviewSelection(
+        _ items: [StorageExplorerItem], in directory: URL,
+        excludedPaths: [String], excludedPatterns: [String]
+    ) async throws -> StorageExplorerSelectionReview
+}
+
+extension StorageExplorerService: StorageExplorerScanning {}
+
 struct StorageExplorerLocation: Identifiable, Hashable {
     let url: URL
     let name: String
@@ -17,12 +31,11 @@ struct StorageExplorerLocation: Identifiable, Hashable {
 @Observable
 final class StorageExplorerModel {
     @ObservationIgnored private let settings: SettingsStore?
-    @ObservationIgnored private let service: StorageExplorerService
+    @ObservationIgnored private let service: any StorageExplorerScanning
     @ObservationIgnored private let removalService: StorageExplorerRemovalService
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var scanGeneration = 0
-    @ObservationIgnored private var cachedSnapshots: [String: StorageExplorerSnapshot] = [:]
-    @ObservationIgnored private var cacheOrder: [String] = []
+    @ObservationIgnored private var cache = StorageExplorerCache(limit: 160)
     /// A row to select as soon as the folder holding it has been measured.
     ///
     /// Every load clears the selection, because a new folder's rows have nothing to
@@ -33,15 +46,20 @@ final class StorageExplorerModel {
     /// names the folder that changed.
     @ObservationIgnored private var pendingSelection: URL?
 
-    private static let cacheLimit = 32
-
     var snapshot: StorageExplorerSnapshot?
     var currentURL: URL?
     var selection = Set<StorageExplorerItem.ID>() {
-        didSet { finishMapSelection() }
+        didSet {
+            let trashIDs = snapshot?.items.filter { $0.protectionReason == .trash }.map(\.id) ?? []
+            let allowed = selection.subtracting(trashIDs)
+            if selection != allowed { selection = allowed }
+            finishMapSelection()
+        }
     }
     private(set) var isMapSelectionPending = false
     @ObservationIgnored private var mapSelectionTask: Task<Void, Never>?
+    private(set) var isRefreshing = false
+    private(set) var refreshFailed = false
     var isLoading = false
     var progress = SizeMeasurement.zero
     var error: StorageExplorerError?
@@ -53,7 +71,7 @@ final class StorageExplorerModel {
 
     init(
         settings: SettingsStore? = nil,
-        service: StorageExplorerService = StorageExplorerService(),
+        service: any StorageExplorerScanning = StorageExplorerService(),
         removalService: StorageExplorerRemovalService = StorageExplorerRemovalService()
     ) {
         self.settings = settings
@@ -74,7 +92,8 @@ final class StorageExplorerModel {
     }
 
     var canRemoveSelection: Bool {
-        !selectedItems.isEmpty && selectedItems.allSatisfy(\.isRemovable)
+        !isLoading && snapshot?.isPartial != true
+            && !selectedItems.isEmpty && selectedItems.allSatisfy(\.isRemovable)
     }
 
     /// Highlight tiles immediately. Delay only the first activation of the header action.
@@ -115,11 +134,24 @@ final class StorageExplorerModel {
         }
     }
 
-    /// Drops every cached level. The model clears its own cache after an Explorer
-    /// removal; `AppModel` calls this after every other removal, since those move
-    /// files the cached levels still count.
+    /// Keep cached folders visible, but check their sizes on the next visit.
     func invalidateCache() {
-        clearCache()
+        pauseBackgroundRefresh()
+        cache.invalidate()
+        if snapshot != nil { snapshot?.isEstimated = true }
+    }
+
+    func pauseBackgroundRefresh() {
+        guard isRefreshing else { return }
+        scanGeneration += 1
+        scanTask?.cancel()
+        scanTask = nil
+        isRefreshing = false
+    }
+
+    func refreshEstimatedSnapshot() {
+        guard !isLoading, !isRefreshing, let snapshot, snapshot.isEstimated else { return }
+        startBackgroundRefresh(snapshot.directory)
     }
 
     func selectHome() {
@@ -130,7 +162,7 @@ final class StorageExplorerModel {
     func selectLocation(_ url: URL, revealing item: URL? = nil) {
         history.removeAll()
         forwardHistory.removeAll()
-        load(url, useCache: false, revealing: item)
+        load(url, revealing: item)
     }
 
     func open(_ item: StorageExplorerItem) {
@@ -162,9 +194,9 @@ final class StorageExplorerModel {
     func refresh(clearAllCachedFolders: Bool = false) {
         guard let currentURL else { return }
         if clearAllCachedFolders {
-            clearCache()
+            cache.invalidate()
         } else {
-            removeCachedSnapshot(for: currentURL)
+            cache.invalidate(relatedTo: currentURL)
         }
         load(currentURL, useCache: false)
     }
@@ -173,23 +205,42 @@ final class StorageExplorerModel {
         scanGeneration += 1
         scanTask?.cancel()
         scanTask = nil
+        if isRefreshing {
+            isRefreshing = false
+            return
+        }
         isLoading = false
-        wasCancelled = true
+        wasCancelled = snapshot?.isPartial != true
     }
 
     func remove(_ items: [StorageExplorerItem], keepReceipt: Bool) async throws -> CleanupOutcome {
         guard let directory = snapshot?.directory else { return CleanupOutcome() }
-        return try await removalService.remove(
+        let outcome = try await removalService.remove(
             items,
             from: directory,
             keepReceipt: keepReceipt
         )
+        applyRemovalOutcome(outcome, items: items)
+        return outcome
+    }
+
+    func applyRemovalOutcome(_ outcome: CleanupOutcome, items: [StorageExplorerItem]) {
+        pauseBackgroundRefresh()
+        cache.applyRemovals(outcome.removedRecords, items: items)
+        // Other files may have changed while the removal ran.
+        if let currentURL, var updated = cache.snapshot(for: currentURL) {
+            updated.isEstimated = true
+            cache.store(updated)
+            snapshot = updated
+            selection.formIntersection(Set(updated.items.map(\.id)))
+        }
     }
 
     func reviewSelectionForRemoval(
         _ items: [StorageExplorerItem]
     ) async throws -> StorageExplorerSelectionReview? {
         guard let currentURL else { return nil }
+        pauseBackgroundRefresh()
         let review = try await service.reviewSelection(
             items,
             in: currentURL,
@@ -197,7 +248,7 @@ final class StorageExplorerModel {
             excludedPatterns: settings?.excludedPatterns ?? []
         )
         snapshot = review.snapshot
-        store(review.snapshot)
+        cache.store(review.snapshot)
         selection = selection.intersection(Set(review.snapshot.items.map(\.id)))
 
         return review
@@ -211,6 +262,8 @@ final class StorageExplorerModel {
         scanGeneration += 1
         let generation = scanGeneration
         scanTask?.cancel()
+        isRefreshing = false
+        refreshFailed = false
         selection.removeAll()
         // Set on every load, so a navigation that asks for nothing also discards a
         // request the previous navigation never got to apply.
@@ -219,12 +272,13 @@ final class StorageExplorerModel {
         error = nil
         wasCancelled = false
 
-        if useCache, let cached = cachedSnapshot(for: url) {
+        if useCache, let cached = cache.snapshot(for: url) {
             currentURL = cached.directory
             snapshot = cached
             isLoading = false
             scanTask = nil
             applyPendingSelection()
+            if cached.isEstimated { startBackgroundRefresh(cached.directory) }
             return
         }
 
@@ -251,12 +305,18 @@ final class StorageExplorerModel {
                             guard self.scanGeneration == generation else { return }
                             self.progress = measurement
                         }
+                    },
+                    onUpdate: { update in
+                        Task { @MainActor in
+                            guard self.scanGeneration == generation else { return }
+                            self.accept(update, showPartial: true)
+                        }
                     }
                 )
                 try await presentation.wait()
                 guard scanGeneration == generation else { return }
                 self.snapshot = snapshot
-                store(snapshot)
+                cache.store(snapshot)
                 currentURL = snapshot.directory
                 isLoading = false
                 scanTask = nil
@@ -296,38 +356,56 @@ final class StorageExplorerModel {
         selection = [item.id]
     }
 
-    private func cachedSnapshot(for url: URL) -> StorageExplorerSnapshot? {
-        let key = Self.cacheKey(for: url)
-        guard let snapshot = cachedSnapshots[key] else { return nil }
-        cacheOrder.removeAll { $0 == key }
-        cacheOrder.append(key)
-        return snapshot
-    }
-
-    private func store(_ snapshot: StorageExplorerSnapshot) {
-        let key = Self.cacheKey(for: snapshot.directory)
-        cachedSnapshots[key] = snapshot
-        cacheOrder.removeAll { $0 == key }
-        cacheOrder.append(key)
-
-        while cacheOrder.count > Self.cacheLimit {
-            cachedSnapshots.removeValue(forKey: cacheOrder.removeFirst())
+    private func startBackgroundRefresh(_ url: URL) {
+        scanGeneration += 1
+        let generation = scanGeneration
+        scanTask?.cancel()
+        isRefreshing = true
+        refreshFailed = false
+        let excludedPaths = settings?.excludedFolderPaths ?? []
+        let excludedPatterns = settings?.excludedPatterns ?? []
+        scanTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let updated = try await service.scan(
+                    directory: url, excludedPaths: excludedPaths,
+                    excludedPatterns: excludedPatterns, progress: nil,
+                    onUpdate: { update in
+                        Task { @MainActor in
+                            guard self.scanGeneration == generation else { return }
+                            self.accept(update, showPartial: false)
+                        }
+                    }
+                )
+                try Task.checkCancellation()
+                guard scanGeneration == generation else { return }
+                cache.store(updated)
+                snapshot = updated
+                currentURL = updated.directory
+                selection.formIntersection(Set(updated.items.map(\.id)))
+            } catch {
+                guard scanGeneration == generation else { return }
+                refreshFailed = !(error is CancellationError)
+            }
+            guard scanGeneration == generation else { return }
+            isRefreshing = false
+            scanTask = nil
         }
     }
 
-    private func clearCache() {
-        cachedSnapshots.removeAll()
-        cacheOrder.removeAll()
-    }
-
-    private func removeCachedSnapshot(for url: URL) {
-        let key = Self.cacheKey(for: url)
-        cachedSnapshots.removeValue(forKey: key)
-        cacheOrder.removeAll { $0 == key }
-    }
-
-    private static func cacheKey(for url: URL) -> String {
-        url.standardizedFileURL.path
+    private func accept(_ update: StorageExplorerScanUpdate, showPartial: Bool) {
+        switch update {
+        case .partial(let partial):
+            if showPartial && isLoading {
+                snapshot = partial
+                currentURL = partial.directory
+            }
+        case .retained(let snapshots):
+            // Store shallow folders last so the cache retains them longer.
+            for snapshot in snapshots.sorted(by: { $0.directory.pathComponents.count > $1.directory.pathComponents.count }) {
+                cache.store(snapshot)
+            }
+        }
     }
 
     private static func mountedLocations() -> [StorageExplorerLocation] {

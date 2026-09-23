@@ -21,7 +21,10 @@ public struct FileEntryPresentation: Sendable, Equatable {
         let type: String
         let symbol: Icon
 
-        if entry.removalAction != nil {
+        if entry.inventoryReason != nil {
+            type = "Protected data"
+            symbol = .folder
+        } else if entry.removalAction != nil {
             type = "Files left by a removed app"
             symbol = .application
         } else if entry.kind == .appBundle || entry.kind == .downloadedApp {
@@ -93,9 +96,10 @@ public struct FileEntryPresentation: Sendable, Equatable {
             symbol = .folder
         }
 
-        var detail = type + location
+        var detail = entry.contentDescription ?? (type + location)
         if let caveat = entry.safetyCaveat { detail += " · \(caveat)" }
-        if type == "Folder", let count = entry.childCount {
+        if let reason = entry.safeRemovalReviewReason { detail += " · \(reason)" }
+        if entry.contentDescription == nil, type == "Folder", let count = entry.childCount {
             detail += " · \(count.formatted()) \(count == 1 ? "item" : "items")"
         }
         summary = detail

@@ -25,6 +25,52 @@ private func entry(_ url: URL, kind: FileEntry.Kind = .file, bytes: Int64 = 0) -
 @Suite("Cleanup")
 struct CleanupServiceTests {
 
+    private actor OwnerProbe {
+        var checks = 0
+        let blockedPath: String
+        let owner = FileEntry.RunningOwner(name: "Example", bundleIdentifier: "com.example.app", bundlePath: "/Example.app")
+        init(blockedPath: String) { self.blockedPath = blockedPath }
+        func currentOwner(_ entry: FileEntry) -> FileEntry.RunningOwner? {
+            guard entry.url.path == blockedPath else { return nil }
+            checks += 1
+            return checks >= 2 ? owner : nil
+        }
+    }
+
+    @Test("An owner started during measurement keeps its cache while other items are removed")
+    func ownerStartsDuringMeasurement() async throws {
+        let sandbox = try Sandbox()
+        let blocked = try sandbox.writeFile("active-cache", bytes: oneMB)
+        let other = try sandbox.writeFile("other-cache", bytes: oneMB)
+        let probe = OwnerProbe(blockedPath: blocked.path)
+        let outcome = try await CleanupService().remove(
+            entries: [entry(blocked, kind: .cache), entry(other, kind: .cache)],
+            trashFirst: false, keepReceipt: false,
+            runningOwner: { await probe.currentOwner($0) }
+        )
+        #expect(await probe.checks == 2)
+        #expect(outcome.inUse == [blocked.path: "Example"])
+        #expect(outcome.failed == [blocked.path])
+        #expect(outcome.removedCount == 1)
+        #expect(FileManager.default.fileExists(atPath: blocked.path))
+        #expect(!FileManager.default.fileExists(atPath: other.path))
+    }
+
+    @Test("A closed owner does not leave a stale scan restriction")
+    func closedOwnerAtRemoval() async throws {
+        let sandbox = try Sandbox()
+        let file = try sandbox.writeFile("closed-cache", bytes: oneMB)
+        var cache = entry(file, kind: .cache)
+        cache.inUseBy = .init(name: "Example", bundleIdentifier: "com.example.app", bundlePath: "/Example.app")
+        let outcome = try await CleanupService().remove(
+            entries: [cache], trashFirst: false, keepReceipt: false, runningOwner: { _ in nil }
+        )
+        #expect(outcome.failed.isEmpty)
+        #expect(outcome.inUse.isEmpty)
+        #expect(outcome.removedCount == 1)
+    }
+
+
     @Test("trashing moves the file to ~/.Trash and reports the size it really freed")
     func trashingMovesToTheRealTrash() async throws {
         let sandbox = try Sandbox()

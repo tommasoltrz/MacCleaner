@@ -106,6 +106,111 @@ struct OrphanedAppLeftoverPlannerTests {
         }
     }
 
+    private func sharedPlanner(_ box: Sandbox) -> OrphanedAppLeftoverPlanner {
+        OrphanedAppLeftoverPlanner(pathPlanner: box.appPlanner(), sharedRoot: box.root.appendingPathComponent("Shared"))
+    }
+
+    @discardableResult
+    private func sharedBundle(_ box: Sandbox, path: String, identifier: String) throws -> URL {
+        let bundle = box.root.appendingPathComponent("Shared/" + path)
+        let contents = bundle.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": identifier, "CFBundlePackageType": "APPL", "CFBundleVersion": "1"],
+            format: .xml, options: 0
+        )
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        return bundle
+    }
+
+    @Test("verified shared leftovers appear under Safe to Remove without claiming other folders")
+    func sharedLeftoversAreSafe() async throws {
+        let box = try Sandbox()
+        let game = box.root.appendingPathComponent("Shared/Epic Games/Fortnite")
+        try box.writeAbsolute(game.appendingPathComponent(".egstore/download"))
+        try box.writeAbsolute(box.root.appendingPathComponent("Shared/Epic Games/Personal/files"))
+        try box.writeAbsolute(box.root.appendingPathComponent("Shared/Adobe/settings"))
+        try sharedBundle(box, path: "UnrealEngine/Launcher/SelfUpdateStaging/Install/Epic Games Launcher.app", identifier: SharedApplicationData.epicLauncher)
+        let planner = sharedPlanner(box)
+        let result = try await ApplicationLeftoversScanner(planner: planner).scan(context: ScanContext())
+        let plan = try #require(result.applicationLeftoverPlan)
+        let group = try #require(plan.groups.first)
+        #expect(group.displayName == "Epic Games")
+        #expect(group.items.count == 2)
+        #expect(group.items.contains { $0.url.path == game.path })
+        #expect(group.items.allSatisfy { $0.content == .userData })
+        #expect(result.tileRows(safeToRemove: true).count == 1)
+        #expect(result.tileRows(safeToRemove: false).isEmpty)
+        #expect(group.items.allSatisfy { OrphanedAppLeftoverPlan.removalIsStillSafe($0, in: plan, installedBundleIdentifiers: []) })
+    }
+
+    @Test("installed launcher and game owners protect shared data during scan and removal")
+    func sharedOwners() async throws {
+        let box = try Sandbox()
+        let game = box.root.appendingPathComponent("Shared/Epic Games/Game")
+        try box.writeAbsolute(game.appendingPathComponent(".egstore/download"))
+        try sharedBundle(box, path: "Epic Games/Game/Game.app", identifier: "com.vendor.game")
+        let planner = sharedPlanner(box)
+        let scan = planner.scanCandidates()
+        #expect(scan.identifiers.contains("com.vendor.game"))
+        let plan = try await planner.plan(candidates: scan)
+        #expect(plan.ownerBundleIdentifiers.contains("com.vendor.game"))
+        #expect(plan.itemCount == 1)
+        for owner in [SharedApplicationData.epicLauncher, "com.vendor.game"] {
+            let protected = try await planner.plan(registeredApplicationBundleIdentifiers: [owner])
+            #expect(protected.itemCount == 0)
+            let outcome = try await CleanupService(log: RemovalLog(directory: box.root.appendingPathComponent("log")))
+                .removeOrphanedAppLeftovers(plan, bundleIdentifiers: [SharedApplicationData.epicLauncher], registeredApplicationBundleIdentifiers: [owner])
+            #expect(outcome.removedCount == 0)
+            #expect(outcome.failed == [game.path])
+        }
+        _ = try box.application("Epic", identifier: SharedApplicationData.epicLauncher)
+        #expect(try await planner.plan().itemCount == 0)
+    }
+
+    @Test("shared data keeps exclusions and rejects changed ownership markers")
+    func sharedExclusionsAndChanges() async throws {
+        let box = try Sandbox()
+        let game = box.root.appendingPathComponent("Shared/Epic Games/Game")
+        let marker = game.appendingPathComponent(".egstore")
+        try box.writeAbsolute(marker.appendingPathComponent("download"))
+        let planner = sharedPlanner(box)
+        let excluded = try await planner.plan(context: ScanContext(excludedPaths: [marker.path]))
+        #expect(excluded.itemCount == 0)
+        let plan = try await planner.plan()
+        let item = try #require(plan.groups.first?.items.first)
+        try FileManager.default.removeItem(at: marker)
+        #expect(!OrphanedAppLeftoverPlan.removalIsStillSafe(item, in: plan, installedBundleIdentifiers: []))
+        try box.writeAbsolute(game.appendingPathComponent(".egstore/secret.keychain"))
+        #expect(try await planner.plan(context: ScanContext(excludedPatterns: ["*.keychain"])).itemCount == 0)
+    }
+
+    @Test("shared path symbolic links never become removal candidates")
+    func sharedSymlinks() async throws {
+        let box = try Sandbox()
+        let real = box.root.appendingPathComponent("Personal/Game")
+        try box.writeAbsolute(real.appendingPathComponent(".egstore/download"))
+        let games = box.root.appendingPathComponent("Shared/Epic Games")
+        try FileManager.default.createDirectory(at: games, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: games.appendingPathComponent("Game"), withDestinationURL: real)
+        #expect(try await sharedPlanner(box).plan().itemCount == 0)
+    }
+
+    @Test("a staged launcher is not an installed owner but a real or running app still is")
+    func stagedRegistration() async throws {
+        let box = try Sandbox()
+        let staged = try sharedBundle(box, path: "UnrealEngine/Launcher/SelfUpdateStaging/Install/Epic Games Launcher.app", identifier: SharedApplicationData.epicLauncher)
+        let scan = sharedPlanner(box).scanCandidates()
+        #expect(scan.stagedApplicationRoots.count == 1)
+        #expect(!OrphanedAppLeftoverPlanner.registeredApplicationIsOwner(at: staged, stagedApplicationRoots: scan.stagedApplicationRoots))
+        let installed = try box.application("Epic", identifier: SharedApplicationData.epicLauncher)
+        #expect(OrphanedAppLeftoverPlanner.registeredApplicationIsOwner(at: installed, stagedApplicationRoots: scan.stagedApplicationRoots))
+        let running = OrphanedAppLeftoverPlanner.registeredApplicationBundleIdentifiers(
+            for: scan.identifiers, running: [SharedApplicationData.epicLauncher], isInstalled: { _ in false }
+        )
+        #expect(running.contains(SharedApplicationData.epicLauncher))
+    }
+
     @Test("only exact bundle-identifier paths become leftovers")
     func exactIdentifiersOnly() async throws {
         let sandbox = try Sandbox()
@@ -279,7 +384,7 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(plan.groups.isEmpty)
     }
 
-    @Test("the scanner groups application leftovers as rows that need review")
+    @Test("the scanner groups verified application leftovers under Safe to Remove")
     func scannerGroupsLeftovers() async throws {
         let sandbox = try Sandbox()
         let state = try sandbox.evidence(for: "com.vendor.old")
@@ -294,9 +399,8 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(entry.orphanedApplicationBundleIdentifier == "com.vendor.old")
         #expect(Set(entry.children.map(\.url)) == [cache, state])
         #expect(entry.displayBytes == result.totalBytes)
-        // Whose removal is the user's to decide — see `CategoryID.isSafe`.
-        #expect(result.safeToRemoveBytes == 0)
-        #expect(result.needsReviewBytes == result.totalBytes)
+        #expect(result.safeToRemoveBytes == result.totalBytes)
+        #expect(result.needsReviewBytes == 0)
         #expect(result.filteringNoise(below: Int64.max).entries.count == 1)
     }
 

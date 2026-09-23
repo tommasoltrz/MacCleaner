@@ -362,7 +362,7 @@ public struct AppUninstallPlanner: Sendable {
         preserved.append(contentsOf: sharedGroupContainers(for: exclusiveIDs))
 
         let curation = exclusiveIDs.contains(bundleIdentifier)
-            ? ApplicationsScanner.curation(
+            ? StorageRuleRegistry.curation(
                 bundleID: bundleIdentifier, baseName: name, home: home
             )
             : nil

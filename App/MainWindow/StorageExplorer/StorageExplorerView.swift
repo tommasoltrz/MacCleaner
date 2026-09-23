@@ -28,7 +28,14 @@ struct StorageExplorerView: View {
             content
                 .operationResultAnimation(isRunning: model.isLoading)
         }
-        .task { model.prepareLocations() }
+        .task {
+            model.prepareLocations()
+            if !isMeasurementBlocked { model.refreshEstimatedSnapshot() }
+        }
+        .onChange(of: isMeasurementBlocked) { _, blocked in
+            if blocked { model.pauseBackgroundRefresh() }
+            else { model.refreshEstimatedSnapshot() }
+        }
         .onChange(of: model.isLoading, initial: true) { wasRunning, isRunning in
             if isRunning {
                 resultBeforeScan = model.snapshot?.measuredAt
@@ -42,6 +49,7 @@ struct StorageExplorerView: View {
         .onDisappear { animateEmptyResult = false }
         .onChange(of: presentation) { _, _ in model.finishMapSelection() }
         .onDisappear {
+            model.pauseBackgroundRefresh()
             model.finishMapSelection()
             previewNavigation.stop()
             previewURL = nil
@@ -105,19 +113,45 @@ struct StorageExplorerView: View {
     private var content: some View {
         if model.currentURL == nil {
             startView
-        } else if model.isLoading {
-            loadingView
+        } else if model.isLoading && model.snapshot == nil {
+            Token.pageBackground
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.wasCancelled {
             cancelledView
         } else if let error = model.error {
             errorView(error)
-        } else if model.snapshot?.items.isEmpty == true {
+        } else if model.snapshot?.items.isEmpty == true && model.snapshot?.isPartial != true {
             emptyView
-        } else if presentation == .map {
-            treemap
         } else {
-            table
+            VStack(spacing: 0) {
+                if model.snapshot?.isPartial == true { partialMeasurementStatus }
+                if presentation == .map
+                    && (model.snapshot?.isPartial != true || (model.snapshot?.allocatedBytes ?? 0) > 0) {
+                    treemap
+                } else {
+                    table
+                }
+            }
         }
+    }
+
+    private var partialMeasurementStatus: some View {
+        HStack(spacing: 12) {
+            if model.isLoading {
+                Text("Sizes are incomplete while measurement continues.")
+                Spacer()
+            } else {
+                Text("Measurement stopped. Sizes are incomplete.")
+                Spacer()
+                Button("Measure Again") { model.refresh() }
+                    .disabled(isMeasurementBlocked)
+            }
+        }
+        .font(.mcCaption)
+        .foregroundStyle(Token.Text.secondary)
+        .buttonStyle(.borderless)
+        .padding(.horizontal, Token.Size.pageGutter)
+        .padding(.vertical, 10)
     }
 
     /// What this folder holds, and the controls that act on the page.
@@ -161,7 +195,8 @@ struct StorageExplorerView: View {
         }
         let count = snapshot.items.count
         let noun = count == 1 ? "item" : "items"
-        return "\(count) \(noun) · \(ByteFormatting.string(snapshot.allocatedBytes))"
+        let estimate = snapshot.isEstimated || snapshot.isPartial ? "≈ " : ""
+        return "\(count) \(noun) · \(estimate)\(ByteFormatting.string(snapshot.allocatedBytes))"
     }
 
     /// Where you are, and the two ways back — a row of its own, because both are
@@ -186,9 +221,17 @@ struct StorageExplorerView: View {
 
             NativePathControl(url: url, onSelect: model.navigate)
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 26, maxHeight: 26)
-                .disabled(isMeasurementBlocked || model.isLoading)
+                .disabled(isMeasurementBlocked)
 
             if model.snapshot != nil {
+                if model.snapshot?.isEstimated == true {
+                    Text(model.isRefreshing ? "Updating sizes…" : "Estimated sizes")
+                        .font(.mcCaption)
+                        .foregroundStyle(Token.Text.tertiary)
+                        .help(model.refreshFailed
+                            ? "Sizes could not be updated. Use Measure Again to retry."
+                            : "These sizes are estimates until the folder is measured again.")
+                }
                 Text(summaryText)
                     .pageHeaderSummary()
                     .monospacedDigit()
@@ -216,20 +259,6 @@ struct StorageExplorerView: View {
                 .controlSize(.large)
         }
         .pageStateLayout()
-    }
-
-    private var loadingView: some View {
-        PageProgressView(
-            title: "Measuring \(model.currentURL?.lastPathComponent.nonEmpty ?? "the selected folder")",
-            detail: progressText,
-            onStop: { model.cancel() }
-        )
-    }
-
-    private var progressText: String {
-        guard model.progress.fileCount > 0 else { return "Reading folder contents…" }
-        return "Measured \(ByteFormatting.string(model.progress.allocatedBytes)) in "
-            + "\(model.progress.fileCount.formatted()) files."
     }
 
     private func errorView(_ error: StorageExplorerError) -> some View {
@@ -286,7 +315,7 @@ struct StorageExplorerView: View {
             ) { item in
                 nameCell(item)
             }
-            .width(min: 260, ideal: 420)
+            .width(min: 200, ideal: 300)
 
             TableColumn(
                 "Kind",
@@ -294,8 +323,9 @@ struct StorageExplorerView: View {
             ) { item in
                 Text(item.kindTitle)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .width(min: 90, ideal: 120, max: 160)
+            .width(min: 76, ideal: 88, max: 112)
 
             TableColumn(
                 "Files",
@@ -304,8 +334,9 @@ struct StorageExplorerView: View {
                 Text(item.fileCountLabel)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .width(min: 64, ideal: 78, max: 96)
+            .width(min: 52, ideal: 64, max: 80)
 
             TableColumn(
                 "Modified",
@@ -313,18 +344,21 @@ struct StorageExplorerView: View {
             ) { item in
                 Text(item.modificationDate?.formatted(date: .abbreviated, time: .omitted) ?? "—")
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .width(min: 98, ideal: 120, max: 150)
+            .width(min: 92, ideal: 108, max: 128)
 
             TableColumn(
                 "Size",
                 sortUsing: KeyPathComparator(\StorageExplorerItem.allocatedBytes)
             ) { item in
-                Text(ByteFormatting.string(item.allocatedBytes))
+                Text(model.snapshot?.isPartial == true && item.allocatedBytes == 0
+                    ? "…" : ByteFormatting.string(item.allocatedBytes))
                     .monospacedDigit()
+                    .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 86, ideal: 104, max: 124)
+            .width(min: 86, ideal: 96, max: 112)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         // A native `Table` paints its own backdrop, and that backdrop is the window
@@ -369,6 +403,7 @@ struct StorageExplorerView: View {
                 set: { model.selectMapItems($0) }
             ),
             isNavigationDisabled: isMeasurementBlocked,
+            isPartial: model.snapshot?.isPartial == true,
             onOpen: { model.open($0) },
             onPreview: { showPreview($0) }
         )
@@ -427,6 +462,22 @@ struct StorageExplorerView: View {
                 Label("Home Folder", systemImage: "house")
             }
 
+            if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                Button {
+                    model.selectLocation(documents)
+                } label: {
+                    Label("Documents", systemImage: "doc.text")
+                }
+            }
+
+            if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+                Button {
+                    model.selectLocation(downloads)
+                } label: {
+                    Label("Downloads", systemImage: "arrow.down.circle")
+                }
+            }
+
             if !model.locations.isEmpty { Divider() }
             ForEach(model.locations) { location in
                 Button {
@@ -453,7 +504,7 @@ struct StorageExplorerView: View {
         .menuStyle(.button)
         .buttonStyle(PageActionButtonStyle())
         .menuIndicator(.hidden)
-        .disabled(isMeasurementBlocked || model.isLoading)
+        .disabled(isMeasurementBlocked)
     }
 
     private func errorDescription(_ error: StorageExplorerError) -> String {
@@ -600,6 +651,7 @@ private struct StorageTreemapView: View {
     let items: [StorageExplorerItem]
     @Binding var selection: Set<StorageExplorerItem.ID>
     let isNavigationDisabled: Bool
+    let isPartial: Bool
     let onOpen: (StorageExplorerItem) -> Void
     let onPreview: (StorageExplorerItem) -> Void
 
@@ -766,6 +818,8 @@ private struct StorageTreemapView: View {
         .accessibilityAction(named: item.opensAsDirectory ? "Open" : "Quick Look") {
             activate(item)
         }
+        .disabled(item.protectionReason == .trash)
+        .opacity(item.protectionReason == .trash ? 0.5 : 1)
     }
 
     @ViewBuilder
@@ -870,7 +924,7 @@ private struct StorageTreemapView: View {
     @ViewBuilder
     private var zeroSizeNote: some View {
         let count = items.filter { $0.allocatedBytes <= 0 }.count
-        if count > 0 {
+        if count > 0 && !isPartial {
             let noun = count == 1 ? "item" : "items"
             let verb = count == 1 ? "is" : "are"
             Text("\(count) \(noun) using 0 B \(verb) not shown.")
@@ -901,6 +955,7 @@ private struct StorageTreemapView: View {
     }
 
     private func select(_ item: StorageExplorerItem) {
+        guard item.protectionReason != .trash else { return }
         if NSEvent.modifierFlags.contains(.command) {
             if selection.contains(item.id) { selection.remove(item.id) }
             else { selection.insert(item.id) }
@@ -910,6 +965,7 @@ private struct StorageTreemapView: View {
     }
 
     private func activate(_ item: StorageExplorerItem) {
+        guard item.protectionReason != .trash else { return }
         if item.opensAsDirectory { open(item) }
         else { onPreview(item) }
     }

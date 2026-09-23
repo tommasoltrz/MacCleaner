@@ -40,12 +40,12 @@ final class CleanupScanner: CleanupScanning {
         // on it, since NSWorkspace is main-actor bound and they are cheap.
         var registeredIdentifiers: Set<String> = []
         var leftoverCandidates: OrphanedAppLeftoverPlanner.CandidateScan?
-        if enabled?.contains(.applicationLeftovers) ?? true {
+        if enabled.map({ !$0.isDisjoint(with: [.applicationLeftovers, .sharedData]) }) ?? true {
             let planner = orphanedAppLeftoverPlanner
             let candidates = await Task.detached { planner.scanCandidates() }.value
             leftoverCandidates = candidates
             registeredIdentifiers = ApplicationRuntime.registeredApplicationBundleIdentifiers(
-                for: candidates.identifiers
+                for: candidates.identifiers, stagedApplicationRoots: candidates.stagedApplicationRoots
             )
         }
         let context = ScanContext(

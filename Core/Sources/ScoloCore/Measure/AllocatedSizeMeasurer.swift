@@ -1,5 +1,11 @@
 import Foundation
 
+/// Child measurements retained from one traversal.
+public struct DirectorySizeMeasurement: Sendable {
+    public let directory: URL
+    public let children: [URL: SizeMeasurement]
+}
+
 /// The result of measuring a directory tree.
 ///
 /// `unreadableCount` is part of the result rather than swallowed, because honesty
@@ -251,7 +257,9 @@ public struct AllocatedSizeMeasurer: Sendable {
     /// inode first, so the children sum to the parent rather than exceeding it.
     public func measureChildren(
         of url: URL,
-        progress: (@Sendable (SizeMeasurement) -> Void)? = nil
+        progress: (@Sendable (SizeMeasurement) -> Void)? = nil,
+        partialResults: (@Sendable ([URL: SizeMeasurement]) -> Void)? = nil,
+        retainedDirectories: (@Sendable ([DirectorySizeMeasurement]) -> Void)? = nil
     ) async throws -> [URL: SizeMeasurement] {
         let followSymlinks = self.followSymlinks
         let protectedPatterns = self.protectedPatterns
@@ -273,7 +281,10 @@ public struct AllocatedSizeMeasurer: Sendable {
                     protectedPatterns: protectedPatterns,
                     cancelled: cancelled,
                     keys: keys,
-                    progress: progress
+                    progress: progress,
+                    rootChildren: children,
+                    partialResults: partialResults,
+                    retainsDirectories: retainedDirectories != nil
                 )
                 for child in children {
                     walker.prefill(child)
@@ -334,7 +345,9 @@ public struct AllocatedSizeMeasurer: Sendable {
                         )
                     }
                 }
-                return try walker.run()
+                let totals = try walker.run()
+                retainedDirectories?(walker.directoryMeasurements(totals))
+                return Dictionary(uniqueKeysWithValues: children.map { ($0, totals[$0] ?? .zero) })
             }.value
         } onCancel: {
             cancelled.cancel()
@@ -414,6 +427,12 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     private var entriesSinceReport = 0
     private var pendingProgress: [SizeMeasurement] = []
     private var isReportingProgress = false
+    private let rootChildren: [URL]
+    private let partialResults: (@Sendable ([URL: SizeMeasurement]) -> Void)?
+    private let retainsDirectories: Bool
+    private var retainedListings: [URL: [URL]] = [:]
+    private var retainedEntryCount = 0
+    private var lastPartialReport = Date.distantPast
 
     /// How often to surface progress and poll cancellation, in entries.
     private static let reportInterval = 512
@@ -423,13 +442,40 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         protectedPatterns: [String] = [],
         cancelled: CancellationFlag,
         keys: [URLResourceKey],
-        progress: (@Sendable (SizeMeasurement) -> Void)?
+        progress: (@Sendable (SizeMeasurement) -> Void)?,
+        rootChildren: [URL] = [],
+        partialResults: (@Sendable ([URL: SizeMeasurement]) -> Void)? = nil,
+        retainsDirectories: Bool = false
     ) {
         self.followSymlinks = followSymlinks
         self.protectedPatterns = protectedPatterns
         self.cancelled = cancelled
         self.keys = keys
         self.progress = progress
+        self.rootChildren = rootChildren
+        self.partialResults = partialResults
+        self.retainsDirectories = retainsDirectories
+    }
+
+    /// Keep complete listings within fixed limits. Measure other folders on demand.
+    private func retainListing(_ entries: [URL], for item: WorkItem) -> Bool {
+        guard retainsDirectories, item.attribution.count <= 6 else { return false }
+        condition.lock()
+        defer { condition.unlock() }
+        guard retainedListings.count < 128, retainedEntryCount + entries.count <= 8_192 else { return false }
+        retainedListings[item.listing] = entries
+        retainedEntryCount += entries.count
+        for entry in entries { totals[entry] = .zero }
+        return true
+    }
+
+    func directoryMeasurements(_ totals: [URL: SizeMeasurement]) -> [DirectorySizeMeasurement] {
+        retainedListings.map { directory, entries in
+            DirectorySizeMeasurement(
+                directory: directory,
+                children: Dictionary(uniqueKeysWithValues: entries.map { ($0, totals[$0] ?? .zero) })
+            )
+        }
     }
 
     func enqueue(
@@ -579,22 +625,26 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         ) else {
             // A permission-denied directory costs one entry — never a subtree,
             // and never the whole total.
-            recordUnreadable(at: item.attribution[0])
+            for key in item.attribution { recordUnreadable(at: key) }
             return
         }
 
+        let retainsListing = retainListing(entries, for: item)
+        var leafTotals: [URL: SizeMeasurement] = [:]
         var localFiles: [Int64] = []
 
-        for entry in entries {
+        for (index, entry) in entries.enumerated() {
+            if index % Self.reportInterval == 0 && cancelled.isCancelled { return }
+            let entryAttribution = retainsListing ? item.attribution + [entry] : item.attribution
             // Name check first: it needs no attributes, so a protected bundle is
             // recognised even where the entry itself cannot be read.
             if matchesProtectedPattern(entry.lastPathComponent) {
-                for key in item.attribution { markProtected(key) }
+                for key in entryAttribution { markProtected(key) }
             }
             guard let values = try? entry.resourceValues(
                 forKeys: Set(keys)
             ) else {
-                recordUnreadable(at: item.attribution[0])
+                for key in entryAttribution { recordUnreadable(at: key) }
                 continue
             }
             // Never leave the starting volume — a mounted disk under the scan
@@ -602,10 +652,14 @@ private final class ParallelTreeWalker: @unchecked Sendable {
             if let volume = item.volume,
                let entryVolume = values.volumeIdentifier as? NSObject,
                !entryVolume.isEqual(volume) {
+                // A separate scan includes mounted children. Do not cache this incomplete level.
+                condition.lock()
+                retainedListings.removeValue(forKey: item.listing)
+                condition.unlock()
                 continue
             }
             if AllocatedSizeMeasurer.isCloudOnly(values) {
-                for key in item.attribution { markCloudOnly(key) }
+                for key in entryAttribution { markCloudOnly(key) }
             }
             if values.isSymbolicLink == true {
                 guard followSymlinks else { continue }
@@ -619,7 +673,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 guard let target = try? resolved.resourceValues(
                     forKeys: Set(keys)
                 ) else {
-                    recordUnreadable(at: item.attribution[0])
+                    for key in entryAttribution { recordUnreadable(at: key) }
                     continue
                 }
                 if let volume = item.volume,
@@ -628,12 +682,13 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                     continue
                 }
                 if AllocatedSizeMeasurer.isCloudOnly(target) {
-                    for key in item.attribution { markCloudOnly(key) }
+                    for key in entryAttribution { markCloudOnly(key) }
                 }
                 if target.isDirectory == true {
                     let childKey = item.attribution[item.attribution.count - 1]
                         .appendingPathComponent(entry.lastPathComponent)
-                    let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
+                    let attribution = retainsListing ? entryAttribution
+                        : (item.grow > 0 ? item.attribution + [childKey] : item.attribution)
                     enqueue(
                         listing: resolved,
                         attribution: attribution,
@@ -650,6 +705,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                         guard fresh else { continue }
                     }
                     if let bytes = AllocatedSizeMeasurer.allocatedSize(of: target) {
+                        if retainsListing { leafTotals[entry] = SizeMeasurement(allocatedBytes: bytes, fileCount: 1) }
                         localFiles.append(bytes)
                         if flushIfNeeded(&localFiles, attribution: item.attribution) { return }
                     }
@@ -660,7 +716,8 @@ private final class ParallelTreeWalker: @unchecked Sendable {
             if values.isDirectory == true {
                 let childKey = item.attribution[item.attribution.count - 1]
                     .appendingPathComponent(entry.lastPathComponent)
-                let attribution = item.grow > 0 ? item.attribution + [childKey] : item.attribution
+                let attribution = retainsListing ? entryAttribution
+                    : (item.grow > 0 ? item.attribution + [childKey] : item.attribution)
                 enqueue(
                     listing: entry,
                     attribution: attribution,
@@ -681,8 +738,14 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 guard fresh else { continue }
             }
             guard let bytes = AllocatedSizeMeasurer.allocatedSize(of: values) else { continue }
+            if retainsListing { leafTotals[entry] = SizeMeasurement(allocatedBytes: bytes, fileCount: 1) }
             localFiles.append(bytes)
             if flushIfNeeded(&localFiles, attribution: item.attribution) { return }
+        }
+        if !leafTotals.isEmpty {
+            condition.lock()
+            totals.merge(leafTotals) { _, measured in measured }
+            condition.unlock()
         }
         if !localFiles.isEmpty {
             let shouldDrain = flush(&localFiles, attribution: item.attribution)
@@ -714,7 +777,7 @@ private final class ParallelTreeWalker: @unchecked Sendable {
         entriesSinceReport += count
         sizes.removeAll(keepingCapacity: true)
 
-        guard progress != nil, entriesSinceReport >= Self.reportInterval else {
+        guard progress != nil || partialResults != nil, entriesSinceReport >= Self.reportInterval else {
             return false
         }
         entriesSinceReport = 0
@@ -727,7 +790,6 @@ private final class ParallelTreeWalker: @unchecked Sendable {
     /// One worker delivers every queued callback. Snapshots remain ordered, and a
     /// caller never receives concurrent progress calls from separate workers.
     private func drainProgress() {
-        guard let progress else { return }
         while true {
             condition.lock()
             guard !pendingProgress.isEmpty else {
@@ -736,8 +798,14 @@ private final class ParallelTreeWalker: @unchecked Sendable {
                 return
             }
             let snapshot = pendingProgress.removeFirst()
+            var partial: [URL: SizeMeasurement]?
+            if partialResults != nil, Date().timeIntervalSince(lastPartialReport) >= 0.3 {
+                lastPartialReport = Date()
+                partial = Dictionary(uniqueKeysWithValues: rootChildren.map { ($0, totals[$0] ?? .zero) })
+            }
             condition.unlock()
-            progress(snapshot)
+            progress?(snapshot)
+            if let partial { partialResults?(partial) }
         }
     }
 }

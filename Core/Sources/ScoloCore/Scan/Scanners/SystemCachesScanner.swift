@@ -132,8 +132,8 @@ public struct SystemCachesScanner: CategoryScanner {
     ///
     /// `~/Library/Caches` and `~/Library/Logs` are the system's own cache and log
     /// folders: what an app puts there it has been told may be purged. `~/.cache` is
-    /// a convention with nobody enforcing it, and this Mac's held a Codex runtime
-    /// with its binaries. So a child there is regenerable on its tool's own
+    /// a convention with nobody enforcing it. Known AI runtimes belong to AI Tools.
+    /// Other children are regenerable on their tool's own
     /// `CACHEDIR.TAG` — see `CacheDirectoryTag` — and is otherwise listed plainly,
     /// which in a safe category means Needs Review, unticked.
     private func isRegenerable(_ child: URL, under root: URL) -> Bool {
@@ -191,7 +191,8 @@ public struct SystemCachesScanner: CategoryScanner {
                     continue
                 }
                 if root == dotCacheRoot,
-                   Self.packageManagerOwnedDotCacheNames.contains(url.lastPathComponent) {
+                   Self.packageManagerOwnedDotCacheNames.contains(url.lastPathComponent)
+                    || StorageRuleRegistry.dotCacheFolderNames.contains(url.lastPathComponent) {
                     continue
                 }
                 // Account and identity daemons' caches — see `IdentityState`. Only
@@ -223,20 +224,15 @@ public struct SystemCachesScanner: CategoryScanner {
                 // the row would take it too.
                 guard !measurement.containsProtectedPattern else { continue }
 
-                entries.append(FileEntry(
-                    url: url,
-                    kind: .cache,
-                    allocatedBytes: measurement.allocatedBytes,
-                    lastOpened: lastOpened,
-                    // The two Library roots hold nothing but artifacts rebuilt on
-                    // demand, which is what earns the category its green `safe` badge
-                    // and its place in "Safe to remove". `~/.cache` has to show a tag.
-                    isRegenerable: isRegenerable(url, under: root),
-                    // Still regenerable, no longer *safe* while its owner runs —
-                    // see `FileEntry.inUseBy`.
-                    inUseBy: context.runningOwner(ofCacheNamed: url.lastPathComponent),
-                    childCount: Self.childCount(of: url)
-                ))
+                let rule = StorageRuleRegistry.genericCacheRule(
+                    name: url.lastPathComponent,
+                    root: root == dotCacheRoot ? ".cache" : (root == logsRoot ? "Library/Logs" : "Library/Caches"),
+                    regenerable: isRegenerable(url, under: root)
+                )
+                entries.append(rule.apply(to: FileEntry(
+                    url: url, kind: .cache, allocatedBytes: measurement.allocatedBytes,
+                    lastOpened: lastOpened, childCount: Self.childCount(of: url)
+                ), context: context))
             }
         }
 
@@ -275,51 +271,11 @@ public struct SystemCachesScanner: CategoryScanner {
 
     // MARK: - Caches kept in Application Support
 
-    /// A cache an application keeps under `~/Library/Application Support`, where no
-    /// cache sweep looks.
-    struct ApplicationSupportCache: Sendable {
-        let label: String
-        let components: [String]
-        /// Any running application whose identifier begins with this holds the row.
-        let ownerIdentifierPrefix: String
-    }
-
-    /// A short, audited list — `~/Library/Application Support` is where
-    /// applications keep the user's data, and a rule that went looking for
-    /// cache-shaped names in it is how a cleaner deletes a project.
-    ///
-    /// **Adobe's media cache.** Premiere Pro, After Effects and Media Encoder write
-    /// conformed audio, peak files and rendered previews to `Common/Media Cache
-    /// Files`, and the index that tracks them to `Common/Media Cache`; on a machine
-    /// that edits video the pair runs to tens of gigabytes. Adobe's own instruction
-    /// for reclaiming the space is to quit its applications and delete both; the
-    /// media is conformed again when a project is next opened, which takes minutes.
-    /// Only these default locations: a cache the user has pointed at another disk is
-    /// theirs to find. `Common` also holds plug-ins and presets, which are not
-    /// named and are not touched. An Adobe identifier carries the year
-    /// (`com.adobe.PremierePro.24`), so any open Adobe application holds the rows.
-    ///
-    /// Not seen on this Mac, which has no Adobe application; the paths are Adobe's
-    /// published ones, and Purge (github.com/jithin-sabu/purge-app) lists the same
-    /// two.
-    static let applicationSupportCaches: [ApplicationSupportCache] = [
-        ApplicationSupportCache(
-            label: "Adobe media cache files",
-            components: ["Adobe", "Common", "Media Cache Files"],
-            ownerIdentifierPrefix: "com.adobe."
-        ),
-        ApplicationSupportCache(
-            label: "Adobe media cache database",
-            components: ["Adobe", "Common", "Media Cache"],
-            ownerIdentifierPrefix: "com.adobe."
-        )
-    ]
-
     private func appendApplicationSupportCaches(
         context: ScanContext, to entries: inout [FileEntry], unreadableCount: inout Int
     ) async throws {
         guard let applicationSupportRoot else { return }
-        for cache in Self.applicationSupportCaches {
+        for cache in StorageRuleRegistry.applicationSupportCaches {
             try Task.checkCancellation()
             let url = cache.components.reduce(applicationSupportRoot) {
                 $0.appendingPathComponent($1, isDirectory: true)
@@ -332,16 +288,11 @@ public struct SystemCachesScanner: CategoryScanner {
             guard measurement.allocatedBytes >= Self.minimumEntryBytes,
                   !measurement.containsProtectedPattern
             else { continue }
-            entries.append(FileEntry(
-                url: url,
-                displayName: cache.label,
-                kind: .cache,
-                allocatedBytes: measurement.allocatedBytes,
-                lastOpened: lastOpenedDate(for: url),
-                isRegenerable: true,
-                inUseBy: context.runningOwner(bundleIdentifierPrefix: cache.ownerIdentifierPrefix),
-                childCount: Self.childCount(of: url)
-            ))
+            let rule = StorageRuleRegistry.supportCacheRule(cache)
+            entries.append(rule.apply(to: FileEntry(
+                url: url, kind: .cache, allocatedBytes: measurement.allocatedBytes,
+                lastOpened: lastOpenedDate(for: url), childCount: Self.childCount(of: url)
+            ), context: context))
         }
     }
 
@@ -362,11 +313,9 @@ public struct SystemCachesScanner: CategoryScanner {
     /// use. An application is something the user opens and can see. A third party's
     /// container belongs to the Applications scanner or to Application Leftovers.
     ///
-    /// **Review rows, never safe**, though every one of them is a cache. Music's is
-    /// read by `AMPLibraryAgent`, which outlives Music, so "Music is closed" does not
-    /// mean nothing is using it. Purge (github.com/jithin-sabu/purge-app) labels the
-    /// same caches Check First and keeps them out of one-click cleaning; this agrees.
-    /// `IdentityState` refuses Passwords, Home, Safari and their like outright.
+    /// These caches use the same removal rules as other application caches.
+    /// Running owners and incomplete measurements keep a cache under review.
+    /// `IdentityState` refuses protected account containers before classification.
     ///
     /// The cache folder's children are the rows, never `Caches` itself, for the
     /// reason given on `ApplicationsScanner.containerCuration`.
@@ -390,17 +339,16 @@ public struct SystemCachesScanner: CategoryScanner {
                       !context.isExcluded(url),
                       !measurement.containsProtectedPattern
                 else { continue }
-                entries.append(FileEntry(
-                    url: url,
-                    displayName: "\(name) · \(url.lastPathComponent)",
-                    kind: .cache,
-                    allocatedBytes: measurement.allocatedBytes,
+                let rule = StorageRuleRegistry.systemApplicationCacheRule(
+                    identifier: identifier, name: name, cacheName: url.lastPathComponent
+                )
+                entries.append(rule.apply(to: FileEntry(
+                    url: url, kind: .cache, allocatedBytes: measurement.allocatedBytes,
                     lastOpened: lastOpenedDate(for: url),
-                    // Deliberately not: see above.
-                    isRegenerable: false,
-                    inUseBy: context.runningOwner(bundleIdentifier: identifier),
+                    safeRemovalReviewReason: measurement.unreadableCount > 0
+                        ? "Some cache contents could not be read" : nil,
                     childCount: Self.childCount(of: url)
-                ))
+                ), context: context))
             }
         }
     }

@@ -87,7 +87,7 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
         case .strict:
             "Frames from one burst of shooting, and near-misses of the same subject."
         case .standard:
-            "The default. Photographs of the same thing, moments apart."
+            "Photographs of the same subject, moments apart."
         case .loose:
             "More groups, and more of them worth arguing with."
         case .veryLoose:
@@ -101,7 +101,7 @@ public enum PhotoSimilarity: String, Sendable, CaseIterable, Identifiable {
         threshold.map { String(format: "%.2f", $0) } ?? ""
     }
 
-    public static let `default` = PhotoSimilarity.standard
+    public static let `default` = PhotoSimilarity.identicalOnly
 
     /// The loosest setting there is, and so the distance out to which a sweep has
     /// to compare. Beyond this nothing can be asked, which is why

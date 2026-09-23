@@ -108,7 +108,7 @@ public struct StorageExplorerSelectionReview: Sendable, Equatable {
     }
 }
 
-/// One complete level in the Storage Explorer hierarchy.
+/// One folder level and its measurement state.
 public struct StorageExplorerSnapshot: Sendable, Equatable {
     public var directory: URL
     public var items: [StorageExplorerItem]
@@ -116,6 +116,8 @@ public struct StorageExplorerSnapshot: Sendable, Equatable {
     public var fileCount: Int
     public var unreadableCount: Int
     public var measuredAt: Date
+    public var isEstimated: Bool = false
+    public var isPartial: Bool = false
 
     public init(
         directory: URL,
@@ -137,4 +139,10 @@ public struct StorageExplorerSnapshot: Sendable, Equatable {
 public enum StorageExplorerError: Error, Sendable, Equatable {
     case unavailable(String)
     case notDirectory(String)
+}
+
+/// Progress and complete nested folders from one scan.
+public enum StorageExplorerScanUpdate: Sendable {
+    case partial(StorageExplorerSnapshot)
+    case retained([StorageExplorerSnapshot])
 }

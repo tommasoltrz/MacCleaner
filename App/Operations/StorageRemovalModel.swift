@@ -91,8 +91,9 @@ final class StorageRemovalModel {
             try? await presentation.wait()
             operations.completeTrashRemoval(outcome, in: .storageExplorer)
         } catch is CancellationError {
-            // The user stopped it.
+            storageExplorer.invalidateCache()
         } catch {
+            storageExplorer.invalidateCache()
             operations.report(
                 "The Items Could Not Be Moved",
                 "The selected items could not move to the Trash. Nothing was removed."
@@ -100,7 +101,7 @@ final class StorageRemovalModel {
         }
 
         operations.activity = nil
-        storageExplorer.refresh(clearAllCachedFolders: true)
+        storageExplorer.refreshEstimatedSnapshot()
         await onRemoval?()
     }
 

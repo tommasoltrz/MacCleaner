@@ -179,7 +179,11 @@ struct CLI {
                 guard let urls = LSCopyApplicationURLsForBundleIdentifier(
                     identifier as CFString, nil
                 )?.takeRetainedValue() as? [URL] else { return false }
-                return urls.contains { FileManager.default.fileExists(atPath: $0.path) }
+                return urls.contains {
+                    OrphanedAppLeftoverPlanner.registeredApplicationIsOwner(
+                        at: $0, stagedApplicationRoots: candidates.stagedApplicationRoots
+                    )
+                }
             }
         )
         // What is open, with names — a cache under a live owner is not counted

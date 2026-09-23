@@ -91,6 +91,30 @@ public struct ScanContext: Sendable {
         }
     }
 
+    /// Resolves saved ownership against this process snapshot, including owners that started after the scan.
+    public func runningOwner(for entry: FileEntry) -> FileEntry.RunningOwner? {
+        for rule in entry.ownerRules + (entry.storageRule?.ownerRules ?? []) {
+            let owner: FileEntry.RunningOwner?
+            switch rule {
+            case .bundleIdentifier(let identifier): owner = runningOwner(bundleIdentifier: identifier)
+            case .bundlePath(let path): owner = runningOwner(atBundlePath: path)
+            case .bundleIdentifierPrefix(let prefix): owner = runningOwner(bundleIdentifierPrefix: prefix)
+            case .cacheName(let name): owner = runningOwner(ofCacheNamed: name)
+            }
+            if let owner { return owner }
+        }
+        if let previous = entry.inUseBy {
+            if let identifier = previous.bundleIdentifier,
+               let owner = runningOwner(bundleIdentifier: identifier) { return owner }
+            if let owner = runningOwner(atBundlePath: previous.bundlePath) { return owner }
+        }
+        // Removing a parent also removes its contents.
+        for child in entry.children {
+            if let owner = runningOwner(for: child) { return owner }
+        }
+        return nil
+    }
+
     /// True when a path is excluded, inside an excluded folder — **or contains
     /// one**. Every scanner must consult this before emitting an entry. A date is
     /// no part of this answer: nothing here hides, locks or badges a row for having

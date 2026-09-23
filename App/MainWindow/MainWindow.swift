@@ -439,10 +439,12 @@ struct MainWindow: View {
                 progress: Double(model.cleanup.scanProgress) / 100,
                 onStop: { model.cleanup.cancelScan() }
             )
-        } else if model.storageExplorer.isLoading, model.view != .storageExplorer {
+        } else if model.storageExplorer.isLoading
+                    || (model.storageExplorer.isRefreshing && model.view == .storageExplorer) {
             backgroundWorkStatus(
-                title: "Storage Explorer scan",
-                detail: "\(model.storageExplorer.progress.fileCount.formatted()) files · "
+                title: "Measuring storage",
+                detail: model.storageExplorer.isRefreshing ? "Updating folder sizes"
+                    : "\(model.storageExplorer.progress.fileCount.formatted()) files · "
                     + ByteFormatting.string(model.storageExplorer.progress.allocatedBytes),
                 onStop: { model.storageExplorer.cancel() }
             )

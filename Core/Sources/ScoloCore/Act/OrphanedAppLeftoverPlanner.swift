@@ -24,6 +24,17 @@ public struct OrphanedAppLeftoverPlan: Sendable, Equatable {
 
     let applicationRoots: [URL]
     let allowedRelatedRoots: [URL]
+    var sharedApplicationData: [SharedApplicationData.Candidate] = []
+
+    /// Update copies in these folders do not establish installed ownership.
+    public var stagedApplicationRoots: [URL] {
+        sharedApplicationData.compactMap(\.stagedApplicationRoot)
+    }
+
+    /// Includes game owners for the final installed-application check.
+    public var ownerBundleIdentifiers: Set<String> {
+        Set(groups.map(\.bundleIdentifier)).union(sharedApplicationData.flatMap(\.ownerIdentifiers))
+    }
 
     public var itemCount: Int { groups.reduce(0) { $0 + $1.items.count } }
     public var totalBytes: Int64 { groups.reduce(0) { $0 + $1.totalBytes } }
@@ -68,6 +79,10 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         /// Group containers whose name begins with a Team ID, under the identifier
         /// that follows it — see `teamGroupContainers`.
         public let teamGroupContainers: [String: [TeamGroupContainer]]
+        var sharedApplicationData: [SharedApplicationData.Candidate] = []
+        public var stagedApplicationRoots: [URL] {
+            sharedApplicationData.compactMap(\.stagedApplicationRoot)
+        }
 
         public struct TeamGroupContainer: Sendable, Equatable {
             public let path: String
@@ -91,6 +106,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         case unreadable
     }
 
+    private let sharedRoot: URL?
     private let pathPlanner: AppUninstallPlanner
     private let directoryNames: @Sendable (URL) throws -> [String]
     private let candidatePathStatus: @Sendable (URL) -> CandidatePathStatus
@@ -98,6 +114,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
     private let teamIdentifier: @Sendable (URL) -> String?
 
     public init() {
+        sharedRoot = URL(fileURLWithPath: "/Users/Shared", isDirectory: true)
         pathPlanner = AppUninstallPlanner()
         directoryNames = { url in
             try FileManager.default.contentsOfDirectory(atPath: url.path)
@@ -108,12 +125,14 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
 
     init(
         pathPlanner: AppUninstallPlanner,
+        sharedRoot: URL? = nil,
         directoryNames: @escaping @Sendable (URL) throws -> [String] = { url in
             try FileManager.default.contentsOfDirectory(atPath: url.path)
         },
         candidatePathStatus: @escaping @Sendable (URL) -> CandidatePathStatus = Self.pathStatus,
         teamIdentifier: @escaping @Sendable (URL) -> String? = Self.signingTeam(of:)
     ) {
+        self.sharedRoot = sharedRoot?.standardizedFileURL
         self.pathPlanner = pathPlanner
         self.directoryNames = directoryNames
         self.candidatePathStatus = candidatePathStatus
@@ -178,13 +197,26 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             }
         }
         for identifier in identifiers.sorted() {
-            guard let curation = ApplicationsScanner.curations[identifier] else { continue }
+            guard let curation = StorageRuleRegistry.curations[identifier] else { continue }
             candidates.append(AppUninstallPlanner.Candidate(
                 url: pathPlanner.home.appendingPathComponent(curation.root),
                 category: .support,
                 content: .userData,
                 ownerBundleIdentifier: identifier
             ))
+        }
+
+        let sharedCandidates = candidateScan.sharedApplicationData.filter { candidate in
+            identifiers.contains(SharedApplicationData.epicLauncher)
+                && !candidate.ownerIdentifiers.contains { owner in
+                    AppUninstallPlanner.ownerIsInstalled(owner, installedBundleIdentifiers: installed)
+                }
+        }
+        candidates += sharedCandidates.map { candidate in
+            AppUninstallPlanner.Candidate(
+                url: candidate.url, category: .support, content: .userData,
+                ownerBundleIdentifier: SharedApplicationData.epicLauncher
+            )
         }
 
         var itemsByIdentifier: [String: [AppUninstallPlan.Item]] = [:]
@@ -206,7 +238,9 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
                 continue
             }
 
-            guard pathPlanner.candidateIsSafe(url), !context.isExcluded(url) else {
+            let shared = sharedCandidates.first { $0.url.standardizedFileURL == url }
+            let safePath = shared.map { $0.isSafe() } ?? pathPlanner.candidateIsSafe(url)
+            guard safePath, !context.isExcluded(url) else {
                 preserved.append(url)
                 continue
             }
@@ -214,13 +248,14 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             let measurement = try await context.measurer.measure(url)
             unreadableCount += measurement.unreadableCount
             guard measurement.allocatedBytes > 0 else { continue }
-            guard !measurement.containsProtectedPattern else {
+            guard !measurement.containsProtectedPattern, shared == nil || measurement.unreadableCount == 0 else {
                 preserved.append(url)
                 continue
             }
 
             let item = AppUninstallPlan.Item(
                 url: url,
+                displayName: shared?.displayName,
                 category: candidate.category,
                 content: candidate.content,
                 allocatedBytes: measurement.allocatedBytes,
@@ -247,7 +282,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             }
             return OrphanedAppLeftoverPlan.Group(
                 bundleIdentifier: identifier, items: items,
-                displayName: items.lazy
+                displayName: identifier == SharedApplicationData.epicLauncher && !sharedCandidates.isEmpty ? "Epic Games" : items.lazy
                     .filter { $0.category == .containers }
                     .compactMap { Self.systemName(of: $0.url) }
                     .first
@@ -263,7 +298,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             preservedPaths: deduplicated(preserved),
             unreadableCount: unreadableCount,
             applicationRoots: pathPlanner.applicationRoots,
-            allowedRelatedRoots: pathPlanner.allowedRelatedRoots
+            allowedRelatedRoots: pathPlanner.allowedRelatedRoots,
+            sharedApplicationData: sharedCandidates
         )
     }
 
@@ -323,6 +359,15 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             }
         }
         return result
+    }
+
+    /// Staged update copies do not establish an installed owner. Running applications still do.
+    public static func registeredApplicationIsOwner(at url: URL, stagedApplicationRoots: [URL]) -> Bool {
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        return !stagedApplicationRoots.contains { root in
+            AppUninstallPlanner.isInside(resolved, root: root.resolvingSymlinksInPath())
+        }
     }
 
     /// Finds identifiers only in locations that exist for applications alone.
@@ -408,16 +453,21 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
 
         // The curated table is a hand-verified claim that an application owns
         // this root — evidence of the strongest kind.
-        for (identifier, curation) in ApplicationsScanner.curations {
+        for (identifier, curation) in StorageRuleRegistry.curations {
             let root = pathPlanner.home.appendingPathComponent(curation.root)
             if fileManager.fileExists(atPath: root.path) { result.insert(identifier) }
         }
 
-        return CandidateScan(
-            identifiers: result, unreadableCount: unreadableCount,
+        let shared = sharedRoot.map { SharedApplicationData.discover(in: $0) }
+        let sharedCandidates = shared?.candidates ?? []
+        result.formUnion(sharedCandidates.flatMap(\.ownerIdentifiers))
+        var scan = CandidateScan(
+            identifiers: result, unreadableCount: unreadableCount + (shared?.unreadableCount ?? 0),
             uuidNamedContainers: uuidNamed,
             teamGroupContainers: teamGroups
         )
+        scan.sharedApplicationData = sharedCandidates
+        return scan
     }
 
     /// The name macOS gives a container folder, if it gives it one.
@@ -572,6 +622,11 @@ extension OrphanedAppLeftoverPlan {
         if let currentIdentity = FileIdentity.of(item.url),
            currentIdentity != item.plannedIdentity {
             return false
+        }
+        if let shared = plan.sharedApplicationData.first(where: { $0.url.standardizedFileURL == item.url }) {
+            return shared.isSafe() && !shared.ownerIdentifiers.contains { identifier in
+                AppUninstallPlanner.ownerIsInstalled(identifier, installedBundleIdentifiers: installedBundleIdentifiers)
+            }
         }
         guard let root = plan.allowedRelatedRoots.first(where: {
             AppUninstallPlanner.isInside(item.url, root: $0)
