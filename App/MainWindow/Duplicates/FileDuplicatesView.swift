@@ -10,28 +10,28 @@ struct FileDuplicatesView: View {
 
     var body: some View {
         Group {
-            if model.isScanningDuplicateFiles {
+            if model.fileDuplicates.isScanningDuplicateFiles {
                 scanning
-            } else if model.fileDuplicateResults == nil {
+            } else if model.fileDuplicates.fileDuplicateResults == nil {
                 intro
-            } else if model.fileDuplicateGroups.isEmpty {
+            } else if model.fileDuplicates.fileDuplicateGroups.isEmpty {
                 nothingFound
             } else {
                 groups
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .operationResultAnimation(isRunning: model.isScanningDuplicateFiles)
-        .onChange(of: model.isScanningDuplicateFiles, initial: true) { wasRunning, isRunning in
+        .operationResultAnimation(isRunning: model.fileDuplicates.isScanningDuplicateFiles)
+        .onChange(of: model.fileDuplicates.isScanningDuplicateFiles, initial: true) { wasRunning, isRunning in
             if isRunning {
-                resultBeforeScan = model.fileDuplicateResults?.finishedAt
+                resultBeforeScan = model.fileDuplicates.fileDuplicateResults?.finishedAt
                 animateEmptyResult = false
             } else if wasRunning {
-                animateEmptyResult = model.fileDuplicateResults?.finishedAt != nil
-                    && model.fileDuplicateResults?.finishedAt != resultBeforeScan
+                animateEmptyResult = model.fileDuplicates.fileDuplicateResults?.finishedAt != nil
+                    && model.fileDuplicates.fileDuplicateResults?.finishedAt != resultBeforeScan
             }
         }
-        .onChange(of: model.fileDuplicateMinimumBytes) { _, _ in animateEmptyResult = false }
+        .onChange(of: model.fileDuplicates.fileDuplicateMinimumBytes) { _, _ in animateEmptyResult = false }
         .onDisappear { animateEmptyResult = false }
     }
 
@@ -58,17 +58,17 @@ struct FileDuplicatesView: View {
             PageProgressView(
                 title: "Scanning for duplicate files",
                 detail: progressLabel,
-                progress: model.fileDuplicateProgress.flatMap {
+                progress: model.fileDuplicates.fileDuplicateProgress.flatMap {
                     $0.total > 0 ? Double($0.completed) / Double($0.total) : nil
                 },
-                onStop: { model.cancelFileDuplicateScan() },
+                onStop: { model.fileDuplicates.cancelFileDuplicateScan() },
                 actionBottom: actionBottom
             )
         }
     }
 
     private var progressLabel: String {
-        guard let progress = model.fileDuplicateProgress else { return "Preparing…" }
+        guard let progress = model.fileDuplicates.fileDuplicateProgress else { return "Preparing…" }
         switch progress.stage {
         case .enumerating:
             return "Reading the selected folders…"
@@ -93,28 +93,28 @@ struct FileDuplicatesView: View {
         } else {
             ScanCompletionView(
                 title: "No duplicate files found",
-                detail: model.fileDuplicateResults.map { resultSummary($0) },
+                detail: model.fileDuplicates.fileDuplicateResults.map { resultSummary($0) },
                 animate: animateEmptyResult
             )
         }
     }
 
     private var hasFilteredResults: Bool {
-        !(model.fileDuplicateResults?.groups.isEmpty ?? true)
+        !(model.fileDuplicates.fileDuplicateResults?.groups.isEmpty ?? true)
     }
 
     private var groups: some View {
-        let selectable = Set(model.fileDuplicateGroups.flatMap(\.removable).map(\.id))
+        let selectable = Set(model.fileDuplicates.fileDuplicateGroups.flatMap(\.removable).map(\.id))
         return VStack(spacing: 0) {
             HStack {
                 MonochromeCheckbox(
                     title: "Select All",
                     detail: "\(selectable.count) \(selectable.count == 1 ? "item" : "items")",
-                    state: !selectable.isEmpty && selectable.isSubset(of: model.fileDuplicateSelection) ? .on : .off,
+                    state: !selectable.isEmpty && selectable.isSubset(of: model.fileDuplicates.fileDuplicateSelection) ? .on : .off,
                     isEnabled: !selectable.isEmpty && !model.isBusyWithDisk
                 ) { isOn in
-                    if isOn { model.selectAllFileDuplicates() }
-                    else { model.deselectAllFileDuplicates() }
+                    if isOn { model.fileDuplicates.selectAllFileDuplicates() }
+                    else { model.fileDuplicates.deselectAllFileDuplicates() }
                 }
                 .fixedSize()
                 Spacer()
@@ -122,7 +122,7 @@ struct FileDuplicatesView: View {
             .padding(.horizontal, Token.Size.pageGutter + 15)
             .padding(.top, 18)
             .padding(.bottom, 14)
-            .help(model.fileDuplicateResults.map { resultSummary($0) } ?? "")
+            .help(model.fileDuplicates.fileDuplicateResults.map { resultSummary($0) } ?? "")
 
             scrollingGroups
         }
@@ -131,7 +131,7 @@ struct FileDuplicatesView: View {
     private var scrollingGroups: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(model.fileDuplicateGroups) { group in
+                ForEach(model.fileDuplicates.fileDuplicateGroups) { group in
                     groupCard(group)
                 }
             }
@@ -191,7 +191,7 @@ struct FileDuplicatesView: View {
                             .foregroundStyle(Token.Text.tertiary)
                     }
                     Button(groupIsSelected(group) ? "Deselect" : "Select Copies") {
-                        model.toggleFileDuplicateGroup(group)
+                        model.fileDuplicates.toggleFileDuplicateGroup(group)
                     }
                     .buttonStyle(SecondaryButtonStyle())
                 }
@@ -209,7 +209,7 @@ struct FileDuplicatesView: View {
 
     private func fileRow(_ file: DuplicateFile, group: FileDuplicateGroup) -> some View {
         let isKeeper = file.id == group.keeper.id
-        let selected = model.fileDuplicateSelection.contains(file.id)
+        let selected = model.fileDuplicates.fileDuplicateSelection.contains(file.id)
 
         return HStack(spacing: 10) {
             if isKeeper {
@@ -223,7 +223,7 @@ struct FileDuplicatesView: View {
                     state: selected ? .on : .off,
                     isEnabled: !model.isBusyWithDisk,
                     showsTitle: false
-                ) { _ in model.toggleFileDuplicate(file.id) }
+                ) { _ in model.fileDuplicates.toggleFileDuplicate(file.id) }
                 .frame(width: 28, height: 28)
                 .help(selected ? "Keep this copy" : "Move this copy to the Trash")
             }
@@ -281,7 +281,7 @@ struct FileDuplicatesView: View {
         .contextMenu {
             if !isKeeper {
                 Button("Keep This Copy") {
-                    model.keepFileInstead(groupID: group.id, fileID: file.id)
+                    model.fileDuplicates.keepFileInstead(groupID: group.id, fileID: file.id)
                 }
             }
             Button("Show in Finder") {
@@ -292,7 +292,7 @@ struct FileDuplicatesView: View {
 
     private func groupIsSelected(_ group: FileDuplicateGroup) -> Bool {
         !group.removable.isEmpty && group.removable.allSatisfy {
-            model.fileDuplicateSelection.contains($0.id)
+            model.fileDuplicates.fileDuplicateSelection.contains($0.id)
         }
     }
 }
@@ -314,7 +314,7 @@ struct FileDuplicateMinimumPicker: View {
                 .font(.mcControlLabel)
                 .foregroundStyle(Token.Text.secondary)
             Menu {
-                Picker("Minimum file size", selection: $model.fileDuplicateMinimumBytes) {
+                Picker("Minimum file size", selection: Binding(get: { model.fileDuplicates.fileDuplicateMinimumBytes }, set: { model.fileDuplicates.fileDuplicateMinimumBytes = $0 })) {
                     ForEach(minimumOptions, id: \.1) { option in
                         Text(option.0).tag(option.1)
                     }
@@ -323,8 +323,8 @@ struct FileDuplicateMinimumPicker: View {
                 .labelsHidden()
             } label: {
                 HStack(spacing: 7) {
-                    Text(minimumOptions.first { $0.1 == model.fileDuplicateMinimumBytes }?.0
-                         ?? ByteFormatting.string(model.fileDuplicateMinimumBytes))
+                    Text(minimumOptions.first { $0.1 == model.fileDuplicates.fileDuplicateMinimumBytes }?.0
+                         ?? ByteFormatting.string(model.fileDuplicates.fileDuplicateMinimumBytes))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
@@ -335,7 +335,7 @@ struct FileDuplicateMinimumPicker: View {
             .menuIndicator(.hidden)
             .disabled(model.isBusyWithDisk)
             .accessibilityLabel("Minimum file size")
-            .accessibilityValue(minimumOptions.first { $0.1 == model.fileDuplicateMinimumBytes }?.0 ?? "")
+            .accessibilityValue(minimumOptions.first { $0.1 == model.fileDuplicates.fileDuplicateMinimumBytes }?.0 ?? "")
         }
         .fixedSize()
         .help("Filter results by file size. The scan checks all eligible file sizes.")

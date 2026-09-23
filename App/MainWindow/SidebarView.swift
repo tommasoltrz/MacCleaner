@@ -21,7 +21,7 @@ struct SidebarView: View {
     /// `model.view` second, which is what lets the highlight arrive a frame ahead of the
     /// content. It is set on mouse down and cleared the moment the view actually changes,
     /// so it is never more than one frame out of step with the app.
-    @State private var pendingView: AppModel.View?
+    @State private var pendingView: AppSection?
 
     var body: some View {
         // Selection is drawn by hand rather than handed to `List`. Finder's dark
@@ -44,7 +44,7 @@ struct SidebarView: View {
 
     private var list: some View {
         List {
-            ForEach(AppModel.View.sidebarSections) { section in
+            ForEach(AppSection.sidebarSections) { section in
                 if section.title.isEmpty {
                     sidebarRows(section.views)
                 } else {
@@ -66,7 +66,7 @@ struct SidebarView: View {
     }
 
     /// Rows without a group title do not reserve space for a header.
-    private func sidebarRows(_ views: [AppModel.View]) -> some View {
+    private func sidebarRows(_ views: [AppSection]) -> some View {
         ForEach(views) { view in
             Button {
                 select(view)
@@ -159,7 +159,7 @@ struct SidebarView: View {
     /// The latest press wins. Pressing a second row before the first has committed leaves
     /// the first commit looking at a pending row that is no longer its own, and it stands
     /// down; the second one commits for both.
-    private func select(_ view: AppModel.View) {
+    private func select(_ view: AppSection) {
         guard (pendingView ?? model.view) != view else { return }
         pendingView = view
         Task { @MainActor in
@@ -172,7 +172,7 @@ struct SidebarView: View {
 
     /// What the sidebar draws as chosen: the pressed row if there is one, the app's own
     /// view otherwise.
-    private func isSelected(_ view: AppModel.View) -> Bool {
+    private func isSelected(_ view: AppSection) -> Bool {
         (pendingView ?? model.view) == view
     }
 
@@ -189,7 +189,7 @@ struct SidebarView: View {
             // so naming it answered a question with one possible answer — and it
             // was taking the line that the figure someone opens this app for
             // should have to itself.
-            Text(model.volume.map { "\(ByteFormatting.string($0.freeBytes)) free" } ?? "—")
+            Text(model.dashboard.volume.map { "\(ByteFormatting.string($0.freeBytes)) free" } ?? "—")
                 .font(.mcRowTitle)
                 .foregroundStyle(Token.Text.primary)
                 .lineLimit(1)
@@ -231,7 +231,7 @@ struct SidebarView: View {
     }
 
     private var usedFraction: Double {
-        guard let volume = model.volume, volume.capacityBytes > 0 else { return 0 }
+        guard let volume = model.dashboard.volume, volume.capacityBytes > 0 else { return 0 }
         return Double(volume.usedBytes) / Double(volume.capacityBytes)
     }
 
@@ -239,7 +239,7 @@ struct SidebarView: View {
     /// in it, which on any real startup volume they do; a pair that somehow split
     /// units keeps both, since dropping one would then be a lie about the smaller.
     private var usedSummary: String? {
-        guard let volume = model.volume else { return nil }
+        guard let volume = model.dashboard.volume else { return nil }
         let used = ByteFormatting.string(volume.usedBytes)
         let capacity = ByteFormatting.string(volume.capacityBytes)
         guard let usedUnit = used.split(separator: " ").last,
@@ -250,10 +250,10 @@ struct SidebarView: View {
     }
 
     /// Shows the item count beside Trash.
-    private func count(for view: AppModel.View) -> Int? {
+    private func count(for view: AppSection) -> Int? {
         switch view {
         case .trash:
-            let items = model.trashSummary?.itemCount ?? 0
+            let items = model.trash.trashSummary?.itemCount ?? 0
             return items > 0 ? items : nil
         default:
             return nil

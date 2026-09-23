@@ -4,8 +4,8 @@ import ScoloCore
 
 /// Presents one floating preview without blocking the main window.
 struct PhotoPreviewWindowPresenter: NSViewRepresentable {
-    let item: PhotoDuplicatesView.Preview?
-    let model: AppModel
+    let item: PhotoDuplicatesModel.Preview?
+    let model: PhotoDuplicatesModel
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -25,9 +25,9 @@ struct PhotoPreviewWindowPresenter: NSViewRepresentable {
         private var hostingView: NSHostingView<AnyView>?
         private var itemID: String?
         private var outsideClickMonitor: Any?
-        private weak var model: AppModel?
+        private weak var model: PhotoDuplicatesModel?
 
-        func update(item: PhotoDuplicatesView.Preview?, model: AppModel, parent: NSWindow?) {
+        func update(item: PhotoDuplicatesModel.Preview?, model: PhotoDuplicatesModel, parent: NSWindow?) {
             self.model = model
             guard let item else { close(); return }
             guard let parent else { return }
@@ -36,7 +36,7 @@ struct PhotoPreviewWindowPresenter: NSViewRepresentable {
             let content = AnyView(PhotoPreviewContent(
                 item: item,
                 model: model,
-                thumbnails: model.photoThumbnails,
+                thumbnails: model.thumbnails,
                 onClose: { [weak self] in self?.dismiss() }
             ).id(identity))
 
@@ -90,12 +90,12 @@ struct PhotoPreviewWindowPresenter: NSViewRepresentable {
         }
 
         private func dismiss() {
-            model?.photoPreview = nil
+            model?.preview = nil
             close()
         }
 
         func windowWillClose(_ notification: Notification) {
-            model?.photoPreview = nil
+            model?.preview = nil
             removeMonitor()
             panel = nil
             hostingView = nil
@@ -125,16 +125,16 @@ private final class PreviewPanel: NSPanel {
 
 /// Shows a photo in a movable preview window.
 struct PhotoPreviewContent: View {
-    let item: PhotoDuplicatesView.Preview
-    @Bindable var model: AppModel
+    let item: PhotoDuplicatesModel.Preview
+    @Bindable var model: PhotoDuplicatesModel
     let thumbnails: PhotoThumbnailLoader
     let onClose: () -> Void
 
     @State private var shown: PhotoAsset
 
     init(
-        item: PhotoDuplicatesView.Preview,
-        model: AppModel,
+        item: PhotoDuplicatesModel.Preview,
+        model: PhotoDuplicatesModel,
         thumbnails: PhotoThumbnailLoader,
         onClose: @escaping () -> Void
     ) {
@@ -145,10 +145,10 @@ struct PhotoPreviewContent: View {
         _shown = State(initialValue: item.asset)
     }
 
-    private var group: DuplicateGroup? { model.photoGroups.first { $0.id == item.groupID } }
+    private var group: DuplicateGroup? { model.groups.first { $0.id == item.groupID } }
 
     private var isKeeper: Bool { shown.id == group?.keeper.id }
-    private var isSelected: Bool { model.photoSelection.contains(shown.id) }
+    private var isSelected: Bool { model.selection.contains(shown.id) }
     private var siblings: [PhotoAsset] { group?.assets ?? [shown] }
 
     var body: some View {
@@ -277,7 +277,7 @@ struct PhotoPreviewContent: View {
                     }
                     .buttonStyle(PageActionButtonStyle())
                     Button(isSelected ? "Deselect" : "Select for Deletion") {
-                        model.togglePhoto(shown.id)
+                        model.toggle(shown.id)
                     }
                     .buttonStyle(PageActionButtonStyle(tint: .white, foreground: .black))
                 }

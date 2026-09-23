@@ -17,7 +17,7 @@ struct ScoloApp: App {
         _settings = State(initialValue: settings)
         _model = State(initialValue: model)
         FinderUninstallRequestCenter.shared.install { [weak model] applicationURL in
-            model?.planAppUninstall(applicationURL)
+            model?.uninstaller.planAppUninstall(applicationURL)
         }
     }
 
@@ -45,12 +45,12 @@ struct ScoloApp: App {
         Settings {
             PreferencesView(
                 settings: settings,
-                categorySizes: model.categorySizes,
+                categorySizes: model.cleanup.categorySizes,
                 onRebuildIndex: {
                     ScoloCore.BreakdownCache.clear()
-                    Task { await model.measureStorage() }
+                    Task { await model.dashboard.measureStorage() }
                 },
-                onClearMeasurementHistory: { model.clearMeasurementHistory() }
+                onClearMeasurementHistory: { model.dashboard.clearMeasurementHistory() }
             )
         }
         // Without this AppKit lets the Settings window be dragged wider than any of
@@ -60,7 +60,7 @@ struct ScoloApp: App {
         MenuBarExtra(isInserted: $settings.showInMenuBar) {
             MenuBarView(model: model)
         } label: {
-            MenuBarLabel(volume: model.volume)
+            MenuBarLabel(volume: model.dashboard.volume)
         }
         .menuBarExtraStyle(.window)
         .commands {
@@ -69,9 +69,9 @@ struct ScoloApp: App {
                 Button("Scan for Cleanup Items") { model.startScan() }
                     .keyboardShortcut("r")
                     .disabled(model.isBusyWithDisk)
-                Button("Stop Scan") { model.cancelScan() }
+                Button("Stop Scan") { model.cleanup.cancelScan() }
                     .keyboardShortcut(".")
-                    .disabled(!model.isScanning)
+                    .disabled(!model.cleanup.isScanning)
             }
             // Replacing, not adding: the stock group is the text system's Find,
             // Spelling and Substitutions submenus, which act on a document this app

@@ -32,7 +32,7 @@ struct CleanupHistoryView: View {
         VStack(spacing: 0) {
             header
 
-            if model.isLoadingCleanupHistory && model.cleanupHistory == nil {
+            if model.history.isLoadingCleanupHistory && model.history.cleanupHistory == nil {
                 loadingState
             } else if items.isEmpty {
                 emptyState
@@ -53,10 +53,10 @@ struct CleanupHistoryView: View {
                 historyTable
             }
         }
-        .task { await model.loadCleanupHistory() }
+        .task { await model.history.loadCleanupHistory() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await model.loadCleanupHistory() }
+                Task { await model.history.loadCleanupHistory() }
             }
         }
     }
@@ -77,7 +77,7 @@ struct CleanupHistoryView: View {
             }
 
             HStack(spacing: 12) {
-                if let summary = model.cleanupHistory {
+                if let summary = model.history.cleanupHistory {
                     let visible = visibleItems
                     let bytes = visible.reduce(Int64(0)) { $0 + $1.bytes }
                     Text("\(visible.count) \(visible.count == 1 ? "item" : "items") · \(ByteFormatting.string(bytes))")
@@ -111,7 +111,7 @@ struct CleanupHistoryView: View {
                         ForEach(Array(visibleItems.enumerated()), id: \.element.id) { index, item in
                             VStack(spacing: 0) {
                                 if index > 0 { Hairline() }
-                                HistoryRow(item: item, onShowInTrash: { model.showInTrash(item) })
+                                HistoryRow(item: item, onShowInTrash: { model.trash.showInTrash(item) })
                             }
                         }
                     }
@@ -167,7 +167,7 @@ struct CleanupHistoryView: View {
     }
 
     private var items: [CleanupHistoryItem] {
-        model.cleanupHistory?.items ?? []
+        model.history.cleanupHistory?.items ?? []
     }
 
     private var query: String {
