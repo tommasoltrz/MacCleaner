@@ -8,11 +8,11 @@ struct RemovalOperationSurface: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var showsActivity: Bool {
-        model.activity != nil && !(model.view == .scanner && model.isCleaningUp)
+        model.operations.activity != nil && !(model.view == .scanner && model.operations.isCleaningUp)
     }
 
     private var isPresented: Bool {
-        showsActivity || model.isDeletingPhotos || model.removalCompletion?.destination == model.view
+        showsActivity || model.photoDuplicates.isDeleting || model.operations.removalCompletion?.destination == model.view
     }
 
     var body: some View {
@@ -20,20 +20,20 @@ struct RemovalOperationSurface: View {
             if isPresented {
                 ZStack {
                     Token.pageBackground
-                    if showsActivity, let activity = model.activity {
+                    if showsActivity, let activity = model.operations.activity {
                         ActivityOverlay(activity: activity)
                             .transition(.opacity)
-                    } else if model.isDeletingPhotos {
+                    } else if model.photoDuplicates.isDeleting {
                         PageProgressView(title: "Deleting photos", detail: "Waiting for Photos to finish.")
                             .transition(.opacity)
-                    } else if let completion = model.removalCompletion, completion.destination == model.view {
+                    } else if let completion = model.operations.removalCompletion, completion.destination == model.view {
                         RemovalCompletionView(
                             title: completion.title,
                             detail: completion.detail,
                             isSuccess: completion.isSuccess,
                             showsActions: !completion.dismissesAutomatically,
-                            canContinue: !model.isBusyWithDisk && !model.isLoadingApplicationLeftovers,
-                            onContinue: model.dismissRemovalCompletion,
+                            canContinue: !model.isBusyWithDisk && !model.uninstaller.library.isLoadingApplicationLeftovers,
+                            onContinue: model.operations.dismissRemovalCompletion,
                             onViewDashboard: { model.view = .dashboard }
                         )
                         .id(completion.id)
@@ -44,7 +44,7 @@ struct RemovalOperationSurface: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.removalCompletion?.id)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.operations.removalCompletion?.id)
                 .transition(fadesOnDismiss
                     ? .asymmetric(insertion: .identity, removal: .opacity)
                     : .identity)
@@ -56,7 +56,7 @@ struct RemovalOperationSurface: View {
 
 /// Blocks page input while a removal operation runs.
 struct ActivityOverlay: View {
-    let activity: AppModel.Activity
+    let activity: OperationState.Activity
 
     var body: some View {
         ZStack {

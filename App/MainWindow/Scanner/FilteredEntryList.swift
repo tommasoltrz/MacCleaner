@@ -12,12 +12,12 @@ import ScoloCore
 /// and the one behaviour that was its own: the safe tab opens pre-selected.
 struct FilteredSummary: View {
     @Bindable var model: AppModel
-    let filter: AppModel.ScanFilter
+    let filter: CleanupModel.ScanFilter
 
     var body: some View {
         // The model owns this list: the status bar's Select All acts on exactly
         // these rows, and they are the rows the outline below is made of.
-        let entries = model.tileEntries(safeToRemove: filter == .safeToRemove)
+        let entries = model.cleanup.tileEntries(safeToRemove: filter == .safeToRemove)
         VStack(alignment: .leading, spacing: 4) {
             // `displayBytes`, the same arithmetic the Dashboard tile uses: summing
             // what cleanup can free instead showed "0 B" over a list of gigabyte
@@ -34,6 +34,6 @@ struct FilteredSummary: View {
         .padding(.horizontal, 2)
         // No seeding here any more. What is ticked when a scan finishes is the
         // scan's business, not this summary line's: see
-        // `AppModel.seedSafeToRemoveSelection`, now called when the scan returns.
+        // `CleanupModel.seedSafeToRemoveSelection`, now called when the scan returns.
     }
 }

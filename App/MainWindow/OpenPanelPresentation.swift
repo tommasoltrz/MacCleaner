@@ -28,7 +28,7 @@ extension NSOpenPanel {
         let candidates = NSApp.windows.filter {
             $0.isVisible && $0.canBecomeMain && $0.attachedSheet == nil
         }
-        return candidates.first { $0.identifier == MainWindowIdentityView.identifier }
+        return candidates.first { $0.identifier == MainWindowIdentity.identifier }
             ?? candidates.first { $0.isMainWindow }
             ?? candidates.first { $0.isKeyWindow }
     }

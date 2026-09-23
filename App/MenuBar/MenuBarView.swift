@@ -18,7 +18,7 @@ struct MenuBarView: View {
         // row labels at 12 pt from the edge.
         VStack(alignment: .leading, spacing: 6) {
             Group {
-                if let volume = model.volume {
+                if let volume = model.dashboard.volume {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("\(ByteFormatting.string(volume.freeBytes)) free")
                             .font(.mcRowTitle)
@@ -46,7 +46,7 @@ struct MenuBarView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 model.startScan()
             }
-            .disabled(model.isScanning)
+            .disabled(model.cleanup.isScanning)
 
             Button("Open Scolo") {
                 // Hide the menu window before the main window requests key status.

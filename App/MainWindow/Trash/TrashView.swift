@@ -11,18 +11,18 @@ struct TrashView: View {
     @Bindable var model: AppModel
 
     /// Distinguishes "not read yet" from "read, and there was nothing to read".
-    /// `AppModel.loadTrash()` swallows its error into `nil`, so without this the
+    /// `TrashModel.loadTrash()` swallows its error into `nil`, so without this the
     /// spinner would be indistinguishable from a failure and would never stop.
     @State private var hasLoaded = false
 
     var body: some View {
         Group {
-            if let summary = model.trashSummary {
+            if let summary = model.trash.trashSummary {
                 TrashContent(
                     summary: summary,
                     findRequest: model.findRequest,
-                    selectedItemID: $model.selectedTrashItemID,
-                    onPutBack: { item in Task { await model.putBack(item) } }
+                    selectedItemID: Binding(get: { model.trash.selectedTrashItemID }, set: { model.trash.selectedTrashItemID = $0 }),
+                    onPutBack: { item in Task { await model.trash.putBack(item) } }
                 )
             } else if hasLoaded {
                 unreadableNote
@@ -30,9 +30,9 @@ struct TrashView: View {
                 loadingNote
             }
         }
-        .operationResultAnimation(isRunning: !hasLoaded && model.trashSummary == nil)
+        .operationResultAnimation(isRunning: !hasLoaded && model.trash.trashSummary == nil)
         .task {
-            await model.loadTrash()
+            await model.trash.loadTrash()
             hasLoaded = true
         }
     }

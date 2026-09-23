@@ -65,18 +65,18 @@ struct MainWindow: View {
         // Traffic-light geometry, and the window's drag turned off — see
         // `WindowChrome`, which explains why a nested opt-out cannot do it.
         .background(WindowChrome(headerBand: Token.Size.headerBand))
-        .disabled(model.activity != nil || model.isDeletingPhotos)
-        .background(PhotoPreviewWindowPresenter(item: model.photoPreview, model: model))
-        .onChange(of: model.duplicateKind) { _, _ in model.photoPreview = nil }
+        .disabled(model.operations.activity != nil || model.photoDuplicates.isDeleting)
+        .background(PhotoPreviewWindowPresenter(item: model.photoDuplicates.preview, model: model.photoDuplicates))
+        .onChange(of: model.duplicateKind) { _, _ in model.photoDuplicates.preview = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            model.photoPreview = nil
+            model.photoDuplicates.preview = nil
         }
         .task {
             if scenePhase == .active { model.startInitialCleanupScan() }
-            await model.loadDashboard()
+            await model.dashboard.loadDashboard()
         }
         .onChange(of: model.view) { _, view in
-            model.photoPreview = nil
+            model.photoDuplicates.preview = nil
             if view == .scanner, scenePhase == .active { model.startInitialCleanupScan() }
         }
         .onChange(of: model.isBusyWithDisk) { _, isBusy in
@@ -86,13 +86,13 @@ struct MainWindow: View {
         // in Finder, doing things this snapshot cannot know about.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                model.pruneVanishedEntries()
+                model.cleanup.pruneVanishedEntries()
                 model.startInitialCleanupScan()
             }
         }
         .alert(
             "Allow Access to Other App Data",
-            isPresented: $model.isShowingAppDataAccessAlert
+            isPresented: Binding(get: { model.operations.isShowingAppDataAccessAlert }, set: { model.operations.isShowingAppDataAccessAlert = $0 })
         ) {
             Button("Open System Settings") {
                 AppDataAccess.openSystemSettings()
@@ -105,15 +105,15 @@ struct MainWindow: View {
             )
         }
         // What the footer's status line used to carry, minus the routine
-        // successes — see `AppModel.Notice`. An alert waits to be read; the
+        // successes — see `OperationState.Notice`. An alert waits to be read; the
         // caption it replaces was overwritten by whatever happened next.
         .alert(
-            model.notice?.title ?? "",
+            model.operations.notice?.title ?? "",
             isPresented: Binding(
-                get: { model.notice != nil },
-                set: { if !$0 { model.notice = nil } }
+                get: { model.operations.notice != nil },
+                set: { if !$0 { model.operations.notice = nil } }
             ),
-            presenting: model.notice
+            presenting: model.operations.notice
         ) { _ in
             Button("OK", role: .cancel) {}
         } message: { notice in
@@ -245,14 +245,14 @@ struct MainWindow: View {
                 headerCentre
             }
             HStack(spacing: 10) {
-                if model.view == .duplicates || model.removalCompletion?.destination != model.view {
+                if model.view == .duplicates || model.operations.removalCompletion?.destination != model.view {
                     pageActions
                     if hasRemovalAction {
                         removeButton
                     }
                 }
             }
-            .disabled(model.removalCompletion?.destination == model.view)
+            .disabled(model.operations.removalCompletion?.destination == model.view)
         }
         // The page's own gutter, so the title and the actions line up with the
         // cards under them rather than with the viewport's edge.
@@ -288,8 +288,8 @@ struct MainWindow: View {
                 DuplicatesView(model: model)
             }
         }
-        .allowsHitTesting(model.view == .duplicates || model.removalCompletion?.destination != model.view)
-        .accessibilityHidden(model.view != .duplicates && model.removalCompletion?.destination == model.view)
+        .allowsHitTesting(model.view == .duplicates || model.operations.removalCompletion?.destination != model.view)
+        .accessibilityHidden(model.view != .duplicates && model.operations.removalCompletion?.destination == model.view)
         .overlay {
             if model.view != .duplicates {
                 RemovalOperationSurface(model: model)
@@ -307,19 +307,19 @@ struct MainWindow: View {
         // The header contains the actions for the current page.
         // A real sheet, so macOS supplies the titlebar attachment, the entrance
         // animation, and Escape/Return handling.
-        .sheet(item: $model.activeSheet) { sheet in
+        .sheet(item: Binding(get: { model.operations.activeSheet }, set: { model.operations.activeSheet = $0 })) { sheet in
             switch sheet {
             case .cleanUp:
                 ConfirmationSheet(
                     // Every figure from the captured plan, so the sheet describes
                     // the operation that will actually run.
                     variant: .cleanUp(
-                        itemCount: model.pendingCleanUp?.itemCount ?? 0,
-                        totalBytes: model.pendingCleanUp?.totalBytes ?? 0,
-                        protectedDataCount: model.pendingCleanUp?.protectedDataCount ?? 0,
+                        itemCount: model.cleanupRemoval.pendingCleanUp?.itemCount ?? 0,
+                        totalBytes: model.cleanupRemoval.pendingCleanUp?.totalBytes ?? 0,
+                        protectedDataCount: model.cleanupRemoval.pendingCleanUp?.protectedDataCount ?? 0,
                         // Absent until the private-size reading lands, a moment
                         // after the sheet appears.
-                        saving: model.pendingCleanUp?.freed.flatMap {
+                        saving: model.cleanupRemoval.pendingCleanUp?.freed.flatMap {
                             // A reading with gaps in it is no reading: an item the
                             // filesystem would not answer for could hold anything,
                             // so the sheet says nothing rather than a partial total.
@@ -331,21 +331,21 @@ struct MainWindow: View {
                                 : nil
                         }
                     ),
-                    runningOwnerNames: model.pendingCleanUp?.runningOwners.map(\.name) ?? [],
-                    onConfirm: { Task { await model.performCleanUp() } },
+                    runningOwnerNames: model.cleanupRemoval.pendingCleanUp?.runningOwners.map(\.name) ?? [],
+                    onConfirm: { Task { await model.cleanupRemoval.performCleanUp() } },
                     onQuitAndConfirm: {
-                        Task { await model.performCleanUp(quittingOwners: true) }
+                        Task { await model.cleanupRemoval.performCleanUp(quittingOwners: true) }
                     },
-                    onCancel: { model.cancelCleanUp() }
+                    onCancel: { model.cleanupRemoval.cancelCleanUp() }
                 )
             case .emptyTrash:
                 ConfirmationSheet(
                     variant: .emptyTrash(
-                        itemCount: model.trashSummary?.itemCount ?? 0,
-                        totalBytes: model.trashSummary?.totalBytes ?? 0
+                        itemCount: model.trash.trashSummary?.itemCount ?? 0,
+                        totalBytes: model.trash.trashSummary?.totalBytes ?? 0
                     ),
-                    onConfirm: { Task { await model.emptyTrash() } },
-                    onCancel: { model.activeSheet = nil }
+                    onConfirm: { Task { await model.trash.emptyTrash() } },
+                    onCancel: { model.operations.activeSheet = nil }
                 )
             }
         }
@@ -359,7 +359,7 @@ struct MainWindow: View {
         case .scanner, .duplicates, .storageExplorer, .trash: true
         // Only over the grid of applications. The review and done pages are steps
         // in a sequence and carry their own buttons.
-        case .uninstaller: model.isShowingUninstallerLibrary
+        case .uninstaller: model.uninstaller.isShowingUninstallerLibrary
         case .dashboard, .history: false
         }
     }
@@ -367,38 +367,38 @@ struct MainWindow: View {
     private var canRemove: Bool {
         guard !model.isBusyWithDisk else { return false }
         switch model.view {
-        case .scanner:         return !model.cleanupSelection(in: .all).isEmpty
+        case .scanner:         return !model.cleanup.cleanupSelection(in: .all).isEmpty
         case .duplicates:      return model.duplicateKind == .files
-            ? !model.fileDuplicateSelection.isEmpty && !model.isScanningDuplicateFiles
-            : !model.photoSelection.isEmpty && !model.isRegroupingPhotos
-        case .uninstaller:     return model.uninstallerTab == .installed
-            ? !model.selectedApplicationIDs.isEmpty
-            : !model.selectedLeftoverIdentifiers.isEmpty && !model.isLoadingApplicationLeftovers
+            ? !model.fileDuplicates.fileDuplicateSelection.isEmpty && !model.fileDuplicates.isScanningDuplicateFiles
+            : !model.photoDuplicates.selection.isEmpty && !model.photoDuplicates.isRegrouping
+        case .uninstaller:     return model.uninstaller.uninstallerTab == .installed
+            ? !model.uninstaller.library.selectedApplicationIDs.isEmpty
+            : !model.uninstaller.library.selectedLeftoverIdentifiers.isEmpty && !model.uninstaller.library.isLoadingApplicationLeftovers
         case .storageExplorer: return model.storageExplorer.canRemoveSelection
             && !model.storageExplorer.isMapSelectionPending
             && !model.isStorageExplorerMeasurementBlocked
-        case .trash:           return (model.trashSummary?.itemCount ?? 0) > 0
+        case .trash:           return (model.trash.trashSummary?.itemCount ?? 0) > 0
         case .dashboard, .history: return false
         }
     }
 
     private func removeTapped() {
         switch model.view {
-        case .scanner: model.requestCleanUp(in: .all)
+        case .scanner: model.cleanupRemoval.requestCleanUp(in: .all)
         case .duplicates:
             if model.duplicateKind == .files {
-                Task { await model.removeSelectedDuplicateFiles() }
+                Task { await model.fileDuplicates.removeSelectedDuplicateFiles() }
             } else {
                 Task { await model.deleteSelectedPhotos() }
             }
         case .uninstaller:
-            if model.uninstallerTab == .installed {
-                model.moveSelectedApplicationsToTrash()
+            if model.uninstaller.uninstallerTab == .installed {
+                model.uninstaller.moveSelectedApplicationsToTrash()
             } else {
                 Task { await model.requestLeftoverRemoval() }
             }
-        case .storageExplorer: Task { await model.requestStorageExplorerRemoval() }
-        case .trash:      model.activeSheet = .emptyTrash
+        case .storageExplorer: Task { await model.storageRemoval.requestStorageExplorerRemoval() }
+        case .trash:      model.operations.activeSheet = .emptyTrash
         case .dashboard, .history: break
         }
     }
@@ -407,7 +407,7 @@ struct MainWindow: View {
     private var removeButton: some View {
         Button(action: removeTapped) {
             HStack(spacing: 7) {
-                if model.isCleaningUp || model.isRemovingDuplicateFiles {
+                if model.operations.isCleaningUp || model.operations.isRemovingDuplicateFiles {
                     ProgressView().controlSize(.small)
                 }
                 Text(model.removeLabel)
@@ -424,7 +424,7 @@ struct MainWindow: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.removeLabel)
         .help(model.view == .scanner
               ? "Moves selected items from all filters to the Trash."
-              : model.view == .uninstaller && model.uninstallerTab == .installed
+              : model.view == .uninstaller && model.uninstaller.uninstallerTab == .installed
                 ? "Moves selected apps and their related files to the Trash."
                 : model.removeLabel)
     }
@@ -432,12 +432,12 @@ struct MainWindow: View {
     /// Names the operation that blocks scans on the current page.
     @ViewBuilder
     private var headerCentre: some View {
-        if model.isScanning, model.view != .scanner {
+        if model.cleanup.isScanning, model.view != .scanner {
             backgroundWorkStatus(
                 title: "Cleanup scan",
-                detail: "\(model.scanProgress)% complete",
-                progress: Double(model.scanProgress) / 100,
-                onStop: { model.cancelScan() }
+                detail: "\(model.cleanup.scanProgress)% complete",
+                progress: Double(model.cleanup.scanProgress) / 100,
+                onStop: { model.cleanup.cancelScan() }
             )
         } else if model.storageExplorer.isLoading, model.view != .storageExplorer {
             backgroundWorkStatus(
@@ -446,29 +446,29 @@ struct MainWindow: View {
                     + ByteFormatting.string(model.storageExplorer.progress.allocatedBytes),
                 onStop: { model.storageExplorer.cancel() }
             )
-        } else if model.isScanningDuplicateFiles,
+        } else if model.fileDuplicates.isScanningDuplicateFiles,
                   model.view != .duplicates || model.duplicateKind != .files {
-            let progress = model.fileDuplicateProgress
+            let progress = model.fileDuplicates.fileDuplicateProgress
             backgroundWorkStatus(
                 title: "Duplicate file scan",
                 detail: progress.map { "\($0.completed.formatted()) of \($0.total.formatted()) files" }
                     ?? "Preparing scan",
                 progress: progress.flatMap { $0.total > 0 ? Double($0.completed) / Double($0.total) : nil },
-                onStop: { model.cancelFileDuplicateScan() }
+                onStop: { model.fileDuplicates.cancelFileDuplicateScan() }
             )
-        } else if model.isSweepingPhotos,
+        } else if model.photoDuplicates.isScanning,
                   model.view != .duplicates || model.duplicateKind != .photos {
             backgroundWorkStatus(
                 title: "Duplicate photo scan",
-                detail: "\(model.photoProgress?.percent ?? 0)% complete",
-                progress: Double(model.photoProgress?.percent ?? 0) / 100,
-                onStop: { model.cancelPhotoSweep() }
+                detail: "\(model.photoDuplicates.progress?.percent ?? 0)% complete",
+                progress: Double(model.photoDuplicates.progress?.percent ?? 0) / 100,
+                onStop: { model.photoDuplicates.cancelScan() }
             )
-        } else if model.isPlanningAppUninstall, model.view != .uninstaller {
+        } else if model.uninstaller.isPlanningAppUninstall, model.view != .uninstaller {
             backgroundWorkStatus(
                 title: "Checking selected apps",
-                detail: model.appUninstallPlanningDetail ?? "Finding related files",
-                onStop: { model.resetAppUninstall() }
+                detail: model.uninstaller.appUninstallPlanningDetail ?? "Finding related files",
+                onStop: { model.uninstaller.resetAppUninstall() }
             )
         }
     }
@@ -514,52 +514,52 @@ struct MainWindow: View {
         switch model.view {
         case .scanner:
             Button {
-                if model.isScanning { model.cancelScan() } else { model.startScan() }
+                if model.cleanup.isScanning { model.cleanup.cancelScan() } else { model.startScan() }
             } label: {
                 Label(
-                    model.isScanning ? "Stop Scan" : "Scan",
-                    systemImage: model.isScanning ? "stop.fill" : "magnifyingglass"
+                    model.cleanup.isScanning ? "Stop Scan" : "Scan",
+                    systemImage: model.cleanup.isScanning ? "stop.fill" : "magnifyingglass"
                 )
             }
             .buttonStyle(PageActionButtonStyle())
             .controlSize(.large)
-            .disabled(!model.isScanning && model.isBusyWithDisk)
+            .disabled(!model.cleanup.isScanning && model.isBusyWithDisk)
         case .dashboard:
-            Button { Task { await model.measureStorage() } } label: {
+            Button { Task { await model.dashboard.measureStorage() } } label: {
                 Label("Refresh Overview", systemImage: "arrow.clockwise")
             }
                 .buttonStyle(PageActionButtonStyle())
-                .disabled(model.isBusyWithDisk || model.isLoadingBreakdown)
+                .disabled(model.isBusyWithDisk || model.dashboard.isLoadingBreakdown)
         case .trash:
-            Button { Task { await model.loadTrash() } } label: {
+            Button { Task { await model.trash.loadTrash() } } label: {
                 Label("Refresh Trash", systemImage: "arrow.clockwise")
             }
                 .buttonStyle(PageActionButtonStyle())
                 .disabled(model.isBusyWithDisk)
         case .uninstaller:
-            if model.isShowingUninstallerLibrary {
+            if model.uninstaller.isShowingUninstallerLibrary {
                 Button {
-                    if model.uninstallerTab == .installed {
-                        model.loadInstalledApplications()
+                    if model.uninstaller.uninstallerTab == .installed {
+                        model.uninstaller.library.loadInstalledApplications()
                     } else {
-                        model.loadApplicationLeftovers()
+                        model.uninstaller.library.loadApplicationLeftovers()
                     }
                 } label: {
-                    Label(model.uninstallerTab == .installed ? "Refresh Apps" : "Refresh Leftovers", systemImage: "arrow.clockwise")
+                    Label(model.uninstaller.uninstallerTab == .installed ? "Refresh Apps" : "Refresh Leftovers", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(PageActionButtonStyle())
-                .disabled(model.isBusyWithDisk || model.isLoadingApplicationLeftovers)
+                .disabled(model.isBusyWithDisk || model.uninstaller.library.isLoadingApplicationLeftovers)
             }
         case .duplicates:
             if model.duplicateKind == .photos,
-               model.photoResults != nil, model.photoUnavailable == nil {
+               model.photoDuplicates.results != nil, model.photoDuplicates.unavailableReason == nil {
                 Button { model.startPhotoSweep() } label: {
                     Label("Scan Again", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(PageActionButtonStyle())
                 .disabled(model.isBusyWithDisk)
                 .help("Scan the photo library again.")
-            } else if model.duplicateKind == .files, model.fileDuplicateResults != nil {
+            } else if model.duplicateKind == .files, model.fileDuplicates.fileDuplicateResults != nil {
                 Button { model.startFileDuplicateScan() } label: {
                     Label("Scan Again", systemImage: "arrow.clockwise")
                 }

@@ -15,23 +15,23 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                if let volume = model.volume, isLowOnSpace(volume) {
+                if let volume = model.dashboard.volume, isLowOnSpace(volume) {
                     lowSpaceBanner(volume)
                 }
 
-                if let volume = model.volume, model.isDashboardLoading {
+                if let volume = model.dashboard.volume, model.dashboard.isDashboardLoading {
                     // The totals are already known — `diskutil` answers before the
                     // category walk even starts — so only the parts the walk
                     // produces go to bones. The previous breakdown supplies the
                     // category names, which are stable; its figures are withheld:
                     // stale numbers under a pulse read as current.
-                    CapacityCard(volume: volume, breakdown: model.breakdown, isMeasuring: true)
-                } else if model.isDashboardLoading {
+                    CapacityCard(volume: volume, breakdown: model.dashboard.breakdown, isMeasuring: true)
+                } else if model.dashboard.isDashboardLoading {
                     // Not even the totals yet: the moment before `diskutil` returns.
                     CapacityCardSkeleton()
-                } else if let volume = model.volume, let breakdown = model.breakdown {
+                } else if let volume = model.dashboard.volume, let breakdown = model.dashboard.breakdown {
                     CapacityCard(volume: volume, breakdown: breakdown)
-                    if model.breakdownIsStale {
+                    if model.dashboard.breakdownIsStale {
                         staleNote
                     }
                 } else {
@@ -39,9 +39,9 @@ struct DashboardView: View {
                 }
 
                 StatTiles(
-                    results: model.scanResults,
-                    lastScanAt: model.lastScanFinishedAt,
-                    iCloudStorage: model.iCloudStorage,
+                    results: model.cleanup.scanResults,
+                    lastScanAt: model.cleanup.lastScanFinishedAt,
+                    iCloudStorage: model.dashboard.iCloudStorage,
                     // The tiles are a summary of the scan; the scan's own page is
                     // where its rows live, so a tile opens the Scanner on the list
                     // it counted rather than a page of its own.
@@ -54,21 +54,21 @@ struct DashboardView: View {
                 // disk is now, and this is what it did since a date the user picks.
                 // It carries no measuring state — the report is dated history, so it
                 // stays on screen while the next walk runs.
-                if let growth = model.growth {
+                if let growth = model.dashboard.growth {
                     GrowthCard(
                         presentation: GrowthCard.Presentation(growth),
-                        baseline: model.growthBaseline,
-                        lastScanAt: model.scanResults?.finishedAt ?? model.lastScanFinishedAt,
-                        canCompareSinceCleanup: model.hasCleanupGrowthBaseline,
-                        onSelectBaseline: { model.growthBaseline = $0 },
+                        baseline: model.dashboard.growthBaseline,
+                        lastScanAt: model.cleanup.scanResults?.finishedAt ?? model.cleanup.lastScanFinishedAt,
+                        canCompareSinceCleanup: model.dashboard.hasCleanupGrowthBaseline,
+                        onSelectBaseline: { model.dashboard.growthBaseline = $0 },
                         onReveal: { model.revealGrowth($0) }
                     )
                 }
 
-                if !model.removableSnapshots.isEmpty {
+                if !model.dashboard.removableSnapshots.isEmpty {
                     SnapshotsDisclosureRow(
-                        snapshots: model.snapshots,
-                        isExpanded: $model.snapshotsExpanded
+                        snapshots: model.dashboard.snapshots,
+                        isExpanded: Binding(get: { model.dashboard.snapshotsExpanded }, set: { model.dashboard.snapshotsExpanded = $0 })
                     )
                 }
             }
@@ -82,8 +82,8 @@ struct DashboardView: View {
             .padding(.bottom, 22)
         }
         .task(id: settings?.iCloudPlan) {
-            model.iCloudPlanBytes = settings?.iCloudPlan.bytes
-            await model.loadICloud()
+            model.dashboard.iCloudPlanBytes = settings?.iCloudPlan.bytes
+            await model.dashboard.loadICloud()
         }
     }
 
@@ -127,7 +127,7 @@ struct DashboardView: View {
     private var staleNote: some View {
         HStack(spacing: 6) {
             Image(systemName: "clock")
-            Text(model.measuredAt.map { "Measured \($0.formatted(.relative(presentation: .named)))" }
+            Text(model.dashboard.measuredAt.map { "Measured \($0.formatted(.relative(presentation: .named)))" }
                  ?? "Figures are from an earlier session")
         }
         .font(.mcSubtitle)

@@ -10,45 +10,38 @@ import ScoloCore
 /// its keeper next to its casualties at the same size, and the keeper is not
 /// selectable from here at all.
 struct PhotoDuplicatesView: View {
-    /// Identifies the photo and group shown in the preview window.
-    struct Preview: Identifiable {
-        let groupID: String
-        let asset: PhotoAsset
-        var id: String { asset.id }
-    }
-
     @Bindable var model: AppModel
     @State private var animateEmptyResult = false
     @State private var resultBeforeScan: Date?
-    private var thumbnails: PhotoThumbnailLoader { model.photoThumbnails }
+    private var thumbnails: PhotoThumbnailLoader { model.photoDuplicates.thumbnails }
 
     var body: some View {
         Group {
-            if model.isSweepingPhotos {
+            if model.photoDuplicates.isScanning {
                 sweeping
-            } else if let reason = model.photoUnavailable {
+            } else if let reason = model.photoDuplicates.unavailableReason {
                 unavailable(reason)
-            } else if model.photoResults == nil {
+            } else if model.photoDuplicates.results == nil {
                 intro
-            } else if model.photoGroups.isEmpty {
+            } else if model.photoDuplicates.groups.isEmpty {
                 nothingFound
             } else {
                 groups
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .disabled(model.isDeletingPhotos)
-        .operationResultAnimation(isRunning: model.isSweepingPhotos)
-        .onChange(of: model.isSweepingPhotos, initial: true) { wasRunning, isRunning in
+        .disabled(model.photoDuplicates.isDeleting)
+        .operationResultAnimation(isRunning: model.photoDuplicates.isScanning)
+        .onChange(of: model.photoDuplicates.isScanning, initial: true) { wasRunning, isRunning in
             if isRunning {
-                resultBeforeScan = model.photoResults?.finishedAt
+                resultBeforeScan = model.photoDuplicates.results?.finishedAt
                 animateEmptyResult = false
             } else if wasRunning {
-                animateEmptyResult = model.photoResults?.finishedAt != nil
-                    && model.photoResults?.finishedAt != resultBeforeScan
+                animateEmptyResult = model.photoDuplicates.results?.finishedAt != nil
+                    && model.photoDuplicates.results?.finishedAt != resultBeforeScan
             }
         }
-        .onChange(of: model.photoSimilarity) { _, _ in animateEmptyResult = false }
+        .onChange(of: model.photoDuplicates.similarity) { _, _ in animateEmptyResult = false }
         .onDisappear { animateEmptyResult = false }
     }
 
@@ -82,15 +75,15 @@ struct PhotoDuplicatesView: View {
             PageProgressView(
                 title: "Scanning for duplicate photos",
                 detail: "\(progressLabel)\nThis may take a few minutes.",
-                progress: Double(model.photoProgress?.percent ?? 0) / 100,
-                onStop: { model.cancelPhotoSweep() },
+                progress: Double(model.photoDuplicates.progress?.percent ?? 0) / 100,
+                onStop: { model.photoDuplicates.cancelScan() },
                 actionBottom: actionBottom
             )
         }
     }
 
     private var progressLabel: String {
-        guard let progress = model.photoProgress else { return "Preparing…" }
+        guard let progress = model.photoDuplicates.progress else { return "Preparing…" }
         return switch progress.stage {
         case .fetching:      "Reading your photo library…"
         case .grouping:
@@ -122,7 +115,7 @@ struct PhotoDuplicatesView: View {
     private var nothingFound: some View {
         ScanCompletionView(
             title: "No duplicate photos found",
-            detail: model.photoResults.map { summary($0) },
+            detail: model.photoDuplicates.results.map { summary($0) },
             animate: animateEmptyResult
         )
     }
@@ -139,21 +132,21 @@ struct PhotoDuplicatesView: View {
     }
 
     private var groups: some View {
-        let selectable = Set(model.photoGroups.flatMap(\.removable).map(\.id))
+        let selectable = Set(model.photoDuplicates.groups.flatMap(\.removable).map(\.id))
         return VStack(spacing: 0) {
             HStack {
                 MonochromeCheckbox(
                     title: "Select All",
                     detail: "\(selectable.count) items",
-                    state: !selectable.isEmpty && selectable.isSubset(of: model.photoSelection) ? .on : .off,
-                    isEnabled: !selectable.isEmpty && !model.isBusyWithDisk && !model.isRegroupingPhotos
+                    state: !selectable.isEmpty && selectable.isSubset(of: model.photoDuplicates.selection) ? .on : .off,
+                    isEnabled: !selectable.isEmpty && !model.isBusyWithDisk && !model.photoDuplicates.isRegrouping
                 ) { isOn in
-                    if isOn { model.selectAllRemovablePhotos() }
-                    else { model.deselectAllPhotos() }
+                    if isOn { model.photoDuplicates.selectAll() }
+                    else { model.photoDuplicates.deselectAll() }
                 }
                 .fixedSize()
                 Spacer()
-                if let results = model.photoResults, results.skippedCount > 0 {
+                if let results = model.photoDuplicates.results, results.skippedCount > 0 {
                     Text(summary(results)).pageHeaderSummary()
                 }
             }
@@ -163,7 +156,7 @@ struct PhotoDuplicatesView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(model.photoGroups) { group in
+                    ForEach(model.photoDuplicates.groups) { group in
                         groupCard(group)
                     }
                 }
@@ -192,7 +185,7 @@ struct PhotoDuplicatesView: View {
                             .foregroundStyle(Token.Text.tertiary)
                             .help("How far apart the two least alike photographs here are. "
                                   + "Lower is more alike; zero is the same image. "
-                                  + "This group was formed at \(model.photoSimilarity.thresholdLabel) "
+                                  + "This group was formed at \(model.photoDuplicates.similarity.thresholdLabel) "
                                   + "or closer.")
                     }
                     Text("\(group.count) copies · keeping 1")
@@ -253,7 +246,7 @@ struct PhotoDuplicatesView: View {
 
     private func tile(_ asset: PhotoAsset, in group: DuplicateGroup) -> some View {
         let isKeeper = asset.id == group.keeper.id
-        let selected = model.photoSelection.contains(asset.id)
+        let selected = model.photoDuplicates.selection.contains(asset.id)
 
         return VStack(spacing: 5) {
             thumbnail(asset)
@@ -277,15 +270,14 @@ struct PhotoDuplicatesView: View {
         .overlay {
             PhotoThumbnailClickTarget(
                 isSelected: Binding(
-                    get: { model.photoSelection.contains(asset.id) },
+                    get: { model.photoDuplicates.selection.contains(asset.id) },
                     set: { isSelected in
                         guard !isKeeper else { return }
-                        if isSelected { model.photoSelection.insert(asset.id) }
-                        else { model.photoSelection.remove(asset.id) }
+                        model.photoDuplicates.setSelected(isSelected, assetID: asset.id)
                     }
                 ),
                 isSelectable: !isKeeper,
-                onPreview: { model.photoPreview = Preview(groupID: group.id, asset: asset) }
+                onPreview: { model.photoDuplicates.preview = PhotoDuplicatesModel.Preview(groupID: group.id, asset: asset) }
             )
         }
         .help(isKeeper ? "Double-click to preview" : "Click to select. Double-click to preview.")
@@ -294,16 +286,16 @@ struct PhotoDuplicatesView: View {
         .accessibilityValue(selected ? "Selected for deletion" : "Not selected for deletion")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction {
-            if !isKeeper { model.togglePhoto(asset.id) }
+            if !isKeeper { model.photoDuplicates.toggle(asset.id) }
         }
         .accessibilityAction(named: Text("Preview photo")) {
-            model.photoPreview = Preview(groupID: group.id, asset: asset)
+            model.photoDuplicates.preview = PhotoDuplicatesModel.Preview(groupID: group.id, asset: asset)
         }
         .overlay(alignment: .top) {
             if !isKeeper {
                 HStack(spacing: 4) {
                     Button {
-                        model.keepInstead(groupID: group.id, assetID: asset.id)
+                        model.photoDuplicates.keepInstead(groupID: group.id, assetID: asset.id)
                     } label: {
                         Text("Keep")
                             .font(.system(size: 10, weight: .semibold))
@@ -318,7 +310,7 @@ struct PhotoDuplicatesView: View {
                     .help("Choose this photo as the copy to keep")
                     Spacer(minLength: 0)
                     Button {
-                        model.togglePhoto(asset.id)
+                        model.photoDuplicates.toggle(asset.id)
                     } label: {
                         Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 17))
@@ -340,10 +332,10 @@ struct PhotoDuplicatesView: View {
         .contextMenu {
             if !isKeeper {
                 Button("Keep This One Instead") {
-                    model.keepInstead(groupID: group.id, assetID: asset.id)
+                    model.photoDuplicates.keepInstead(groupID: group.id, assetID: asset.id)
                 }
             }
-            Button("Open") { model.photoPreview = Preview(groupID: group.id, asset: asset) }
+            Button("Open") { model.photoDuplicates.preview = PhotoDuplicatesModel.Preview(groupID: group.id, asset: asset) }
         }
     }
 
@@ -363,17 +355,11 @@ struct PhotoDuplicatesView: View {
     }
 
     private func allSelected(_ group: DuplicateGroup) -> Bool {
-        !group.removable.isEmpty
-            && group.removable.allSatisfy { model.photoSelection.contains($0.id) }
+        model.photoDuplicates.isGroupSelected(group.id)
     }
 
     private func toggleGroup(_ group: DuplicateGroup) {
-        let ids = group.removable.map(\.id)
-        if allSelected(group) {
-            model.photoSelection.subtract(ids)
-        } else {
-            model.photoSelection.formUnion(ids)
-        }
+        model.photoDuplicates.toggleGroup(group.id)
     }
 
     private func centred<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -431,18 +417,19 @@ private struct PhotoThumbnailClickTarget: NSViewRepresentable {
 
 /// Changes photo matching without another scan.
 struct PhotoSimilarityPicker: View {
-    @Bindable var model: AppModel
+    @Bindable var model: PhotoDuplicatesModel
+    var isDisabled = false
 
     var body: some View {
         HStack(spacing: 8) {
-            if model.isRegroupingPhotos {
+            if model.isRegrouping {
                 ProgressView().controlSize(.small)
             }
             Text("Match")
                 .font(.mcControlLabel)
                 .foregroundStyle(Token.Text.secondary)
             Menu {
-                Picker("Match", selection: $model.photoSimilarity) {
+                Picker("Match", selection: $model.similarity) {
                     ForEach(PhotoSimilarity.allCases) { similarity in
                         Text(similarityLabel(similarity)).tag(similarity)
                     }
@@ -451,7 +438,7 @@ struct PhotoSimilarityPicker: View {
                 .labelsHidden()
             } label: {
                 HStack(spacing: 7) {
-                    Text(similarityLabel(model.photoSimilarity))
+                    Text(similarityLabel(model.similarity))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
@@ -461,10 +448,10 @@ struct PhotoSimilarityPicker: View {
             .buttonStyle(PageActionButtonStyle())
             .menuIndicator(.hidden)
             .accessibilityLabel("Match")
-            .accessibilityValue(similarityLabel(model.photoSimilarity))
+            .accessibilityValue(similarityLabel(model.similarity))
             .fixedSize()
-            .disabled(model.isBusyWithDisk)
-            .help(model.photoSimilarity.detail
+            .disabled(isDisabled)
+            .help(model.similarity.detail
                   + " Bursts and identical copies are unaffected — neither is decided "
                   + "by this number.")
         }

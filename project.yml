@@ -97,6 +97,39 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 
+  ScoloModelTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ModelTests
+      - path: App/AppModel.swift
+      - path: App/Cleanup
+      - path: App/Dashboard
+      - path: App/Duplicates
+      - path: App/History
+      - path: App/Navigation
+      - path: App/Operations
+      - path: App/Photos
+      - path: App/Platform
+      - path: App/Scheduling
+      - path: App/Trash
+      - path: App/Uninstaller
+      - path: App/Preferences/SettingsStore.swift
+      - path: App/LowDiskNotificationService.swift
+      - path: App/MainWindow/StorageExplorer/StorageExplorerModel.swift
+      - path: App/MainWindow/OpenPanelPresentation.swift
+    dependencies:
+      - package: ScoloCore
+        product: ScoloCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: L2P2KC4C69
+        CODE_SIGN_STYLE: Manual
+
 schemes:
   Scolo:
     build:
@@ -104,5 +137,8 @@ schemes:
         Scolo: all
     run:
       config: Debug
+    test:
+      targets:
+        - ScoloModelTests
     archive:
       config: Release

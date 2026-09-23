@@ -124,14 +124,17 @@ public actor ScanCoordinator {
         }
         runningTask = task
         defer { runningTask = nil }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     /// Cancels an in-flight scan. Measurement checks cancellation periodically, so
     /// this returns promptly rather than at the end of the current category.
     public func cancel() {
         runningTask?.cancel()
-        runningTask = nil
     }
 
     private static func run(

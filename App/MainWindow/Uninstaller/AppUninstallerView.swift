@@ -25,7 +25,7 @@ struct AppUninstallerView: View {
     /// application is the person who wants to know what the last one left behind.
     /// On the model, not here: the toolbar's remove button has to name what it
     /// would take, and "3 apps" and "2 leftovers" are different sentences.
-    private var tab: AppModel.UninstallerTab { model.uninstallerTab }
+    private var tab: UninstallerModel.UninstallerTab { model.uninstaller.uninstallerTab }
     /// Removed applications whose files are disclosed, by bundle identifier.
     @State private var expandedLeftovers: Set<String> = []
 
@@ -36,28 +36,28 @@ struct AppUninstallerView: View {
 
     var body: some View {
         Group {
-            if model.isPlanningAppUninstall, let url = model.appUninstallPlanningURL {
+            if model.uninstaller.isPlanningAppUninstall, let url = model.uninstaller.appUninstallPlanningURL {
                 planningState(url)
-            } else if model.isPlanningAppUninstall {
+            } else if model.uninstaller.isPlanningAppUninstall {
                 busyState
-            } else if let outcome = model.batchUninstallOutcome {
+            } else if let outcome = model.uninstaller.batchUninstallOutcome {
                 batchDoneState(outcome)
-            } else if let outcome = model.appUninstallOutcome {
+            } else if let outcome = model.uninstaller.appUninstallOutcome {
                 doneState(outcome)
-            } else if let review = model.batchUninstallReview {
+            } else if let review = model.uninstaller.batchUninstallReview {
                 batchReviewState(review)
-            } else if let plan = model.appUninstallPlan {
+            } else if let plan = model.uninstaller.appUninstallPlan {
                 resultsState(plan)
             } else {
                 emptyState
             }
         }
-        .operationResultAnimation(isRunning: model.isPlanningAppUninstall)
+        .operationResultAnimation(isRunning: model.uninstaller.isPlanningAppUninstall)
         .dropDestination(for: URL.self) { urls, _ in
             guard let application = urls.first(where: {
                 $0.pathExtension.lowercased() == "app"
             }) else { return false }
-            model.planAppUninstall(application)
+            model.uninstaller.planAppUninstall(application)
             return true
         } isTargeted: { isDropTargeted = $0 }
     }
@@ -73,7 +73,7 @@ struct AppUninstallerView: View {
             GeometryReader { geometry in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        if let error = model.appUninstallError {
+                        if let error = model.uninstaller.appUninstallError {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .font(.mcSubtitle)
                                 .foregroundStyle(Token.textColor(.orange))
@@ -81,7 +81,7 @@ struct AppUninstallerView: View {
 
                         if tab == .leftovers {
                             leftoversList
-                        } else if let applications = model.installedApplications {
+                        } else if let applications = model.uninstaller.library.installedApplications {
                             let shown = visibleApplications(applications)
                             if shown.isEmpty {
                                 ContentUnavailableView {
@@ -103,11 +103,11 @@ struct AppUninstallerView: View {
                                     ForEach(shown) { application in
                                         ApplicationCard(
                                             application: application,
-                                            bytes: model.installedApplicationBytes[application.id],
-                                            isSelected: model.selectedApplicationIDs
+                                            bytes: model.uninstaller.library.installedApplicationBytes[application.id],
+                                            isSelected: model.uninstaller.library.selectedApplicationIDs
                                                 .contains(application.id),
-                                            toggle: { model.toggleApplicationSelection(application) },
-                                            open: { model.planAppUninstall(application.url) }
+                                            toggle: { model.uninstaller.library.toggleApplicationSelection(application) },
+                                            open: { model.uninstaller.planAppUninstall(application.url) }
                                         )
                                     }
                                 }
@@ -138,42 +138,42 @@ struct AppUninstallerView: View {
                 }
             }
         }
-        .onAppear { model.loadInstalledApplications() }
+        .onAppear { model.uninstaller.library.loadInstalledApplications() }
         // Read when the tab is first opened, and again on each return to it: the
         // disk it describes changes whenever something is uninstalled.
         .onChange(of: tab) { _, newTab in
-            if newTab == .leftovers { model.loadApplicationLeftovers() }
+            if newTab == .leftovers { model.uninstaller.library.loadApplicationLeftovers() }
         }
     }
 
     private var isLibraryEmpty: Bool {
         if tab == .leftovers {
-            return model.applicationLeftovers?.groups.isEmpty == true
+            return model.uninstaller.library.applicationLeftovers?.groups.isEmpty == true
         }
-        return model.installedApplications.map { visibleApplications($0).isEmpty } ?? false
+        return model.uninstaller.library.installedApplications.map { visibleApplications($0).isEmpty } ?? false
     }
 
     // MARK: Leftovers
 
     private var leftoversSelectionControls: some View {
-        let identifiers = Set(model.applicationLeftovers?.groups.map(\.bundleIdentifier) ?? [])
-        let selected = identifiers.intersection(model.selectedLeftoverIdentifiers)
+        let identifiers = Set(model.uninstaller.library.applicationLeftovers?.groups.map(\.bundleIdentifier) ?? [])
+        let selected = identifiers.intersection(model.uninstaller.library.selectedLeftoverIdentifiers)
         return HStack(spacing: 12) {
             MonochromeCheckbox(
                 title: "Select All",
                 detail: "\(identifiers.count) \(identifiers.count == 1 ? "application" : "applications")",
                 state: !identifiers.isEmpty && identifiers.isSubset(of: selected) ? .on : .off,
-                isEnabled: !identifiers.isEmpty && !model.isBusyWithDisk && !model.isLoadingApplicationLeftovers
+                isEnabled: !identifiers.isEmpty && !model.isBusyWithDisk && !model.uninstaller.library.isLoadingApplicationLeftovers
             ) { isOn in
-                if isOn { model.selectedLeftoverIdentifiers = identifiers }
-                else { model.selectedLeftoverIdentifiers.removeAll() }
+                if isOn { model.uninstaller.library.selectedLeftoverIdentifiers = identifiers }
+                else { model.uninstaller.library.selectedLeftoverIdentifiers.removeAll() }
             }
             .fixedSize()
             Spacer(minLength: 12)
-            Text("\(selected.count) selected · \(ByteFormatting.string(model.selectedLeftoverBytes))")
+            Text("\(selected.count) selected · \(ByteFormatting.string(model.uninstaller.library.selectedLeftoverBytes))")
                 .font(.mcCaption)
                 .foregroundStyle(Token.Text.secondary)
-                .animatedTotal(model.selectedLeftoverBytes)
+                .animatedTotal(model.uninstaller.library.selectedLeftoverBytes)
                 .fixedSize()
         }
         .padding(.leading, 13)
@@ -184,7 +184,7 @@ struct AppUninstallerView: View {
 
     @ViewBuilder
     private var leftoversList: some View {
-        if let leftovers = model.applicationLeftovers {
+        if let leftovers = model.uninstaller.library.applicationLeftovers {
             if leftovers.groups.isEmpty {
                 ContentUnavailableView {
                     Label("No Leftovers", systemImage: "checkmark.circle")
@@ -225,7 +225,7 @@ struct AppUninstallerView: View {
     }
 
     private func leftoverRow(_ group: OrphanedAppLeftoverPlan.Group) -> some View {
-        let isSelected = model.selectedLeftoverIdentifiers.contains(group.bundleIdentifier)
+        let isSelected = model.uninstaller.library.selectedLeftoverIdentifiers.contains(group.bundleIdentifier)
         let isExpanded = expandedLeftovers.contains(group.bundleIdentifier)
         let holdsUserData = group.items.contains(where: \.isProtectedUserData)
         return HStack(spacing: 10) {
@@ -246,9 +246,9 @@ struct AppUninstallerView: View {
             MonochromeCheckbox(
                 title: "Select \(group.displayName ?? group.bundleIdentifier)",
                 state: isSelected ? .on : .off,
-                isEnabled: !model.isBusyWithDisk && !model.isLoadingApplicationLeftovers,
+                isEnabled: !model.isBusyWithDisk && !model.uninstaller.library.isLoadingApplicationLeftovers,
                 showsTitle: false
-            ) { _ in model.toggleLeftoverSelection(group.bundleIdentifier) }
+            ) { _ in model.uninstaller.library.toggleLeftoverSelection(group.bundleIdentifier) }
             .fixedSize()
 
             VStack(alignment: .leading, spacing: 2) {
@@ -284,20 +284,20 @@ struct AppUninstallerView: View {
         .contentShape(Rectangle())
         .hoverHighlight()
         .onTapGesture {
-            guard !model.isBusyWithDisk, !model.isLoadingApplicationLeftovers else { return }
-            model.toggleLeftoverSelection(group.bundleIdentifier)
+            guard !model.isBusyWithDisk, !model.uninstaller.library.isLoadingApplicationLeftovers else { return }
+            model.uninstaller.library.toggleLeftoverSelection(group.bundleIdentifier)
         }
     }
 
     private var libraryHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                ForEach(AppModel.UninstallerTab.allCases, id: \.self) { tab in
+                ForEach(UninstallerModel.UninstallerTab.allCases, id: \.self) { tab in
                     PageTabPill(
                         title: tab.rawValue,
                         symbol: tab == .installed ? "app" : "archivebox",
-                        isSelected: model.uninstallerTab == tab
-                    ) { model.uninstallerTab = tab }
+                        isSelected: model.uninstaller.uninstallerTab == tab
+                    ) { model.uninstaller.uninstallerTab = tab }
                 }
                 Spacer()
             }
@@ -318,18 +318,18 @@ struct AppUninstallerView: View {
     private var installedSummaryContent: some View {
         // A selection takes over the summary's place: the count the user is
         // building matters more than the total they are not acting on.
-        if model.selectedApplicationIDs.isEmpty {
+        if model.uninstaller.library.selectedApplicationIDs.isEmpty {
             Text(librarySummary)
                 .font(.mcCaption)
                 .foregroundStyle(Token.Text.secondary)
                 .lineLimit(1)
                 .help("Sizes are the application itself. Its related files are found when you open it.")
         } else {
-            Text("\(model.selectedApplicationIDs.count) selected")
+            Text("\(model.uninstaller.library.selectedApplicationIDs.count) selected")
                 .font(.mcCaption)
                 .foregroundStyle(Token.Text.secondary)
                 .lineLimit(1)
-            Button("Deselect All", action: model.clearApplicationSelection)
+            Button("Deselect All", action: model.uninstaller.library.clearApplicationSelection)
                 .buttonStyle(SecondaryButtonStyle())
                 .fixedSize()
         }
@@ -357,9 +357,9 @@ struct AppUninstallerView: View {
     /// The total appears only once every card has its figure; a sum of the bundles
     /// measured so far would read as the whole and grow under the user's eyes.
     private var librarySummary: String {
-        guard let applications = model.installedApplications else { return "Reading applications…" }
+        guard let applications = model.uninstaller.library.installedApplications else { return "Reading applications…" }
         let count = applications.count == 1 ? "1 application" : "\(applications.count) applications"
-        let sizes = applications.compactMap { model.installedApplicationBytes[$0.id] }
+        let sizes = applications.compactMap { model.uninstaller.library.installedApplicationBytes[$0.id] }
         guard sizes.count == applications.count else { return "\(count) · measuring…" }
         return "\(count) · \(ByteFormatting.string(sizes.reduce(0, +)))"
     }
@@ -372,10 +372,10 @@ struct AppUninstallerView: View {
         // `Largest` waits for every size. Sorting on partial figures reshuffled
         // the grid once per application measured; chosen early, the cards fill in
         // where they stand and move once, together.
-        guard sortOrder == .largest, model.installedApplicationsMeasured else { return matching }
+        guard sortOrder == .largest, model.uninstaller.library.installedApplicationsMeasured else { return matching }
         // An application that could not be measured compares as -1 and keeps its
         // alphabetical place at the end.
-        let bytes = model.installedApplicationBytes
+        let bytes = model.uninstaller.library.installedApplicationBytes
         return matching.enumerated().sorted { lhs, rhs in
             let l = bytes[lhs.element.id] ?? -1, r = bytes[rhs.element.id] ?? -1
             return l == r ? lhs.offset < rhs.offset : l > r
@@ -390,7 +390,7 @@ struct AppUninstallerView: View {
     private var busyState: some View {
         PageProgressView(
             title: "Finding related files",
-            detail: model.appUninstallPlanningDetail
+            detail: model.uninstaller.appUninstallPlanningDetail
         )
     }
 
@@ -413,7 +413,7 @@ struct AppUninstallerView: View {
                 // application plus everything found — and replaces it, with its own
                 // caption, when the plan lands.
                 VStack(alignment: .trailing, spacing: 2) {
-                    if let bytes = model.installedApplicationBytes[url.path] {
+                    if let bytes = model.uninstaller.library.installedApplicationBytes[url.path] {
                         Text(ByteFormatting.string(bytes))
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                     } else {
@@ -484,7 +484,7 @@ struct AppUninstallerView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let error = model.appUninstallError {
+                    if let error = model.uninstaller.appUninstallError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.mcSubtitle)
                             .foregroundStyle(Token.textColor(.orange))
@@ -561,10 +561,10 @@ struct AppUninstallerView: View {
                 // The size is in the figures beside it, so the label does not
                 // repeat it.
                 Button(plan.isApplicationOnly ? "Uninstall Application" : "Uninstall",
-                       action: model.requestAppUninstall)
+                       action: model.uninstaller.requestAppUninstall)
                     .buttonStyle(PageActionButtonStyle(tint: Token.color(.red)))
                     .controlSize(.regular)
-                    .disabled(model.activity != nil)
+                    .disabled(model.operations.activity != nil)
                     .fixedSize()
             }
         }
@@ -600,7 +600,7 @@ struct AppUninstallerView: View {
             // what truncates when the window is narrow.
             figures().fixedSize()
 
-            Button(action: model.resetAppUninstall) {
+            Button(action: model.uninstaller.resetAppUninstall) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
                     .foregroundStyle(Token.Text.secondary)
@@ -788,9 +788,9 @@ struct AppUninstallerView: View {
     // MARK: Done state
 
     private func doneState(_ outcome: CleanupOutcome) -> some View {
-        let applicationName = model.lastUninstalledApplicationName ?? "Application"
+        let applicationName = model.uninstaller.lastUninstalledApplicationName ?? "Application"
         let failed = outcome.failed
-        let applicationFailed = model.appUninstallError != nil && outcome.removedCount == 0
+        let applicationFailed = model.uninstaller.appUninstallError != nil && outcome.removedCount == 0
 
         return VStack(spacing: 18) {
             CompletionMark(isSuccess: failed.isEmpty && !applicationFailed)
@@ -802,7 +802,7 @@ struct AppUninstallerView: View {
                 .font(.mcBody)
                 .foregroundStyle(Token.Text.secondary)
 
-            if let error = model.appUninstallError {
+            if let error = model.uninstaller.appUninstallError {
                 Text(error)
                     .font(.mcSubtitle)
                     .foregroundStyle(Token.textColor(.orange))
@@ -822,7 +822,7 @@ struct AppUninstallerView: View {
 
     // MARK: Several applications
 
-    private func batchReviewState(_ review: AppModel.BatchUninstallReview) -> some View {
+    private func batchReviewState(_ review: UninstallerModel.BatchUninstallReview) -> some View {
         VStack(spacing: 0) {
             batchReviewHeader(review)
             HairlineDivider()
@@ -850,7 +850,7 @@ struct AppUninstallerView: View {
         }
     }
 
-    private func batchReviewHeader(_ review: AppModel.BatchUninstallReview) -> some View {
+    private func batchReviewHeader(_ review: UninstallerModel.BatchUninstallReview) -> some View {
         HStack(spacing: 10) {
             Text("\(review.plans.count) applications · \(review.itemCount) items")
                 .font(.mcCaption)
@@ -859,14 +859,14 @@ struct AppUninstallerView: View {
 
             Spacer()
 
-            Button("Back", action: model.resetAppUninstall)
+            Button("Back", action: model.uninstaller.resetAppUninstall)
                 .buttonStyle(PageActionButtonStyle())
                 .fixedSize()
             Button("Uninstall · \(ByteFormatting.string(review.totalBytes))",
-                   action: model.requestBatchUninstall)
+                   action: model.uninstaller.requestBatchUninstall)
                 .buttonStyle(PageActionButtonStyle(tint: Token.color(.red)))
                 .controlSize(.regular)
-                .disabled(review.plans.isEmpty || model.activity != nil)
+                .disabled(review.plans.isEmpty || model.operations.activity != nil)
                 .fixedSize()
         }
         .frame(height: Self.headerControlHeight)
@@ -912,7 +912,7 @@ struct AppUninstallerView: View {
     }
 
     private func setAsideBox(
-        _ applications: [AppModel.SetAsideApplication], title: String
+        _ applications: [UninstallerModel.SetAsideApplication], title: String
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title).mcEyebrowStyle()
@@ -938,7 +938,7 @@ struct AppUninstallerView: View {
         }
     }
 
-    private func batchDoneState(_ outcome: AppModel.BatchUninstallOutcome) -> some View {
+    private func batchDoneState(_ outcome: UninstallerModel.BatchUninstallOutcome) -> some View {
         let clean = outcome.setAside.isEmpty && outcome.survivorCount == 0
         let count = outcome.uninstalled.count
         return ScrollView {
@@ -979,12 +979,12 @@ struct AppUninstallerView: View {
     private var completionActions: some View {
         HStack(spacing: 12) {
             Button("Continue") {
-                model.resetAppUninstall()
-                model.loadInstalledApplications()
+                model.uninstaller.resetAppUninstall()
+                model.uninstaller.library.loadInstalledApplications()
             }
             .buttonStyle(PageActionButtonStyle(tint: .white, foreground: .black))
             Button("View Dashboard") {
-                model.resetAppUninstall()
+                model.uninstaller.resetAppUninstall()
                 model.view = .dashboard
             }
             .buttonStyle(PageActionButtonStyle())

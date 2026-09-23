@@ -11,10 +11,10 @@ struct ScannerView: View {
 
     var body: some View {
         Group {
-            if case .cleaningUp(let itemCount, let totalBytes) = model.activity {
+            if case .cleaningUp(let itemCount, let totalBytes) = model.operations.activity {
                 CleanupOperationView(itemCount: itemCount, totalBytes: totalBytes)
                     .transition(.opacity)
-            } else if let completion = model.cleanupCompletion {
+            } else if let completion = model.cleanupRemoval.cleanupCompletion {
                 CleanupOperationView(
                     itemCount: completion.outcome.removedCount,
                     totalBytes: completion.outcome.removedBytes,
@@ -25,13 +25,13 @@ struct ScannerView: View {
                 )
                 .id(completion.id)
                 .transition(.opacity)
-            } else if model.isScanning {
+            } else if model.cleanup.isScanning {
                 scanProgress
                     .transition(.opacity)
-            } else if let results = model.scanResults {
+            } else if let results = model.cleanup.scanResults {
                 VStack(spacing: 0) {
                     VStack(spacing: 12) {
-                        if let outcome = model.cleanupOutcome {
+                        if let outcome = model.cleanupRemoval.cleanupOutcome {
                             completion(outcome).modifier(resultEntrance(index: 0))
                         }
                         filterPicker(results)
@@ -43,8 +43,8 @@ struct ScannerView: View {
                     .padding(Token.Size.pageGutter)
                     Divider()
                         .opacity(resultsVisible ? 1 : 0)
-                    let visibleCategories = categories(of: results, for: model.scanFilter)
-                    let showsRunningApps = model.scanFilter == .safeToRemove && !model.runningAppCaches.isEmpty
+                    let visibleCategories = categories(of: results, for: model.cleanup.scanFilter)
+                    let showsRunningApps = model.cleanup.scanFilter == .safeToRemove && !model.cleanup.runningAppCaches.isEmpty
                     let showsEmptyState = hasNoCleanupItems(visibleCategories) && !showsRunningApps
                     GeometryReader { geometry in
                         ScrollView {
@@ -71,35 +71,35 @@ struct ScannerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: model.isScanning, initial: true) { wasRunning, isRunning in
+        .onChange(of: model.cleanup.isScanning, initial: true) { wasRunning, isRunning in
             if isRunning {
-                resultBeforeScan = model.scanResults?.finishedAt
+                resultBeforeScan = model.cleanup.scanResults?.finishedAt
                 animateEmptyResult = false
             } else if wasRunning {
-                animateEmptyResult = model.scanResults?.finishedAt != nil
-                    && model.scanResults?.finishedAt != resultBeforeScan
+                animateEmptyResult = model.cleanup.scanResults?.finishedAt != nil
+                    && model.cleanup.scanResults?.finishedAt != resultBeforeScan
             }
         }
-        .onChange(of: model.scanFilter) { _, _ in animateEmptyResult = false }
+        .onChange(of: model.cleanup.scanFilter) { _, _ in animateEmptyResult = false }
         .onDisappear { animateEmptyResult = false }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: showsOperation)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.cleanupCompletion?.id)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: model.cleanupRemoval.cleanupCompletion?.id)
         .task {
-            model.pruneVanishedEntries()
-            model.refreshCleanupRunningOwners()
+            model.cleanup.pruneVanishedEntries()
+            model.cleanup.refreshCleanupRunningOwners()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in
-            model.refreshCleanupRunningOwners()
+            model.cleanup.refreshCleanupRunningOwners()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in
-            model.refreshCleanupRunningOwners()
+            model.cleanup.refreshCleanupRunningOwners()
         }
-        .task(id: model.isScanning) {
-            if model.isScanning {
+        .task(id: model.cleanup.isScanning) {
+            if model.cleanup.isScanning {
                 resultsVisible = false
                 return
             }
-            model.refreshCleanupRunningOwners()
+            model.cleanup.refreshCleanupRunningOwners()
             guard !resultsVisible else { return }
             if !reduceMotion {
                 // Show the initial layout before the entrance animation starts.
@@ -113,8 +113,8 @@ struct ScannerView: View {
     }
 
     private var runningAppsNotice: some View {
-        let names = ListFormatter.localizedString(byJoining: model.cleanupRunningOwners.map(\.name))
-        let bytes = model.runningAppCaches.reduce(Int64(0)) { $0 + $1.allocatedBytes }
+        let names = ListFormatter.localizedString(byJoining: model.cleanup.cleanupRunningOwners.map(\.name))
+        let bytes = model.cleanup.runningAppCaches.reduce(Int64(0)) { $0 + $1.allocatedBytes }
         return GroupedBox {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -133,7 +133,7 @@ struct ScannerView: View {
                 }
                 Spacer(minLength: 8)
                 Button("Quit Apps") {
-                    Task { await model.quitAppsForCleanup() }
+                    Task { await model.cleanupRemoval.quitAppsForCleanup() }
                 }
                     .buttonStyle(PageActionButtonStyle())
                     .fixedSize()
@@ -144,7 +144,7 @@ struct ScannerView: View {
     }
 
     private var showsOperation: Bool {
-        model.isScanning || model.isCleaningUp || model.cleanupCompletion != nil
+        model.cleanup.isScanning || model.operations.isCleaningUp || model.cleanupRemoval.cleanupCompletion != nil
     }
 
     private var scanProgress: some View {
@@ -153,18 +153,18 @@ struct ScannerView: View {
                 Text("Scanning for cleanup items")
                     .font(.system(size: 18, weight: .medium))
                 Spacer()
-                Text("\(model.scanProgress)%")
+                Text("\(model.cleanup.scanProgress)%")
                     .font(.mcRowValue)
                     .foregroundStyle(Token.Text.secondary)
                     .contentTransition(reduceMotion ? .identity : .numericText())
             }
-            ProgressView(value: Double(model.scanProgress), total: 100)
+            ProgressView(value: Double(model.cleanup.scanProgress), total: 100)
                 .progressViewStyle(.linear)
                 .tint(Token.Text.primary)
                 .accessibilityLabel("Cleanup scan")
-                .accessibilityValue("\(model.scanProgress)%")
+                .accessibilityValue("\(model.cleanup.scanProgress)%")
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.scanProgress)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.cleanup.scanProgress)
         .frame(maxWidth: 380)
         .operationPageLayout()
     }
@@ -174,19 +174,19 @@ struct ScannerView: View {
     }
 
     private func listControls(_ results: ScanResults) -> some View {
-        let visible = categories(of: results, for: model.scanFilter)
+        let visible = categories(of: results, for: model.cleanup.scanFilter)
         let count = visible.reduce(0) { $0 + $1.entries.count }
         return HStack(spacing: 12) {
             MonochromeCheckbox(
                 title: "Select All",
                 detail: "\(count) \(count == 1 ? "item" : "items")",
-                state: model.hasSelectableItemsInCurrentView && !model.canSelectAllInCurrentView
+                state: model.cleanup.hasSelectableItemsInCurrentView && !model.cleanup.canSelectAllInCurrentView
                     ? .on : .off,
                 isEnabled: !model.isBusyWithDisk
-                    && (model.hasSelectableItemsInCurrentView || model.hasSelectionInCurrentView)
+                    && (model.cleanup.hasSelectableItemsInCurrentView || model.cleanup.hasSelectionInCurrentView)
             ) { isOn in
-                if isOn { model.selectAllInCurrentView() }
-                else { model.deselectAllInCurrentView() }
+                if isOn { model.cleanup.selectAllInCurrentView() }
+                else { model.cleanup.deselectAllInCurrentView() }
             }
             .fixedSize()
             Spacer()
@@ -212,7 +212,7 @@ struct ScannerView: View {
     /// Filters stay visible while the file list scrolls.
     private func filterPicker(_ results: ScanResults) -> some View {
         HStack(spacing: 8) {
-            ForEach(AppModel.ScanFilter.allCases) { filter in
+            ForEach(CleanupModel.ScanFilter.allCases) { filter in
                 filterPill(filter, results: results)
             }
         }
@@ -220,8 +220,8 @@ struct ScannerView: View {
         .disabled(model.isBusyWithDisk)
     }
 
-    private func filterPill(_ filter: AppModel.ScanFilter, results: ScanResults) -> some View {
-        let isSelected = model.scanFilter == filter
+    private func filterPill(_ filter: CleanupModel.ScanFilter, results: ScanResults) -> some View {
+        let isSelected = model.cleanup.scanFilter == filter
         let tint: Color = switch filter {
         case .all: Token.textColor(.accent)
         case .safeToRemove: Token.textColor(.green)
@@ -237,10 +237,10 @@ struct ScannerView: View {
         return PageTabPill(
             title: filter.title, symbol: symbol, detail: size,
             isSelected: isSelected, tint: tint
-        ) { model.scanFilter = filter }
+        ) { model.cleanup.scanFilter = filter }
     }
 
-    private func bytes(in filter: AppModel.ScanFilter, results: ScanResults) -> Int64 {
+    private func bytes(in filter: CleanupModel.ScanFilter, results: ScanResults) -> Int64 {
         switch filter {
         case .all: results.totalBytes
         case .safeToRemove: results.safeToRemoveBytes
@@ -254,7 +254,7 @@ struct ScannerView: View {
     /// `ScanCategoryResult.filtered(safeToRemove:)`. `All` keeps every category,
     /// an empty or unavailable one included, because its message is the point there.
     private func categories(
-        of results: ScanResults, for filter: AppModel.ScanFilter
+        of results: ScanResults, for filter: CleanupModel.ScanFilter
     ) -> [ScanCategoryResult] {
         guard filter != .all else { return results.categories }
         return results.categories
@@ -273,7 +273,7 @@ struct ScannerView: View {
     private func categoryOutline(_ categories: [ScanCategoryResult]) -> some View {
         if hasNoCleanupItems(categories) {
             ScanCompletionView(
-                title: model.scanFilter == .safeToRemove ? "No safe cleanup items found" : "No cleanup items found",
+                title: model.cleanup.scanFilter == .safeToRemove ? "No safe cleanup items found" : "No cleanup items found",
                 detail: "The scan found no items in this group.",
                 animate: animateEmptyResult
             )
@@ -296,13 +296,13 @@ struct ScannerView: View {
 
     @ViewBuilder
     private func categorySection(_ category: ScanCategoryResult) -> some View {
-        let isExpanded = model.openCategories.contains(category.categoryID)
+        let isExpanded = model.cleanup.openCategories.contains(category.categoryID)
 
         VStack(spacing: 0) {
             CategoryRow(
                 result: category,
                 isExpanded: isExpanded,
-                selectedBytes: model.selectedBytes(in: category.categoryID, filter: model.scanFilter),
+                selectedBytes: model.cleanup.selectedBytes(in: category.categoryID, filter: model.cleanup.scanFilter),
                 onToggle: { toggle(category) }
             )
 
@@ -310,12 +310,12 @@ struct ScannerView: View {
                 FileTable(
                     entries: category.entries,
                     isSafeToRemove: category.isCountedSafe,
-                    showsSafeToRemoveBadges: model.scanFilter != .safeToRemove,
-                    selection: $model.scannerSelection,
-                    userDataRemovalOverrides: $model.userDataRemovalOverrides,
-                    onUninstallApplication: { model.planAppUninstall($0.url) }
+                    showsSafeToRemoveBadges: model.cleanup.scanFilter != .safeToRemove,
+                    selection: Binding(get: { model.cleanup.scannerSelection }, set: { model.cleanup.scannerSelection = $0 }),
+                    userDataRemovalOverrides: Binding(get: { model.cleanup.userDataRemovalOverrides }, set: { model.cleanup.userDataRemovalOverrides = $0 }),
+                    onUninstallApplication: { model.uninstaller.planAppUninstall($0.url) }
                 )
-                .id(model.scanFilter)
+                .id(model.cleanup.scanFilter)
                 .disabled(model.isBusyWithDisk)
             }
         }
@@ -324,10 +324,10 @@ struct ScannerView: View {
     private func toggle(_ category: ScanCategoryResult) {
         guard category.availability.isActionable, !category.entries.isEmpty else { return }
         withAnimation(.easeOut(duration: 0.18)) {
-            if model.openCategories.contains(category.categoryID) {
-                model.openCategories.remove(category.categoryID)
+            if model.cleanup.openCategories.contains(category.categoryID) {
+                model.cleanup.openCategories.remove(category.categoryID)
             } else {
-                model.openCategories.insert(category.categoryID)
+                model.cleanup.openCategories.insert(category.categoryID)
             }
         }
     }
