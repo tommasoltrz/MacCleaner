@@ -23,6 +23,7 @@ public struct StorageExplorerRemovalService: Sendable {
             let itemParent = item.url.deletingLastPathComponent()
                 .resolvingSymlinksInPath().standardizedFileURL.path
             guard itemParent == parent,
+                  !StorageExplorerService.isTrashLocation(item.url),
                   item.isRemovable,
                   let identity = item.identity,
                   FileIdentity.of(item.url) == identity

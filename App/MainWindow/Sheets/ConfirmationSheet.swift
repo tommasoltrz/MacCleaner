@@ -38,13 +38,7 @@ struct ConfirmationSheet: View {
     }
 
     let variant: Variant
-    /// Applications that are open right now and own something in this clean-up.
-    ///
-    /// Non-empty turns the sheet's one decision into two: quit them first, or go
-    /// ahead under them. Removing a cache from under its owner frees the same
-    /// bytes, and the owner may misbehave until it is relaunched — Chrome did, on
-    /// 19 Sep 2026; see `FileEntry.inUseBy`. The sheet says so and offers to do the
-    /// quitting, and leaves the choice where it belongs.
+    /// Running owners of selected files. The user can quit these owners or skip their files.
     var runningOwnerNames: [String] = []
     let onConfirm: () -> Void
     /// Quit `runningOwnerNames`, then run the same plan. Required for the
@@ -91,7 +85,7 @@ struct ConfirmationSheet: View {
                 if let onQuitAndConfirm, !runningOwnerNames.isEmpty {
                     // Return goes to the quit-first button: the default action of a
                     // sheet should be the one that cannot leave an app half-working.
-                    Button(confirmLabel, action: onConfirm)
+                    Button("Skip Open Apps", action: onConfirm)
                     Button("Quit and Clean", action: onQuitAndConfirm)
                         .keyboardShortcut(.defaultAction)
                         .buttonStyle(.borderedProminent)
@@ -121,20 +115,12 @@ struct ConfirmationSheet: View {
 
     // MARK: - Variant copy
 
-    /// What the sheet says about open applications, or nothing.
-    ///
-    /// It claims only what is known: the files are in use and the app *may*
-    /// misbehave. Whether it will depends on what that process holds in memory,
-    /// which nothing outside it can see.
+    /// Explains how running owners affect removal.
     private var runningOwnersNote: String? {
         guard !runningOwnerNames.isEmpty else { return nil }
         let names = ListFormatter.localizedString(byJoining: runningOwnerNames)
-        let plural = runningOwnerNames.count > 1
-        return "\(names) \(plural ? "are" : "is") open and using some of these files. "
-            + "Removing them now frees the same space, but \(plural ? "those apps" : "it") "
-            + "may misbehave until relaunched. \u{201C}Quit and Clean\u{201D} asks "
-            + "\(plural ? "them" : "it") to quit first; nothing is removed unless "
-            + "\(plural ? "they do" : "it does")."
+        return "These applications or their helpers are running: \(names). "
+            + "Quit and Clean asks them to quit first. Skip Open Apps keeps their files and removes the other selected items."
     }
 
     private var isDestructive: Bool {

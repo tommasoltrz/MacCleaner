@@ -245,6 +245,7 @@ public struct XcodeScanner: CategoryScanner {
                         lastOpened: lastOpenedDate(for: output.url),
                         isRegenerable: true,
                         inUseBy: Self.runningOwner(of: output.url, context: context),
+                        ownerRules: Self.ownerRules(for: output.url),
                         childCount: (try? fileManager.contentsOfDirectory(
                             atPath: output.url.path
                         ))?.count
@@ -339,6 +340,7 @@ public struct XcodeScanner: CategoryScanner {
             // From the root that emitted this row — see `Root.regenerable`.
             isRegenerable: isRegenerable,
             inUseBy: Self.runningOwner(of: url, context: context),
+            ownerRules: Self.ownerRules(for: url),
             childCount: (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
         )
     }
@@ -351,6 +353,12 @@ public struct XcodeScanner: CategoryScanner {
     /// building, so an open Xcode withdraws "safe" from everything it writes.
     /// Simulator data answers to a booted Simulator first, and to Xcode, which
     /// boots simulators of its own for previews and tests.
+    static func ownerRules(for url: URL) -> [FileEntry.OwnerRule] {
+        var rules: [FileEntry.OwnerRule] = [.bundleIdentifier("com.apple.dt.Xcode")]
+        if url.path.contains("/CoreSimulator") { rules.insert(.bundleIdentifier("com.apple.iphonesimulator"), at: 0) }
+        return rules
+    }
+
     static func runningOwner(of url: URL, context: ScanContext) -> FileEntry.RunningOwner? {
         let xcode = context.runningOwner(bundleIdentifier: "com.apple.dt.Xcode")
         guard url.path.contains("/CoreSimulator") else { return xcode }

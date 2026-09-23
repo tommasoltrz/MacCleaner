@@ -93,9 +93,9 @@ struct FileTable: View {
             Alert(
                 title: Text("Remove \(entry.displayName)?"),
                 message: Text(
-                    "This folder can contain profiles, logins, history, and settings. "
-                    + "Removing it may sign you out or reset the app. Quit the app first. "
-                    + "Scolo will always move this protected data to the Trash."
+                    (entry.userDataRemovalWarning
+                        ?? "This folder can contain profiles, logins, history, and settings. Removing it may sign you out or reset the app. Quit the app first.")
+                    + " Scolo will always move this protected data to the Trash."
                 ),
                 primaryButton: .destructive(Text("Unlock & Select")) {
                     userDataRemovalOverrides.insert(entry.id)
@@ -390,9 +390,9 @@ private struct FileRow: View {
                 onDisclose()
             } else if entry.manualRemoval != nil {
                 isShowingManualInfo = true
-            } else if entry.protectionReason == .userData, !hasUserDataOverride {
+            } else if entry.inventoryReason == nil, entry.protectionReason == .userData, !hasUserDataOverride {
                 onRequestUserDataOverride()
-            } else if !entry.isRemovalLocked || hasUserDataOverride {
+            } else if entry.inventoryReason == nil && (!entry.isRemovalLocked || hasUserDataOverride) {
                 onToggle(!isSelected)
             }
         }
@@ -410,6 +410,8 @@ private struct FileRow: View {
     }
 
     private var parentHelp: String {
+        if let reason = entry.inventoryReason { return reason }
+        if let reason = entry.safeRemovalReviewReason { return reason }
         if entry.removalAction != nil {
             return "Select this application group to move all listed files to the Trash."
         }
@@ -459,7 +461,9 @@ private struct FileRow: View {
                     .foregroundStyle(Token.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let manual = entry.manualRemoval {
+                if entry.inventoryReason != nil {
+                    Badge(text: "storage only").fixedSize()
+                } else if let manual = entry.manualRemoval {
                     // A badge that answers itself: click for the explanation and the
                     // command, with the command one click from the clipboard.
                     Button { isShowingManualInfo = true } label: {
@@ -479,6 +483,8 @@ private struct FileRow: View {
                     // Names the owner: "in use" alone sends the user hunting for
                     // which of their open apps is meant.
                     Badge(text: "\(owner.name) is open").fixedSize()
+                } else if entry.safeRemovalReviewReason != nil {
+                    Badge(text: "needs review").fixedSize()
                 } else if isSafeToRemove {
                     // On the row, where the claim is made. It was one badge on the
                     // category, which could only say "everything in here" and so
@@ -492,7 +498,7 @@ private struct FileRow: View {
                 .foregroundStyle(Token.Text.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(entry.url.path)
+                .help("\(presentation.summary)\n\(entry.url.path)")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .help(entry.url.path)
@@ -534,9 +540,8 @@ private struct ChildRow: View {
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
-            // Indented one slot past the parent, so the hierarchy reads without a
-            // tree line.
-            Color.clear.frame(width: Metrics.disclosureSlot, height: 0)
+            // Indent the selection control, icon, and name together. Keep value columns aligned.
+            Color.clear.frame(width: Metrics.disclosureSlot + Metrics.childIndent, height: 0)
 
             Group {
                 if isReadOnly {
@@ -570,8 +575,12 @@ private struct ChildRow: View {
                         .truncationMode(.middle)
                         .layoutPriority(1)
 
-                    if entry.protectionReason == .userData {
+                    if entry.inventoryReason != nil {
+                        Badge(text: "storage only").fixedSize()
+                    } else if entry.protectionReason == .userData {
                         Badge(text: "user data").fixedSize()
+                    } else if entry.safeRemovalReviewReason != nil {
+                        Badge(text: "needs review").fixedSize()
                     } else if entry.isRegenerable {
                         // The badge follows the same safety rules as the filter.
                         if showsSafeToRemoveBadges && entry.regeneratesSafely {
@@ -587,10 +596,19 @@ private struct ChildRow: View {
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .help("\(childHelp)\n\(entry.url.path)")
+            .help("\(FileEntryPresentation(entry: entry).summary)\n\(childHelp)\n\(entry.url.path)")
 
             RegenerableTag(isRegenerable: entry.isRegenerable)
-            Color.clear.frame(width: Metrics.lastOpened, height: 0)
+            if entry.inventoryReason != nil || entry.userDataRemovalWarning != nil {
+                Text(entry.lastOpened.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "Unknown")
+                    .font(.mcRowValue)
+                    .foregroundStyle(Token.Text.secondary)
+                    .lineLimit(1)
+                    .frame(width: Metrics.lastOpened, alignment: .leading)
+                    .help("Last activity recorded for this folder.")
+            } else {
+                Color.clear.frame(width: Metrics.lastOpened, height: 0)
+            }
 
             Text(ByteFormatting.string(entry.allocatedBytes))
                 .font(.mcMonoPath)
@@ -608,15 +626,16 @@ private struct ChildRow: View {
         .onTapGesture {
             if isReadOnly {
                 return
-            } else if entry.protectionReason == .userData, !hasUserDataOverride {
+            } else if entry.inventoryReason == nil, entry.protectionReason == .userData, !hasUserDataOverride {
                 onRequestUserDataOverride()
-            } else if !entry.isRemovalLocked || hasUserDataOverride {
+            } else if entry.inventoryReason == nil && (!entry.isRemovalLocked || hasUserDataOverride) {
                 onToggle(!isSelected)
             }
         }
     }
 
     private var childHelp: String {
+        if let reason = entry.inventoryReason { return reason }
         if isReadOnly {
             // True whether or not the parent is ticked yet: a child drawn this way
             // has no checkbox of its own.
@@ -663,7 +682,7 @@ struct ProtectedSelectionControl: View {
     @ViewBuilder
     var body: some View {
         Group {
-            if !entry.isRemovalLocked || hasUserDataOverride {
+            if entry.inventoryReason == nil && (!entry.isRemovalLocked || hasUserDataOverride) {
                 MonochromeCheckbox(
                     title: entry.displayName,
                     state: isSelected ? .on : .off,
@@ -673,7 +692,7 @@ struct ProtectedSelectionControl: View {
                 )
                 .fixedSize()
                 .help(help)
-            } else if entry.protectionReason == .userData {
+            } else if entry.inventoryReason == nil, entry.protectionReason == .userData {
                 Button(action: onRequestUserDataOverride) {
                     Image(systemName: "lock.fill")
                         .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
@@ -703,6 +722,7 @@ struct ProtectedSelectionControl: View {
     }
 
     private var tooltipTitle: String {
+        if entry.inventoryReason != nil { return "Storage information" }
         if entry.protectionReason == .userData { return "Protected user data" }
         if entry.protectionReason == .running { return "Application is running" }
         if entry.manualRemoval != nil { return "Manual removal required" }
@@ -710,9 +730,11 @@ struct ProtectedSelectionControl: View {
     }
 
     private var tooltipMessage: String {
+        if let reason = entry.inventoryReason { return reason }
         if entry.protectionReason == .userData {
-            return "This item can contain profiles, logins, history, and settings. "
-                + "Click the lock to review and select it for removal."
+            return (entry.userDataRemovalWarning
+                ?? "This item can contain profiles, logins, history, and settings.")
+                + " Click the lock to review and select it for removal."
         }
         if entry.protectionReason == .running {
             return "Quit the application before you remove it. "
@@ -1003,7 +1025,7 @@ private struct FileEntryIcon: View {
         case .diskImage: "externaldrive"
         case .folder: "folder"
         case .document: "doc"
-        case .application: "app.dashed"
+        case .application: "archivebox"
         case .package: "shippingbox"
         case .backup: "iphone"
         }
@@ -1027,6 +1049,7 @@ private enum Metrics {
     static let disclosureSlot: CGFloat = 11
     static let checkbox: CGFloat = 28
     static let icon: CGFloat = 22
+    static let childIndent: CGFloat = 24
     /// Fixed, so the dates and sizes line up down the column while the name flexes
     /// with the window.
     static let lastOpened: CGFloat = 104

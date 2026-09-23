@@ -9,6 +9,7 @@ final class CleanupRemovalModel {
     @ObservationIgnored private let settings: SettingsStore?
     let cleanup: CleanupModel
     let operations: OperationState
+    @ObservationIgnored var runningOwners: () -> [FileEntry.RunningOwner] = { ApplicationRuntime.currentRunningOwners() }
     @ObservationIgnored var canStart: () -> Bool = { true }
     @ObservationIgnored var destination: () -> AppSection = { .scanner }
     @ObservationIgnored var onRemoval: (() async -> Void)?
@@ -56,9 +57,7 @@ final class CleanupRemovalModel {
         let applicationLeftoverPlan: OrphanedAppLeftoverPlan?
         let orphanedApplicationBundleIdentifiers: Set<String>
         let orphanedApplicationItemPaths: Set<String>
-        /// Applications that own something in this plan and were open when the
-        /// sheet was — checked against NSWorkspace at capture, not read off the
-        /// scan, so an app the user has since quit is not named.
+        /// Current owners of the selected items, including applications started after the scan.
         var runningOwners: [FileEntry.RunningOwner] = []
 
         /// What this plan would actually free, filled in after the sheet is already
@@ -130,11 +129,9 @@ final class CleanupRemovalModel {
         guard !plan.entries.isEmpty || !plan.orphanedApplicationBundleIdentifiers.isEmpty
         else { return }
         var captured = plan
-        captured.runningOwners = ApplicationRuntime.stillRunning(
-            entries.flatMap {
-                CleanupService.removalTargets(for: $0, removeProtectedAppData: false)
-            }.compactMap(\.inUseBy)
-        )
+        let current = ScanContext(runningApplications: runningOwners())
+        captured.runningOwners = Array(Set(entries.compactMap { current.runningOwner(for: $0) }))
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         pendingCleanUp = captured
 
         // Selected protected data follows the confirmation setting. Open apps still offer a quit action.
@@ -204,6 +201,10 @@ final class CleanupRemovalModel {
         return ApplicationRuntime.stillRunning(owners)
     }
 
+    private func liveOwner(for entry: FileEntry) -> FileEntry.RunningOwner? {
+        ScanContext(runningApplications: runningOwners()).runningOwner(for: entry)
+    }
+
     private let cleanupService = CleanupService()
 
     func performCleanUp(quittingOwners: Bool = false) async {
@@ -249,7 +250,8 @@ final class CleanupRemovalModel {
                 // prompt. Only the app enables this fallback.
                 privilegedFallback: true,
                 keepReceipt: keepReceipt,
-                userDataRemovalOverrides: plan.userDataRemovalOverrides
+                userDataRemovalOverrides: plan.userDataRemovalOverrides,
+                runningOwner: { entry in await self.liveOwner(for: entry) }
             )) ?? CleanupOutcome(failed: entries.map(\.id))
             outcome.merge(ordinary)
         }
@@ -257,7 +259,7 @@ final class CleanupRemovalModel {
         if let leftoverPlan = plan.applicationLeftoverPlan,
            !plan.orphanedApplicationBundleIdentifiers.isEmpty {
             let registeredIdentifiers = ApplicationRuntime.registeredApplicationBundleIdentifiers(
-                for: plan.orphanedApplicationBundleIdentifiers
+                for: leftoverPlan.ownerBundleIdentifiers, stagedApplicationRoots: leftoverPlan.stagedApplicationRoots
             )
             let orphaned = (try? await cleanupService.removeOrphanedAppLeftovers(
                 leftoverPlan,
@@ -311,6 +313,15 @@ final class CleanupRemovalModel {
 
     private static func cleanUpNotice(_ outcome: CleanupOutcome) -> OperationState.Notice? {
         guard !outcome.failed.isEmpty else { return nil }
+        if !outcome.inUse.isEmpty {
+            let names = ListFormatter.localizedString(byJoining: Set(outcome.inUse.values).sorted())
+            return OperationState.Notice(
+                title: "Some Items Are Still in Use",
+                message: "Scolo kept \(outcome.inUse.count) items. Running owners: \(names). "
+                    + "Close these applications and their helpers, then scan again. "
+                    + "Moved to Trash: \(outcome.trashedCount). Other failures: \(outcome.failed.count - outcome.inUse.count)."
+            )
+        }
         let count = outcome.failed.count
         let one = count == 1
         if outcome.removedCount == 0 {

@@ -151,6 +151,35 @@ and files for installed applications protected. Safe to Remove includes each
 verified application group. Scolo checks the owner and the file identity
 again before removal.
 
+**Shared Data shows storage in `/Users/Shared`.** Unidentified files appear under
+Needs Review without automatic selection. Application copies require an explicit unlock before removal. Media libraries
+and data for other detected application owners stay locked. Known vendor rules also protect data for installed or
+running owners. Eligible application leftovers remain in Application Leftovers.
+The number of user accounts does not determine removal safety.
+
+**Known application storage uses a shared registry.** The registry records paths,
+owners, descriptions, removal effects, and evidence. Scanners and live removal checks use the same ownership information.
+Conflicting rules require review. New unverified rules never enter Safe to Remove automatically.
+See [the registry guide](ARCHITECTURE.md#storage-rule-registry) to add a storage location.
+
+**System application caches use the same rules as other application caches.**
+Recognized regenerable caches appear in Safe to Remove after their owners quit.
+System application caches with incomplete measurements remain under Needs Review.
+Before each move, Scolo checks running owners again and skips their files.
+It includes background helpers inside the application bundle when macOS reports them.
+It does not infer ownership for unrelated background services.
+
+**AI Tools is on by default.** Saved sessions and worktrees require an explicit unlock before removal.
+Verified desktop caches appear under
+Safe to Remove after the owning application quits. Known sessions, attachments,
+workspace state, and worktrees appear as locked storage rows under Needs Review.
+Scolo reads their file metadata without reading conversation contents.
+This first version covers default Codex, Claude, and Cursor paths.
+AI Tools also includes downloaded Codex runtimes. These tools require another download after removal.
+Running Codex applications and their detected helpers keep the runtime out of Safe to Remove.
+Use Unlock & Select to authorize removal of a protected row.
+Scolo explains the data risk and always moves these files to the Trash.
+
 **The app does not include "Storage Report…".** The design specified only its
 label and did not specify its function.
 

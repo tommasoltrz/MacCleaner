@@ -286,7 +286,8 @@ public struct PackageManagerScanner: CategoryScanner {
                 allocatedBytes: measured.allocatedBytes,
                 lastOpened: lastOpenedDate(for: url),
                 isRegenerable: true,
-                inUseBy: context.runningOwner(bundleIdentifier: editor.bundleIdentifier)
+                inUseBy: context.runningOwner(bundleIdentifier: editor.bundleIdentifier),
+                ownerRules: [.bundleIdentifier(editor.bundleIdentifier)]
             ))
             totalBytes += measured.allocatedBytes
         }

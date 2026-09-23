@@ -11,6 +11,28 @@ import Testing
 @Suite("Caches under a running application")
 struct RunningOwnerTests {
 
+    @Test("Saved owner rules detect newly started owners and release closed owners")
+    func savedOwnership() {
+        let owner = FileEntry.RunningOwner(name: "Example", bundleIdentifier: "com.example.app", bundlePath: "/Example.app")
+        let rules: [FileEntry.OwnerRule] = [
+            .bundleIdentifier("com.example.app"), .bundlePath("/Example.app"),
+            .bundleIdentifierPrefix("com.example."), .cacheName("com.example.app")
+        ]
+        for rule in rules {
+            let cache = FileEntry(url: URL(fileURLWithPath: "/cache"), kind: .cache,
+                                  allocatedBytes: 1, isRegenerable: true, ownerRules: [rule])
+            #expect(cache.inUseBy == nil)
+            #expect(ScanContext(runningApplications: [owner]).runningOwner(for: cache) == owner)
+            #expect(ScanContext().runningOwner(for: cache) == nil)
+            let unrelated = FileEntry.RunningOwner(name: "Other", bundleIdentifier: "org.other.app", bundlePath: "/Other.app")
+            #expect(ScanContext(runningApplications: [unrelated]).runningOwner(for: cache) == nil)
+            let parent = FileEntry(url: URL(fileURLWithPath: "/parent"), kind: .folder,
+                                   allocatedBytes: 1, children: [cache])
+            #expect(ScanContext(runningApplications: [owner]).runningOwner(for: parent) == owner)
+        }
+    }
+
+
     private final class Sandbox {
         let home: URL
         init() throws {

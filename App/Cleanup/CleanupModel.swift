@@ -292,13 +292,9 @@ final class CleanupModel {
         else { return }
         safeSelectionSeededAt = finishedAt
 
-        // Everything under this tab is ticked, because everything under it costs
-        // nothing to remove. Application leftovers used to sit here unticked — safe
-        // by one meaning and not by the other — and are under Needs Review now; the
-        // `removalAction` test stays as a guard, since a leftover group is never
-        // removed through the ordinary selection.
+        // Select eligible safe rows. Verified leftovers retain their specialized removal checks.
         let selectable = tileEntries(safeToRemove: true).filter {
-            !$0.isRemovalLocked && $0.kind != .appBundle && $0.removalAction == nil
+            !$0.isRemovalLocked && $0.kind != .appBundle
         }
         guard !selectable.isEmpty else { return }
         scannerSelection.formUnion(selectable.map(\.id))
@@ -336,7 +332,7 @@ final class CleanupModel {
                 return
             }
             guard entry.kind != .appBundle, entry.isRegenerable,
-                  !entry.isRemovalLocked, entry.inUseBy != nil,
+                  entry.safeRemovalReviewReason == nil, !entry.isRemovalLocked, entry.inUseBy != nil,
                   entry.allocatedBytes > 0, seen.insert(entry.id).inserted else { return }
             candidates.append(entry)
         }

@@ -5,6 +5,8 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
     case documentsAndFiles
     case applications
     case applicationLeftovers
+    case aiTools
+    case sharedData
     case hiddenSystemData
     case systemCaches
     case packageManagers
@@ -18,6 +20,8 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .documentsAndFiles: "Documents & Files"
         case .applications:      "Applications"
         case .applicationLeftovers: "Application Leftovers"
+        case .aiTools: "AI Tools"
+        case .sharedData: "Shared Data"
         case .hiddenSystemData:  "Hidden & System Data"
         case .systemCaches:      "System Caches & Logs"
         case .packageManagers:   "Package Manager Caches"
@@ -34,6 +38,10 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
             "Apps in /Applications and ~/Applications. Least recently used first."
         case .applicationLeftovers:
             "Files with no installed application owner"
+        case .aiTools:
+            "Verified caches and protected session and worktree storage"
+        case .sharedData:
+            "Files in /Users/Shared. Review their contents and application owners."
         case .hiddenSystemData:
             "iOS backups, Mail downloads, hidden folders, large disk images"
         case .systemCaches:
@@ -55,6 +63,8 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         case .documentsAndFiles: .orange
         case .applications:      .pink
         case .applicationLeftovers: .teal
+        case .aiTools: .teal
+        case .sharedData: .gray
         case .hiddenSystemData:  .purple
         case .systemCaches:      .accent
         case .packageManagers:   .green
@@ -63,23 +73,13 @@ public enum CategoryID: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// Removing it costs nothing: what is here regenerates on demand. This value
-    /// drives the Dashboard's "Safe to Remove" total and the green badge on a row.
-    ///
-    /// Application leftovers were in this list until 20 Sep 2026, on the reasoning
-    /// that a file with no installed owner is safe. It is safe for the *system* and
-    /// not free for the *user*: a leftover is a removed application's settings, its
-    /// saved state, sometimes its licence, and nothing regenerates those. Whether
-    /// they matter depends on whether that application is ever installed again,
-    /// which only the user knows. So leftovers need review, like everything else
-    /// whose removal is a decision, and "safe to remove" keeps one meaning. They had
-    /// been counted safe and deliberately never ticked, which was the two meanings
-    /// showing.
+    /// Identifies categories that can contribute rows to Safe to Remove.
+    /// Verified leftovers qualify through their removal action. Ordinary rows must regenerate safely.
     public var isSafe: Bool {
         switch self {
-        case .systemCaches, .packageManagers, .xcode: true
-        case .documentsAndFiles, .applications, .applicationLeftovers,
-             .hiddenSystemData, .docker: false
+        case .systemCaches, .packageManagers, .xcode, .aiTools, .applicationLeftovers: true
+        case .documentsAndFiles, .applications,
+             .hiddenSystemData, .docker, .sharedData: false
         }
     }
 
@@ -216,8 +216,11 @@ public struct ScanCategoryResult: Sendable, Equatable, Identifiable {
     /// which is also what keeps it out of the pre-ticked selection, since that is
     /// seeded from the safe list. See `FileEntry.inUseBy`.
     private func countsAsSafe(_ entry: FileEntry) -> Bool {
-        guard entry.inUseBy == nil else { return false }
-        return categoryID.isSafe && entry.isRegenerable
+        guard entry.inUseBy == nil, !entry.isRemovalLocked else { return false }
+        if categoryID == .applicationLeftovers {
+            return entry.orphanedApplicationBundleIdentifier != nil
+        }
+        return categoryID.isSafe && entry.regeneratesSafely
     }
 
     /// Everything else: each category without a safe badge, plus each

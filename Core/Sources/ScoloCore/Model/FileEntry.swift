@@ -58,6 +58,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     public var displayName: String
     /// Tilde-abbreviated parent, e.g. `~/Downloads`.
     public var parentDisplay: String
+    /// Describes known contents without relying on the folder name.
+    public var contentDescription: String?
     public var kind: Kind
     public var allocatedBytes: Int64
     /// `nil` renders as the orange **Never opened** — the design's strongest signal
@@ -105,19 +107,17 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         }
     }
 
+    /// Storage shown for information. Cleanup cannot override this lock.
+    public var inventoryReason: String?
+
+    /// Explains saved data before the user unlocks this row for removal.
+    public var userDataRemovalWarning: String?
+
     public var manualRemoval: ManualRemoval?
 
-    /// The running application that has this row's files open.
-    ///
-    /// Not a lock and not a `ProtectionReason`: the checkbox works and removal is
-    /// allowed. It withdraws one claim only — *safe*. "Regenerable" had been judged
-    /// by what is on disk, and a running process also holds state in memory. On
-    /// 19 Sep 2026 Chrome's `Shared Dictionary` went from under a live Chrome, which
-    /// kept advertising dictionaries it no longer had; `www.reddit.com` failed with
-    /// `ERR_DICTIONARY_LOAD_FAILED` until Chrome was relaunched. That folder is no
-    /// longer offered at all, but the rule it broke is general: nothing here knows
-    /// what another process keeps in RAM, so a cache under a live owner is never
-    /// counted safe and never ticked for the user. Quit the owner and it is both.
+    /// The running application associated with this row.
+    /// A running owner keeps a cache out of Safe to Remove and automatic selection.
+    /// Before removal, the app checks live ownership and skips files with a running owner.
     public struct RunningOwner: Sendable, Equatable, Hashable {
         public let name: String
         public let bundleIdentifier: String?
@@ -132,6 +132,18 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     public var inUseBy: RunningOwner?
 
+    /// Ownership persists when the application is closed, so removal can check for newly started owners.
+    public enum OwnerRule: Sendable, Equatable, Hashable {
+        case bundleIdentifier(String)
+        case bundlePath(String)
+        case bundleIdentifierPrefix(String)
+        case cacheName(String)
+    }
+
+    public var ownerRules: [OwnerRule]
+    /// The rule that supplied this row's storage classification.
+    public var storageRule: StorageRule? = nil
+
     /// Why a row that looks regenerable is not called so, in two or three words:
     /// `no lockfile` on a dependency store nothing can put back as it was.
     ///
@@ -140,6 +152,9 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// says why, so a grey `node_modules` beside a green one is not a riddle. See
     /// `BuildOutputDetector.reinstallEvidence(for:)`.
     public var safetyCaveat: String?
+
+    /// Keeps a regenerable cache under review when automatic removal checks are incomplete.
+    public var safeRemovalReviewReason: String?
 
     /// The row and its children are one thing, removed together or not at all.
     ///
@@ -157,7 +172,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
 
     public var protectionReason: ProtectionReason?
     /// Any reason at all: drives the badge, nothing else.
-    public var isProtectedFromRemoval: Bool { protectionReason != nil }
+    public var isProtectedFromRemoval: Bool { protectionReason != nil || inventoryReason != nil }
 
     /// Whether removal is actually refused.
     ///
@@ -166,7 +181,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// row-specific or app-uninstall authorization).
     public var isRemovalLocked: Bool {
         protectionReason == .running || protectionReason == .userData
-            || manualRemoval != nil
+            || manualRemoval != nil || inventoryReason != nil
     }
     /// Item count for folders, shown as `· 1,204 items`.
     public var childCount: Int?
@@ -178,14 +193,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         url: URL,
         displayName: String? = nil,
         parentDisplay: String? = nil,
+        contentDescription: String? = nil,
         kind: Kind,
         allocatedBytes: Int64,
         lastOpened: Date? = nil,
         isRegenerable: Bool = false,
         protectionReason: ProtectionReason? = nil,
         manualRemoval: ManualRemoval? = nil,
+        inventoryReason: String? = nil,
+        userDataRemovalWarning: String? = nil,
         inUseBy: RunningOwner? = nil,
+        ownerRules: [OwnerRule] = [],
         safetyCaveat: String? = nil,
+        safeRemovalReviewReason: String? = nil,
         removalAction: RemovalAction? = nil,
         childCount: Int? = nil,
         children: [FileEntry] = []
@@ -194,14 +214,19 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         self.displayName = displayName ?? url.lastPathComponent
         self.parentDisplay = parentDisplay
             ?? FileEntry.abbreviate(url.deletingLastPathComponent().path)
+        self.contentDescription = contentDescription
         self.kind = kind
         self.allocatedBytes = allocatedBytes
         self.lastOpened = lastOpened
         self.isRegenerable = isRegenerable
         self.protectionReason = protectionReason
         self.manualRemoval = manualRemoval
+        self.inventoryReason = inventoryReason
+        self.userDataRemovalWarning = userDataRemovalWarning
         self.inUseBy = inUseBy
+        self.ownerRules = ownerRules
         self.safetyCaveat = safetyCaveat
+        self.safeRemovalReviewReason = safeRemovalReviewReason
         self.removalAction = removalAction
         self.childCount = childCount
         self.children = children
@@ -237,7 +262,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// gigabyte rows.
     public var displayBytes: Int64 {
         if removalAction != nil { return reclaimableBytes }
-        return manualRemoval != nil ? totalBytesIncludingChildren : reclaimableBytes
+        return manualRemoval != nil || inventoryReason != nil || userDataRemovalWarning != nil
+            ? totalBytesIncludingChildren : reclaimableBytes
     }
 
     /// Bytes among this row's children that regenerate and can actually be removed.
@@ -266,7 +292,7 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// safe while the tile, correctly, refused to count one of them. The figure and
     /// the badge now ask the same question.
     public var regeneratesSafely: Bool {
-        isRegenerable && !isRemovalLocked && inUseBy == nil
+        isRegenerable && (storageRule?.isRegenerable ?? true) && !isRemovalLocked && inUseBy == nil && safeRemovalReviewReason == nil
     }
 
     /// The size shown beside a top-level Scanner row. Applications show only their

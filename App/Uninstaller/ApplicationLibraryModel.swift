@@ -52,7 +52,9 @@ final class ApplicationLibraryModel {
                 planner.scanCandidates()
             }.value
             guard self != nil, !Task.isCancelled else { return }
-            let registered = ApplicationRuntime.registeredApplicationBundleIdentifiers(for: candidates.identifiers)
+            let registered = ApplicationRuntime.registeredApplicationBundleIdentifiers(
+                for: candidates.identifiers, stagedApplicationRoots: candidates.stagedApplicationRoots
+            )
             let plan = try? await planner.plan(
                 context: context,
                 registeredApplicationBundleIdentifiers: registered,

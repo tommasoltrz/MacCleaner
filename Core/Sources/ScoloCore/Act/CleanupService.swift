@@ -36,6 +36,9 @@ public struct CleanupOutcome: Sendable, Equatable {
     /// the freed figure understates by an unknown amount.
     public var unreportedFreedCount: Int
 
+    /// Successful removals for cache updates. These records stay in memory unless receipt storage is enabled.
+    public var removedRecords: [RemovalRecord] = []
+
     public var removedCount: Int
     /// The split behind `removedCount`, because the two halves make different
     /// promises: a trashed item can come back, a deleted one cannot, and the
@@ -48,6 +51,8 @@ public struct CleanupOutcome: Sendable, Equatable {
     public var failed: [String]
     /// Paths that failed because macOS denied access.
     public var permissionDenied: [String]
+    /// Paths skipped because a live owner was detected, with the owner name for the completion message.
+    public var inUse: [String: String] = [:]
 
     public init(
         removedBytes: Int64 = 0,
@@ -82,6 +87,8 @@ public struct CleanupOutcome: Sendable, Equatable {
         deletedCount += other.deletedCount
         failed.append(contentsOf: other.failed)
         permissionDenied.append(contentsOf: other.permissionDenied)
+        inUse.merge(other.inUse) { _, latest in latest }
+        removedRecords.append(contentsOf: other.removedRecords)
     }
 }
 
@@ -128,6 +135,7 @@ public struct CleanupService: Sendable {
     ///   parent ID, cleanup removes the bundle and regenerable children but preserves
     ///   profiles, preferences, containers and other non-regenerable children.
     /// - Parameter expectedIdentities: reviewed identities that must still match.
+    /// - Parameter runningOwner: reads live ownership before each removal. It must not return a saved scan result.
     public func remove(
         entries: [FileEntry],
         trashFirst: Bool,
@@ -135,7 +143,8 @@ public struct CleanupService: Sendable {
         keepReceipt: Bool = true,
         userDataRemovalOverrides: Set<FileEntry.ID> = [],
         appDataRemovalOverrides: Set<FileEntry.ID> = [],
-        expectedIdentities: [FileEntry.ID: String] = [:]
+        expectedIdentities: [FileEntry.ID: String] = [:],
+        runningOwner: (@Sendable (FileEntry) async -> FileEntry.RunningOwner?)? = nil
     ) async throws -> CleanupOutcome {
         var outcome = CleanupOutcome()
         // Targets refused for lack of permission, retried below in one privileged
@@ -158,6 +167,13 @@ public struct CleanupService: Sendable {
             // absorbed. Recent use is information for the user, not a veto.
             if !Self.removalAllowed(entry, userDataRemovalOverrides: userDataRemovalOverrides) {
                 outcome.failed.append(entry.url.path)
+                if keepReceipt { try? log.append([Self.failureRecord(for: entry)]) }
+                continue
+            }
+
+            if let owner = await runningOwner?(entry) {
+                outcome.failed.append(entry.url.path)
+                outcome.inUse[entry.url.path] = owner.name
                 if keepReceipt { try? log.append([Self.failureRecord(for: entry)]) }
                 continue
             }
@@ -197,6 +213,14 @@ public struct CleanupService: Sendable {
                 // already removed reports here as the sole owner of those blocks —
                 // which is exactly what removing it now gives back.
                 let freed = try? await privateMeasurer.measure([target.url])
+
+                // Measurement can take time. Read process state again immediately before the move.
+                if let owner = await runningOwner?(target) {
+                    outcome.failed.append(target.url.path)
+                    outcome.inUse[target.url.path] = owner.name
+                    records.append(Self.failureRecord(for: target, bytes: measured))
+                    continue
+                }
 
                 let landed: URL?
                 do {
@@ -238,7 +262,7 @@ public struct CleanupService: Sendable {
                 if disposition == .trashed { outcome.trashedCount += 1 }
                 else { outcome.deletedCount += 1 }
 
-                records.append(RemovalRecord(
+                let record = RemovalRecord(
                     timestamp: Date(),
                     originalPath: target.url.path,
                     bytes: measured,
@@ -247,7 +271,9 @@ public struct CleanupService: Sendable {
                     // Read now, while the item is certainly the one just trashed.
                     trashedIdentity: landed.flatMap(FileIdentity.of),
                     freedBytes: freed?.privateBytes
-                ))
+                )
+                records.append(record)
+                outcome.removedRecords.append(record)
             }
 
             // Written per entry rather than once at the end, so a cancelled run leaves
@@ -260,9 +286,20 @@ public struct CleanupService: Sendable {
             if keepReceipt { try? log.append(records) }
         }
 
-        if !privileged.isEmpty {
+        // An owner can start while another item waits for a permission retry.
+        var readyForPrivileges: [FileEntry] = []
+        for target in privileged {
+            if let owner = await runningOwner?(target) {
+                outcome.failed.append(target.url.path)
+                outcome.inUse[target.url.path] = owner.name
+                if keepReceipt { try? log.append([Self.failureRecord(for: target)]) }
+            } else {
+                readyForPrivileges.append(target)
+            }
+        }
+        if !readyForPrivileges.isEmpty {
             await Self.removeWithPrivileges(
-                privileged, freedByID: privilegedFreed,
+                readyForPrivileges, freedByID: privilegedFreed,
                 log: keepReceipt ? log : nil, outcome: &outcome
             )
         }
@@ -348,16 +385,16 @@ public struct CleanupService: Sendable {
                 else { outcome.unreportedFreedCount += 1 }
                 outcome.removedCount += 1
                 outcome.trashedCount += 1
-                if keepReceipt {
-                    try? log.append([RemovalRecord(
-                        timestamp: Date(),
-                        originalPath: item.url.path,
-                        bytes: measured,
-                        disposition: .trashed,
-                        trashedPath: landed?.path,
-                        trashedIdentity: landed.flatMap(FileIdentity.of)
-                    )])
-                }
+                let record = RemovalRecord(
+                    timestamp: Date(),
+                    originalPath: item.url.path,
+                    bytes: measured,
+                    disposition: .trashed,
+                    trashedPath: landed?.path,
+                    trashedIdentity: landed.flatMap(FileIdentity.of)
+                )
+                outcome.removedRecords.append(record)
+                if keepReceipt { try? log.append([record]) }
             } catch let error as CocoaError where error.code == .fileNoSuchFile {
                 // Finder or an updater removed it after planning. For the app bundle
                 // this still opens the gate: the requested state has been reached.
@@ -561,7 +598,7 @@ public struct CleanupService: Sendable {
             outcome.removedCount += 1
             outcome.trashedCount += 1
             let destination = destinations[index]
-            records.append(RemovalRecord(
+            let record = RemovalRecord(
                 timestamp: Date(),
                 originalPath: target.url.path,
                 bytes: target.allocatedBytes,
@@ -569,7 +606,9 @@ public struct CleanupService: Sendable {
                 trashedPath: destination,
                 trashedIdentity: FileIdentity.of(URL(fileURLWithPath: destination)),
                 freedBytes: freed
-            ))
+            )
+            records.append(record)
+            outcome.removedRecords.append(record)
         }
         // Record each result. A failed row never receives a Trash destination.
         if !records.isEmpty { try? log?.append(records) }
@@ -590,7 +629,7 @@ public struct CleanupService: Sendable {
         guard entry.kind == .appBundle else { return entry.children + [entry] }
 
         let children = entry.children.filter { child in
-            if child.manualRemoval != nil || child.protectionReason == .running {
+            if child.inventoryReason != nil || child.manualRemoval != nil || child.protectionReason == .running {
                 return false
             }
             return child.isRegenerable || removeProtectedAppData
@@ -605,7 +644,7 @@ public struct CleanupService: Sendable {
         _ entry: FileEntry,
         userDataRemovalOverrides: Set<FileEntry.ID>
     ) -> Bool {
-        if entry.manualRemoval != nil || entry.protectionReason == .running { return false }
+        if entry.inventoryReason != nil || entry.manualRemoval != nil || entry.protectionReason == .running { return false }
         if entry.protectionReason == .userData {
             return userDataRemovalOverrides.contains(entry.id)
         }

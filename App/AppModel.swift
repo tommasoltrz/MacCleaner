@@ -44,7 +44,7 @@ final class AppModel {
         photoDuplicates.onFailure = { [weak operations] in operations?.report($0, $1) }
         cleanup.onFailure = { [weak operations] in operations?.report($0, $1) }
         storageRemoval.canStart = { [weak self] in self.map { !$0.isBusyWithDisk } ?? false }
-        storageRemoval.onRemoval = { [weak self] in await self?.refreshAfterRemoval() }
+        storageRemoval.onRemoval = { [weak self] in await self?.refreshAfterRemoval(preserveExplorerCache: true) }
         fileDuplicates.canStart = { [weak self] in self.map { !$0.isBusyWithDisk } ?? false }
         uninstaller.canStart = { [weak self] in self.map { !$0.isBusyWithDisk } ?? false }
         cleanupRemoval.canStart = { [weak self] in self.map { !$0.isBusyWithDisk } ?? false }
@@ -173,10 +173,9 @@ final class AppModel {
         view = .scanner
     }
 
-    func refreshAfterRemoval() async {
-        // Every cached Explorer level is stale too: a folder measured before a
-        // Scanner clean-up came back from the cache with its old figure.
-        storageExplorer.invalidateCache()
+    func refreshAfterRemoval(preserveExplorerCache: Bool = false) async {
+        // Explorer removals already update the cache. Other removals require a new measurement.
+        if !preserveExplorerCache { storageExplorer.invalidateCache() }
         async let trashRefresh: Void = trash.loadTrash()
         // `removal` marks this measurement as the post-clean-up baseline, which is
         // what "since the last clean-up" reads and what the ring never thins away.
