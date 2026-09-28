@@ -40,6 +40,16 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
 
     // MARK: - Access
 
+    static var currentAccess: PhotoLibraryAccess {
+        access(for: PHPhotoLibrary.authorizationStatus(for: .readWrite))
+    }
+
+    @MainActor
+    static func openAccessSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     func authorize() async -> PhotoLibraryAccess {
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let status: PHAuthorizationStatus
@@ -49,7 +59,11 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
             status = current
         }
 
-        return switch status {
+        return Self.access(for: status)
+    }
+
+    private static func access(for status: PHAuthorizationStatus) -> PhotoLibraryAccess {
+        switch status {
         case .authorized: .authorized
         case .limited:    .limited
         case .restricted: .restricted

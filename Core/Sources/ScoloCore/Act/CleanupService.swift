@@ -222,6 +222,18 @@ public struct CleanupService: Sendable {
                     continue
                 }
 
+                // Wallpaper settings can change while measurement runs.
+                if let download = target.wallpaperDownload, !download.permitsRemoval(of: target.url) {
+                    outcome.failed.append(target.url.path)
+                    records.append(Self.failureRecord(for: target, bytes: measured))
+                    continue
+                }
+                if target.storageRule?.id == "wallpaper:download", target.wallpaperDownload == nil {
+                    outcome.failed.append(target.url.path)
+                    records.append(Self.failureRecord(for: target, bytes: measured))
+                    continue
+                }
+
                 let landed: URL?
                 do {
                     landed = try Self.discard(target.url, disposition: disposition)
@@ -233,7 +245,7 @@ public struct CleanupService: Sendable {
                     continue
                 } catch {
                     let permissionDenied = Self.isPermissionDenied(error)
-                    if privilegedFallback, permissionDenied,
+                    if privilegedFallback, permissionDenied, target.wallpaperDownload == nil,
                        !Self.requiresAppDataAuthorization(target.url) {
                         var queued = target
                         queued.allocatedBytes = measured
@@ -658,7 +670,7 @@ public struct CleanupService: Sendable {
     /// disposition, since they are removed as part of it.
     public static func alwaysMovesToTrash(_ entry: FileEntry) -> Bool {
         (entry.kind == .appBundle && CategoryID.applications.alwaysMovesToTrash)
-            || entry.protectionReason == .userData
+            || entry.protectionReason == .userData || entry.wallpaperDownload != nil
     }
 
     /// Printed by the privileged script for each item that really moved.

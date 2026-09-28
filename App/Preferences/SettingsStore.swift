@@ -127,6 +127,17 @@ struct ExclusionRule: Identifiable, Hashable, Codable, Sendable {
 @Observable
 final class SettingsStore {
 
+    enum OnboardingStep: String {
+        case welcome, access, complete
+    }
+
+    var onboardingStep: OnboardingStep {
+        didSet {
+            guard persistsOnboardingProgress else { return }
+            defaults.set(onboardingStep.rawValue, forKey: Key.onboardingStep)
+        }
+    }
+
     // MARK: Defaults
 
     /// The design's defaults, in one place so `resetToDefaults()` and first launch
@@ -171,11 +182,13 @@ final class SettingsStore {
     // MARK: Storage
 
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let persistsOnboardingProgress: Bool
     /// Previews and tests drive the store without touching the user's login items.
     @ObservationIgnored private let managesLoginItem: Bool
     @ObservationIgnored private var isSyncingLoginItem = false
 
     private enum Key {
+        static let onboardingStep = "settings.onboardingStep"
         static let launchAtLogin = "settings.launchAtLogin"
         static let showInMenuBar = "settings.showInMenuBar"
         static let scanSchedule = "settings.scanSchedule"
@@ -314,9 +327,14 @@ final class SettingsStore {
 
     // MARK: Lifecycle
 
-    init(defaults: UserDefaults = .standard, managesLoginItem: Bool = true) {
+    init(defaults: UserDefaults = .standard, managesLoginItem: Bool = true, forceOnboarding: Bool = false) {
         self.defaults = defaults
         self.managesLoginItem = managesLoginItem
+        self.persistsOnboardingProgress = !forceOnboarding
+        self.onboardingStep = forceOnboarding ? .welcome : (
+            defaults.string(forKey: Key.onboardingStep)
+                .flatMap(OnboardingStep.init(rawValue:)) ?? .welcome
+        )
 
         // `defaults.bool(forKey:)` answers `false` for a key that was never written,
         // which would silently turn every on-by-default switch off on first launch.

@@ -5,6 +5,41 @@ import Testing
 @Suite("Duplicate models")
 @MainActor
 struct DuplicateModelTests {
+    @Test("Photo access failures recover without starting a scan", arguments: [
+        PhotoLibraryAccess.denied, .limited, .restricted
+    ])
+    func photoAccessRecovery(access: PhotoLibraryAccess) async throws {
+        let storage = try ModelTestStorage()
+        let service = PhotoDuplicateService(library: AccessPhotoLibrary(access: access),
+                                            visionRevision: 1, cacheDirectory: storage.url)
+        let model = PhotoDuplicatesModel(service: service, defaults: storage.defaults)
+        model.startScan()
+        try await waitForModel { !model.isScanning }
+        #expect(model.unavailableAccess == access)
+        #expect(model.unavailableReason != nil)
+        model.refreshAccess(.denied)
+        #expect(model.unavailableAccess == .denied)
+        model.refreshAccess(.authorized)
+        #expect(model.unavailableAccess == nil)
+        #expect(model.unavailableReason == nil)
+        #expect(model.results == nil)
+        #expect(!model.isScanning)
+    }
+
+    @Test("Library sync failures keep the retry screen")
+    func photoSyncFailureIsNotAccessFailure() async throws {
+        let storage = try ModelTestStorage()
+        let service = PhotoDuplicateService(library: AccessPhotoLibrary(access: .authorized),
+                                            visionRevision: 1, cacheDirectory: storage.url)
+        let model = PhotoDuplicatesModel(service: service, defaults: storage.defaults)
+        model.startScan()
+        try await waitForModel { !model.isScanning }
+        let reason = try #require(model.unavailableReason)
+        #expect(model.unavailableAccess == nil)
+        model.refreshAccess(.authorized)
+        #expect(model.unavailableReason == reason)
+    }
+
     @Test("Minimum size filters immediately and removes hidden selections")
     func minimumSizeFiltersWithoutScan() async throws {
         let storage = try ModelTestStorage()
@@ -84,4 +119,14 @@ struct DuplicateModelTests {
         #expect(!model.isRegrouping)
         #expect(model.groups.count == 1)
     }
+}
+
+private struct AccessPhotoLibrary: PhotoLibraryProviding {
+    let access: PhotoLibraryAccess
+    func authorize() async -> PhotoLibraryAccess { access }
+    func fetchAssets() async throws -> [PhotoAsset] {
+        throw PhotoSweepUnavailable.librarySyncing(assetCount: 1)
+    }
+    func fingerprint(assetID: String) async -> PhotoFingerprint? { nil }
+    func delete(assetIDs: [String]) async throws {}
 }

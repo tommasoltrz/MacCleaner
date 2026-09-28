@@ -1,7 +1,7 @@
 import Foundation
 
 /// One source for known storage paths, ownership, descriptions, and removal policy.
-public struct StorageRuleRegistry: Sendable {
+public struct StorageRuleRegistry: Sendable, Equatable {
     public enum Resolution: Sendable, Equatable {
         case known(StorageRule)
         case conflict([StorageRule])
@@ -48,7 +48,15 @@ public struct StorageRuleRegistry: Sendable {
                 entry.inventoryReason = "This folder contains storage with different removal rules. Select individual folders instead."
                 return entry
             }
-            return rule.apply(to: original, context: context, isRoot: depth == rule.components.count)
+            var entry = rule.apply(to: original, context: context, isRoot: depth == rule.components.count)
+            if rule.id == "wallpaper:download" {
+                return WallpaperDownloads.classify(entry, root: home.appendingPathComponent(WallpaperDownloads.relativeRoot))
+            }
+            if let owner = rule.removalOwner, hasRemovalBoundary(under: original.url, home: home, owner: owner) {
+                entry.isRegenerable = false
+                entry.inventoryReason = "This folder contains protected application data. Select individual folders instead."
+            }
+            return entry
         case .conflict:
             var entry = original
             entry.isRegenerable = false
@@ -82,7 +90,7 @@ public struct StorageRuleRegistry: Sendable {
         var rules = [StorageRule(
             id: key + ":data", path: layout.root, owner: name, ownerRules: ownerRules,
             category: .applications, dataType: .userData, title: layout.remainderName,
-            removalEffect: "Removes saved application data and settings.", evidence: evidence
+            removalEffect: "Removes saved application data and settings.", evidence: evidence, removalPolicy: .applicationData
         )]
         rules += layout.regenerable.map { path in
             let description = cacheDescription(for: String(path.split(separator: "/").last ?? "Cache"))
@@ -91,7 +99,7 @@ public struct StorageRuleRegistry: Sendable {
                 owner: name, ownerRules: ownerRules, category: category, dataType: .cache,
                 title: category == .aiTools ? "\(name) · \(description.name)" : nil,
                 summary: category == .aiTools ? description.summary : nil,
-                removalEffect: description.summary, evidence: evidence
+                removalEffect: description.summary, evidence: evidence, removalPolicy: .applicationData
             )
         }
         return rules
@@ -114,7 +122,7 @@ public struct StorageRuleRegistry: Sendable {
             id: "runtime:" + runtime.folder, path: ".cache/" + runtime.folder,
             owner: runtime.owner, ownerRules: [.bundleIdentifier(runtime.ownerIdentifier)],
             category: .aiTools, dataType: .downloadedTools, title: runtime.name,
-            summary: runtime.summary, removalEffect: runtime.removalEffect, evidence: runtime.evidence
+            summary: runtime.summary, removalEffect: runtime.removalEffect, evidence: runtime.evidence, removalPolicy: .applicationData
         )
     }
 
@@ -130,19 +138,15 @@ public struct StorageRuleRegistry: Sendable {
 
     /// Explicit rules exist even when the application is absent. Discovery still checks the filesystem.
     static func standard(home: URL) -> StorageRuleRegistry {
-        var rules = curations.sorted { $0.key < $1.key }.flatMap { identifier, layout in
+        var rules = applicationLayouts.sorted { $0.key < $1.key }.flatMap { identifier, layout in
             applicationRules(layout, identifier: identifier,
                              name: tools.first { $0.identifier == identifier }?.name ?? identifier)
-        }
-        for tool in tools where curations[tool.identifier] == nil {
-            if let layout = curation(bundleID: tool.identifier, baseName: tool.supportName, home: home) {
-                rules += applicationRules(layout, identifier: tool.identifier, name: tool.name)
-            }
         }
         rules += inventoryRoots.map(inventoryRule)
         rules += downloadedRuntimes.map(runtimeRule)
         rules += applicationSupportCaches.map(supportCacheRule)
         rules += photosLibraryResourceRules
+        rules += wallpaperRules
         return StorageRuleRegistry(rules: rules)
     }
 }

@@ -143,6 +143,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     public var ownerRules: [OwnerRule]
     /// The rule that supplied this row's storage classification.
     public var storageRule: StorageRule? = nil
+    /// Stores the checks required before a wallpaper download can move to the Trash.
+    public var wallpaperDownload: WallpaperDownload? = nil
 
     /// Why a row that looks regenerable is not called so, in two or three words:
     /// `no lockfile` on a dependency store nothing can put back as it was.

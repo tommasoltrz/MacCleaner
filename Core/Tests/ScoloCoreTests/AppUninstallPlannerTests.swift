@@ -96,6 +96,35 @@ struct AppUninstallPlannerTests {
         }
     }
 
+    @Test("Uninstall uses registry storage and preserves nested workspace data")
+    func registryRemovalBoundaries() async throws {
+        let box = try Sandbox()
+        let identifier = "com.todesktop.230313mzl4w4u92"
+        let app = try box.application("Cursor", identifier: identifier)
+        let cache = try box.write("Library/Application Support/Cursor/Cache/blob").deletingLastPathComponent()
+        let settings = try box.write("Library/Application Support/Cursor/User/settings.json")
+        let saved = try box.write("Library/Application Support/Cursor/User/workspaceStorage/project/history")
+        let plan = try await box.planner().plan(applicationURL: app)
+        #expect(plan.items.contains { $0.url == cache && $0.content == .regenerable })
+        #expect(plan.items.contains { $0.url == settings })
+        #expect(!plan.items.contains { $0.url == saved || AppUninstallPlanner.isInside(saved, root: $0.url) })
+        #expect(plan.preservedPaths.contains { AppUninstallPlanner.isInside(saved, root: $0) })
+        for item in plan.items {
+            #expect(AppUninstallPlanner.removalIsStillSafe(item, in: plan, exclusiveBundleIdentifiers: [identifier]))
+        }
+    }
+
+    @Test("Uninstall includes registry runtimes outside Application Support")
+    func registryRuntime() async throws {
+        let box = try Sandbox()
+        let app = try box.application("Codex", identifier: "com.openai.codex")
+        let runtime = try box.write(".cache/codex-runtimes/runtime.json").deletingLastPathComponent()
+        _ = try box.write(".codex/sessions/history.jsonl")
+        let plan = try await box.planner().plan(applicationURL: app)
+        #expect(plan.items.contains { $0.url == runtime && $0.content == .regenerable })
+        #expect(!plan.items.contains { $0.url.path.contains("/.codex/") })
+    }
+
     @Test("exact bundle paths are classified without prefix or group-container guesses")
     func exactCandidatesOnly() async throws {
         let sandbox = try Sandbox()

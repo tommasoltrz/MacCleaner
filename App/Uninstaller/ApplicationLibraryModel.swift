@@ -11,6 +11,9 @@ final class ApplicationLibraryModel {
 
     init(settings: SettingsStore? = nil) { self.settings = settings }
 
+    private(set) var webApplications: [InstalledWebApplication]?
+    var webAppError: String?
+
     private(set) var installedApplications: [InstalledApplication]?
 
     private(set) var installedApplicationBytes: [String: Int64] = [:]
@@ -78,6 +81,7 @@ final class ApplicationLibraryModel {
     }
 
     func loadInstalledApplications() {
+        webAppError = nil
         installedApplicationsTask?.cancel()
         let settings = settings
         let context = ScanContext(
@@ -87,11 +91,12 @@ final class ApplicationLibraryModel {
         )
         let planner = appUninstallPlanner
         installedApplicationsTask = Task { [weak self] in
-            let applications = await Task.detached(priority: .userInitiated) {
-                planner.installedApplications(context: context)
+            let (applications, webApplications) = await Task.detached(priority: .userInitiated) {
+                (planner.installedApplications(context: context), planner.installedWebApplications(context: context))
             }.value
             guard let self, !Task.isCancelled else { return }
             self.installedApplications = applications
+            self.webApplications = webApplications
             let listed = Set(applications.map(\.id))
             self.installedApplicationBytes = self.installedApplicationBytes
                 .filter { listed.contains($0.key) }
@@ -110,6 +115,69 @@ final class ApplicationLibraryModel {
             }
             self.installedApplicationsMeasured = true
         }
+    }
+
+    struct WebAppBrowser: Identifiable {
+        let id: String
+        let name: String
+        let url: URL
+        let controlsURL: String
+    }
+
+    var webAppBrowsers: [WebAppBrowser] {
+        [
+            ("com.google.Chrome", "chrome://apps"),
+            ("com.google.Chrome.beta", "chrome://apps"),
+            ("com.google.Chrome.dev", "chrome://apps"),
+            ("com.google.Chrome.canary", "chrome://apps"),
+            ("org.chromium.Chromium", "chrome://apps"),
+            ("com.microsoft.edgemac", "edge://apps"),
+            ("com.brave.Browser", "chrome://apps")
+        ].compactMap { identifier, controls in
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else { return nil }
+            return WebAppBrowser(id: identifier, name: url.deletingPathExtension().lastPathComponent,
+                                 url: url, controlsURL: controls)
+        }
+    }
+
+    func openWebAppControls(in browser: WebAppBrowser) {
+        webAppError = nil
+        guard let url = URL(string: browser.controlsURL) else { return }
+        NSWorkspace.shared.open([url], withApplicationAt: browser.url,
+                                configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, error in
+            guard error != nil else { return }
+            Task { @MainActor [weak self] in
+                self?.webAppError = "The browser could not open its removal controls."
+            }
+        }
+    }
+
+    func openWebAppControls(_ application: InstalledWebApplication) {
+        webAppError = nil
+        guard let identifier = application.browserIdentifier,
+              let browser = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier),
+              let executable = Bundle(url: browser)?.executableURL,
+              let arguments = application.removalArguments else {
+            webAppError = "The browser or profile is unavailable. Open the web app to remove it from its menu."
+            return
+        }
+        openWebAppControls(executable: executable, arguments: arguments)
+    }
+
+    private func openWebAppControls(executable: URL, arguments: [String]) {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] process in
+            guard process.terminationStatus != 0 else { return }
+            Task { @MainActor [weak self] in
+                self?.webAppError = "The browser could not open its removal controls."
+            }
+        }
+        do { try process.run() }
+        catch { webAppError = "The browser could not open its removal controls." }
     }
 
     var selectedApplicationBytes: Int64? {

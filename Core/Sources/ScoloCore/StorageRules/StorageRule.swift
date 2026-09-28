@@ -6,6 +6,10 @@ public struct StorageRule: Sendable, Equatable {
         case cache, downloadedTools, userData, worktree, managedLibrary, unknown
     }
 
+    public enum RemovalPolicy: Sendable, Equatable {
+        case preserve, applicationData
+    }
+
     public struct Evidence: Sendable, Equatable {
         public enum Basis: Sendable, Equatable {
             case documented, sourceReview, localInspection, inheritedRule, unverified
@@ -25,6 +29,7 @@ public struct StorageRule: Sendable, Equatable {
     public var summary: String? = nil
     public let removalEffect: String
     public let evidence: Evidence
+    public var removalPolicy: RemovalPolicy = .preserve
 
     public var isRegenerable: Bool {
         isValid && evidence.basis != .unverified && (dataType == .cache || dataType == .downloadedTools)

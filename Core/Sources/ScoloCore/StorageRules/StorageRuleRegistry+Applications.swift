@@ -208,6 +208,19 @@ extension StorageRuleRegistry {
         "\(appName) settings and data"
     }
 
+    /// Known application names establish ownership even after their Electron marker files are removed.
+    static var applicationLayouts: [String: AppDataCuration] {
+        var layouts = curations
+        for tool in tools where layouts[tool.identifier] == nil {
+            layouts[tool.identifier] = AppDataCuration(
+                root: "Library/Application Support/\(tool.supportName)",
+                regenerable: electronRegenerable,
+                remainderName: "\(tool.name) settings and data", evidence: inheritedEvidence
+            )
+        }
+        return layouts
+    }
+
     /// The curation for one app, if there is one.
     ///
     /// Explicit table first: an app listed there has been looked at, and the
@@ -222,7 +235,7 @@ extension StorageRuleRegistry {
         }
 
         // A table entry names a path that need not exist on this Mac.
-        if let bundleID, let explicit = curations[bundleID] {
+        if let bundleID, let explicit = applicationLayouts[bundleID] {
             return exists(explicit.root) ? explicit.owned(by: bundleID, name: baseName) : nil
         }
 

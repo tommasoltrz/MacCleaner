@@ -7,6 +7,11 @@ public struct FileEntryPresentation: Sendable, Equatable {
         case archive, diskImage, folder, document, application, package, backup
     }
 
+    /// Filesystem dates do not establish wallpaper use.
+    public static func showsLastOpened(for entry: FileEntry) -> Bool {
+        !["wallpaper:store", "wallpaper:download"].contains(entry.storageRule?.id ?? "")
+    }
+
     public let summary: String
     public let icon: Icon
 

@@ -54,6 +54,7 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
         public let allocatedBytes: Int64
         public let ownerBundleIdentifier: String?
         let plannedIdentity: String?
+        public let storageRule: StorageRule?
 
         public var isProtectedUserData: Bool { content == .userData }
 
@@ -63,7 +64,8 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
             category: Category,
             content: Content,
             allocatedBytes: Int64,
-            ownerBundleIdentifier: String?
+            ownerBundleIdentifier: String?,
+            storageRule: StorageRule? = nil
         ) {
             self.url = url.standardizedFileURL
             self.displayName = displayName ?? url.lastPathComponent
@@ -72,6 +74,7 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
             self.allocatedBytes = allocatedBytes
             self.ownerBundleIdentifier = ownerBundleIdentifier
             self.plannedIdentity = FileIdentity.of(url)
+            self.storageRule = storageRule
         }
 
         var fileEntry: FileEntry {
@@ -81,14 +84,18 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
             case .preferences: .file
             case .support, .containers, .helpers: .folder
             }
-            return FileEntry(
+            var entry = FileEntry(
                 url: url,
                 displayName: displayName,
                 kind: kind,
                 allocatedBytes: allocatedBytes,
                 isRegenerable: content == .regenerable,
-                protectionReason: content == .userData ? .userData : nil
+                protectionReason: content == .userData ? .userData : nil,
+                ownerRules: storageRule?.ownerRules ?? []
             )
+            entry.storageRule = storageRule
+            entry.contentDescription = storageRule?.summary
+            return entry
         }
     }
 
@@ -113,6 +120,8 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
     let candidateBundleIdentifiers: Set<String>
     let applicationRoots: [URL]
     let allowedRelatedRoots: [URL]
+    var storageRegistry: StorageRuleRegistry? = nil
+    var storageHome: URL? = nil
 
     public var applicationItem: Item { items[0] }
     /// No related file could be attributed: there is no identifier to match on, or
@@ -150,7 +159,9 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
         preservedPaths: [URL],
         candidateBundleIdentifiers: Set<String>,
         applicationRoots: [URL],
-        allowedRelatedRoots: [URL]
+        allowedRelatedRoots: [URL],
+        storageRegistry: StorageRuleRegistry? = nil,
+        storageHome: URL? = nil
     ) {
         precondition(items.first?.content == .application)
         self.applicationURL = applicationURL.standardizedFileURL
@@ -162,6 +173,8 @@ public struct AppUninstallPlan: Sendable, Equatable, Identifiable {
         self.candidateBundleIdentifiers = candidateBundleIdentifiers
         self.applicationRoots = applicationRoots.map(\.standardizedFileURL)
         self.allowedRelatedRoots = allowedRelatedRoots.map(\.standardizedFileURL)
+        self.storageRegistry = storageRegistry
+        self.storageHome = storageHome
     }
 }
 
@@ -361,13 +374,15 @@ public struct AppUninstallPlanner: Sendable {
         // disk under every scope and disclose them in the review.
         preserved.append(contentsOf: sharedGroupContainers(for: exclusiveIDs))
 
+        let registry = StorageRuleRegistry.standard(home: home)
         let curation = exclusiveIDs.contains(bundleIdentifier)
             ? StorageRuleRegistry.curation(
                 bundleID: bundleIdentifier, baseName: name, home: home
             )
             : nil
-        let curatedRoot = curation.map {
-            home.appendingPathComponent($0.root).standardizedFileURL
+        let curatedRoot = curation.flatMap { layout -> URL? in
+            let root = home.appendingPathComponent(layout.root).standardizedFileURL
+            return registry.hasRemovalBoundary(under: root, home: home, owner: bundleIdentifier) ? nil : root
         }
 
         if let curation, let curatedRoot {
@@ -384,7 +399,7 @@ public struct AppUninstallPlanner: Sendable {
                             category: entry.isRegenerable ? .caches : .support,
                             content: entry.isRegenerable ? .regenerable : .userData,
                             allocatedBytes: entry.allocatedBytes,
-                            ownerBundleIdentifier: bundleIdentifier
+                            ownerBundleIdentifier: bundleIdentifier, storageRule: entry.storageRule
                         )
                         if claimedPaths.insert(item.id).inserted { items.append(item) }
                     }
@@ -392,7 +407,11 @@ public struct AppUninstallPlanner: Sendable {
             }
         }
 
-        for candidate in candidates(for: exclusiveIDs) {
+        let partition = try registry.partitionForRemoval(
+            candidates(for: exclusiveIDs) + registry.applicationCandidates(home: home, identifiers: exclusiveIDs), home: home
+        )
+        preserved += partition.preserved
+        for candidate in partition.candidates {
             try Task.checkCancellation()
             if let curatedRoot,
                ApplicationsScanner.overlaps(candidate.url.standardizedFileURL.path,
@@ -419,7 +438,8 @@ public struct AppUninstallPlanner: Sendable {
                 category: candidate.category,
                 content: candidate.content,
                 allocatedBytes: measurement.allocatedBytes,
-                ownerBundleIdentifier: candidate.ownerBundleIdentifier
+                ownerBundleIdentifier: candidate.ownerBundleIdentifier,
+                storageRule: registry.knownRule(candidate.url, home: home)
             )
             if claimedPaths.insert(item.id).inserted { items.append(item) }
         }
@@ -447,7 +467,8 @@ public struct AppUninstallPlanner: Sendable {
             preservedPaths: Self.deduplicated(preserved),
             candidateBundleIdentifiers: candidateIDs,
             applicationRoots: applicationRoots,
-            allowedRelatedRoots: allowedRelatedRoots
+            allowedRelatedRoots: allowedRelatedRoots,
+            storageRegistry: registry, storageHome: home
         )
     }
 
@@ -764,6 +785,8 @@ public struct AppUninstallPlanner: Sendable {
               }),
               !Self.isSymbolicLink(item.url)
         else { return false }
+        if let registry = plan.storageRegistry, let home = plan.storageHome,
+           !registry.permitsApplicationRemoval(item.url, home: home, owner: owner) { return false }
         return !Self.hasSymbolicLinkInParents(of: item.url, through: root)
     }
 

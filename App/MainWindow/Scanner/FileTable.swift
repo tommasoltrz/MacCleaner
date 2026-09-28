@@ -346,7 +346,7 @@ private struct FileRow: View {
 
             Text(lastOpenedDisplay)
                 .font(.mcRowValue)
-                .foregroundStyle(entry.lastOpened == nil && entry.removalAction == nil
+                .foregroundStyle(entry.lastOpened == nil && entry.removalAction == nil && FileEntryPresentation.showsLastOpened(for: entry)
                     ? Token.textColor(.orange) : Token.Text.secondary)
                 .lineLimit(1)
                 .frame(width: Metrics.lastOpened, alignment: .leading)
@@ -461,8 +461,18 @@ private struct FileRow: View {
                     .foregroundStyle(Token.Text.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if entry.inventoryReason != nil {
-                    Badge(text: "storage only").fixedSize()
+                if entry.storageRule?.id == "wallpaper:store" {
+                    Button("Wallpaper Settings", systemImage: "arrow.up.right") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Token.textColor(.accent))
+                    .help("Open Wallpaper settings to check selected wallpapers and screen savers.")
+                } else if entry.inventoryReason != nil {
+                    Badge(text: entry.wallpaperDownload == nil ? "storage only" : "selected").fixedSize()
                 } else if let manual = entry.manualRemoval {
                     // A badge that answers itself: click for the explanation and the
                     // command, with the command one click from the clipboard.
@@ -517,7 +527,8 @@ private struct FileRow: View {
 
     @MainActor
     private var lastOpenedDisplay: String {
-        entry.removalAction == nil ? lastOpenedText : "App removed"
+        guard FileEntryPresentation.showsLastOpened(for: entry) else { return "—" }
+        return entry.removalAction == nil ? lastOpenedText : "App removed"
     }
 }
 
@@ -576,7 +587,7 @@ private struct ChildRow: View {
                         .layoutPriority(1)
 
                     if entry.inventoryReason != nil {
-                        Badge(text: "storage only").fixedSize()
+                        Badge(text: entry.wallpaperDownload == nil ? "storage only" : "selected").fixedSize()
                     } else if entry.protectionReason == .userData {
                         Badge(text: "user data").fixedSize()
                     } else if entry.safeRemovalReviewReason != nil {
@@ -600,12 +611,14 @@ private struct ChildRow: View {
 
             RegenerableTag(isRegenerable: entry.isRegenerable)
             if entry.inventoryReason != nil || entry.userDataRemovalWarning != nil {
-                Text(entry.lastOpened.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "Unknown")
+                Text(FileEntryPresentation.showsLastOpened(for: entry)
+                     ? entry.lastOpened.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "Unknown" : "—")
                     .font(.mcRowValue)
                     .foregroundStyle(Token.Text.secondary)
                     .lineLimit(1)
                     .frame(width: Metrics.lastOpened, alignment: .leading)
-                    .help("Last activity recorded for this folder.")
+                    .help(FileEntryPresentation.showsLastOpened(for: entry)
+                          ? "Last activity recorded for this folder." : "Last opened does not indicate wallpaper use.")
             } else {
                 Color.clear.frame(width: Metrics.lastOpened, height: 0)
             }

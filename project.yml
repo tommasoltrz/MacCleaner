@@ -131,6 +131,14 @@ targets:
         CODE_SIGN_STYLE: Manual
 
 schemes:
+  Scolo Onboarding:
+    build:
+      targets:
+        Scolo: all
+    run:
+      config: Debug
+      environmentVariables:
+        SCOLO_SHOW_ONBOARDING: "1"
   Scolo:
     build:
       targets:

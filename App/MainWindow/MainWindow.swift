@@ -360,6 +360,7 @@ struct MainWindow: View {
         // Only over the grid of applications. The review and done pages are steps
         // in a sequence and carry their own buttons.
         case .uninstaller: model.uninstaller.isShowingUninstallerLibrary
+            && model.uninstaller.uninstallerTab != .webApps
         case .dashboard, .history: false
         }
     }
@@ -373,7 +374,7 @@ struct MainWindow: View {
             : !model.photoDuplicates.selection.isEmpty && !model.photoDuplicates.isRegrouping
         case .uninstaller:     return model.uninstaller.uninstallerTab == .installed
             ? !model.uninstaller.library.selectedApplicationIDs.isEmpty
-            : !model.uninstaller.library.selectedLeftoverIdentifiers.isEmpty && !model.uninstaller.library.isLoadingApplicationLeftovers
+            : model.uninstaller.uninstallerTab == .leftovers && !model.uninstaller.library.selectedLeftoverIdentifiers.isEmpty && !model.uninstaller.library.isLoadingApplicationLeftovers
         case .storageExplorer: return model.storageExplorer.canRemoveSelection
             && !model.storageExplorer.isMapSelectionPending
             && !model.isStorageExplorerMeasurementBlocked
@@ -394,7 +395,7 @@ struct MainWindow: View {
         case .uninstaller:
             if model.uninstaller.uninstallerTab == .installed {
                 model.uninstaller.moveSelectedApplicationsToTrash()
-            } else {
+            } else if model.uninstaller.uninstallerTab == .leftovers {
                 Task { await model.requestLeftoverRemoval() }
             }
         case .storageExplorer: Task { await model.storageRemoval.requestStorageExplorerRemoval() }
@@ -541,13 +542,13 @@ struct MainWindow: View {
         case .uninstaller:
             if model.uninstaller.isShowingUninstallerLibrary {
                 Button {
-                    if model.uninstaller.uninstallerTab == .installed {
+                    if model.uninstaller.uninstallerTab != .leftovers {
                         model.uninstaller.library.loadInstalledApplications()
                     } else {
                         model.uninstaller.library.loadApplicationLeftovers()
                     }
                 } label: {
-                    Label(model.uninstaller.uninstallerTab == .installed ? "Refresh Apps" : "Refresh Leftovers", systemImage: "arrow.clockwise")
+                    Label(model.uninstaller.uninstallerTab != .leftovers ? "Refresh Apps" : "Refresh Leftovers", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(PageActionButtonStyle())
                 .disabled(model.isBusyWithDisk || model.uninstaller.library.isLoadingApplicationLeftovers)

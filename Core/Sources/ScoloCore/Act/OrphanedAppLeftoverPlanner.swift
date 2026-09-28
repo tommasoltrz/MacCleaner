@@ -25,6 +25,8 @@ public struct OrphanedAppLeftoverPlan: Sendable, Equatable {
     let applicationRoots: [URL]
     let allowedRelatedRoots: [URL]
     var sharedApplicationData: [SharedApplicationData.Candidate] = []
+    var storageRegistry: StorageRuleRegistry? = nil
+    var storageHome: URL? = nil
 
     /// Update copies in these folders do not establish installed ownership.
     public var stagedApplicationRoots: [URL] {
@@ -151,6 +153,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             in: pathPlanner.applicationRoots, fileManager: fileManager
         )
         installed.formUnion(registeredApplicationBundleIdentifiers)
+        installed.formUnion(context.runningApplications.compactMap(\.bundleIdentifier))
+        let registry = StorageRuleRegistry.standard(home: pathPlanner.home)
         let candidateScan = candidates ?? candidateBundleIdentifierScan(fileManager: fileManager)
         let identifiers = candidateScan.identifiers.filter {
             !AppUninstallPlanner.isProtectedBundleIdentifier($0)
@@ -196,15 +200,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
                 ))
             }
         }
-        for identifier in identifiers.sorted() {
-            guard let curation = StorageRuleRegistry.curations[identifier] else { continue }
-            candidates.append(AppUninstallPlanner.Candidate(
-                url: pathPlanner.home.appendingPathComponent(curation.root),
-                category: .support,
-                content: .userData,
-                ownerBundleIdentifier: identifier
-            ))
-        }
+        candidates += registry.applicationCandidates(home: pathPlanner.home, identifiers: Set(identifiers))
 
         let sharedCandidates = candidateScan.sharedApplicationData.filter { candidate in
             identifiers.contains(SharedApplicationData.epicLauncher)
@@ -219,12 +215,14 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             )
         }
 
-        var itemsByIdentifier: [String: [AppUninstallPlan.Item]] = [:]
-        var preserved: [URL] = []
-        var claimedPaths = Set<String>()
-        var unreadableCount = candidateScan.unreadableCount
+        let partition = try registry.partitionForRemoval(candidates, home: pathPlanner.home)
 
-        for candidate in candidates {
+        var itemsByIdentifier: [String: [AppUninstallPlan.Item]] = [:]
+        var preserved: [URL] = partition.preserved
+        var claimedPaths = Set<String>()
+        var unreadableCount = candidateScan.unreadableCount + partition.unreadableCount
+
+        for candidate in partition.candidates {
             try Task.checkCancellation()
             let url = candidate.url.standardizedFileURL
             guard claimedPaths.insert(url.path).inserted else { continue }
@@ -248,7 +246,7 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             let measurement = try await context.measurer.measure(url)
             unreadableCount += measurement.unreadableCount
             guard measurement.allocatedBytes > 0 else { continue }
-            guard !measurement.containsProtectedPattern, shared == nil || measurement.unreadableCount == 0 else {
+            guard !measurement.containsProtectedPattern, measurement.unreadableCount == 0 else {
                 preserved.append(url)
                 continue
             }
@@ -259,7 +257,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
                 category: candidate.category,
                 content: candidate.content,
                 allocatedBytes: measurement.allocatedBytes,
-                ownerBundleIdentifier: candidate.ownerBundleIdentifier
+                ownerBundleIdentifier: candidate.ownerBundleIdentifier,
+                storageRule: registry.knownRule(url, home: pathPlanner.home)
             )
             itemsByIdentifier[candidate.ownerBundleIdentifier, default: []].append(item)
         }
@@ -282,10 +281,11 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             }
             return OrphanedAppLeftoverPlan.Group(
                 bundleIdentifier: identifier, items: items,
-                displayName: identifier == SharedApplicationData.epicLauncher && !sharedCandidates.isEmpty ? "Epic Games" : items.lazy
+                displayName: registry.rules.first(where: { $0.removalOwner == identifier && $0.owner != identifier })?.owner
+                    ?? (identifier == SharedApplicationData.epicLauncher && !sharedCandidates.isEmpty ? "Epic Games" : items.lazy
                     .filter { $0.category == .containers }
                     .compactMap { Self.systemName(of: $0.url) }
-                    .first
+                    .first)
             )
         }.sorted { left, right in
             if left.totalBytes != right.totalBytes { return left.totalBytes > right.totalBytes }
@@ -299,7 +299,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
             unreadableCount: unreadableCount,
             applicationRoots: pathPlanner.applicationRoots,
             allowedRelatedRoots: pathPlanner.allowedRelatedRoots,
-            sharedApplicationData: sharedCandidates
+            sharedApplicationData: sharedCandidates,
+            storageRegistry: registry, storageHome: pathPlanner.home
         )
     }
 
@@ -451,12 +452,8 @@ public struct OrphanedAppLeftoverPlanner: Sendable {
         let teamGroups = Self.teamGroupContainers(in: groupsRoot, names: names(in: groupsRoot))
         result.formUnion(teamGroups.keys)
 
-        // The curated table is a hand-verified claim that an application owns
-        // this root — evidence of the strongest kind.
-        for (identifier, curation) in StorageRuleRegistry.curations {
-            let root = pathPlanner.home.appendingPathComponent(curation.root)
-            if fileManager.fileExists(atPath: root.path) { result.insert(identifier) }
-        }
+        let registry = StorageRuleRegistry.standard(home: pathPlanner.home)
+        result.formUnion(registry.applicationCandidates(home: pathPlanner.home).map(\.ownerBundleIdentifier))
 
         let shared = sharedRoot.map { SharedApplicationData.discover(in: $0) }
         let sharedCandidates = shared?.candidates ?? []
@@ -619,6 +616,8 @@ extension OrphanedAppLeftoverPlan {
               )
         else { return false }
 
+        if let registry = plan.storageRegistry, let home = plan.storageHome,
+           !registry.permitsApplicationRemoval(item.url, home: home, owner: owner) { return false }
         if let currentIdentity = FileIdentity.of(item.url),
            currentIdentity != item.plannedIdentity {
             return false

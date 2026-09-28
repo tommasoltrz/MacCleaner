@@ -341,7 +341,7 @@ public struct ApplicationsScanner: CategoryScanner {
         let registry = StorageRuleRegistry(rules: StorageRuleRegistry.applicationRules(
             curation, identifier: curation.ownerIdentifier,
             name: curation.ownerName ?? curation.remainderName
-        ))
+        ) + StorageRuleRegistry.standard(home: home).rules.filter { $0.removalPolicy == .preserve })
         var entries: [FileEntry] = []
         var curatedBytes: Int64 = 0
         var seen = Set<String>()

@@ -27,6 +27,17 @@ extension AppUninstallPlanner {
     public func installedApplications(
         context: ScanContext = ScanContext()
     ) -> [InstalledApplication] {
+        discoveredApplications(context: context, webApps: false)
+    }
+
+    public func installedWebApplications(context: ScanContext = ScanContext()) -> [InstalledWebApplication] {
+        discoveredApplications(context: context, webApps: true).compactMap { application in
+            guard let bundle = Bundle(url: application.url) else { return nil }
+            return InstalledWebApplication(application: application, metadata: bundle.infoDictionary ?? [:])
+        }
+    }
+
+    private func discoveredApplications(context: ScanContext, webApps: Bool) -> [InstalledApplication] {
         let fm = FileManager.default
         var seen = Set<String>()
         var applications: [InstalledApplication] = []
@@ -36,7 +47,7 @@ extension AppUninstallPlanner {
                   !Self.isSymbolicLink(url),
                   url.resolvingSymlinksInPath().standardizedFileURL == url,
                   let bundle = Bundle(url: url),
-                  !Self.isChromiumApplicationShim(bundle)
+                  Self.isChromiumApplicationShim(bundle) == webApps
             else { return }
 
             let identifier = Self.verifiedBundleIdentifier(bundle.bundleIdentifier)

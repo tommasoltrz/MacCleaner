@@ -19,6 +19,28 @@ final class AppModel {
     let trash: TrashModel
     let operations: OperationState
     @ObservationIgnored private let scheduler = ScanScheduler()
+    private var pendingOnboardingUninstall: URL?
+
+    var needsOnboarding: Bool {
+        settings.map { $0.onboardingStep != .complete } ?? false
+    }
+
+    func completeOnboarding() {
+        settings?.onboardingStep = .complete
+        if let applicationURL = pendingOnboardingUninstall {
+            pendingOnboardingUninstall = nil
+            view = .uninstaller
+            uninstaller.planAppUninstall(applicationURL)
+        }
+    }
+
+    func requestAppUninstall(_ applicationURL: URL) {
+        guard !needsOnboarding else {
+            pendingOnboardingUninstall = applicationURL
+            return
+        }
+        uninstaller.planAppUninstall(applicationURL)
+    }
 
     init(settings: SettingsStore? = nil, cleanup: CleanupModel? = nil, photoDuplicates: PhotoDuplicatesModel? = nil, startsScheduler: Bool = true) {
         self.settings = settings
@@ -73,7 +95,7 @@ final class AppModel {
     }
 
     func scheduledScanIsDue() -> Bool {
-        guard let settings else { return false }
+        guard let settings, !needsOnboarding else { return false }
         return AutomaticScanPolicy.isDue(AutomaticScanPolicy.Conditions(
             now: Date(),
             lastFinished: cleanup.lastScanFinishedAt,
@@ -103,7 +125,8 @@ final class AppModel {
     private(set) var findRequest = 0
 
     var canFind: Bool {
-        switch view {
+        guard !needsOnboarding else { return false }
+        return switch view {
         case .trash, .history, .uninstaller: operations.activity == nil
         case .dashboard, .scanner, .storageExplorer, .duplicates: false
         }
@@ -213,7 +236,7 @@ final class AppModel {
     }
 
     func startPhotoSweep() {
-        guard !isBusyWithDisk else { return }
+        guard !needsOnboarding, !isBusyWithDisk else { return }
         operations.removalCompletion = nil
         view = .duplicates
         duplicateKind = .photos
@@ -241,7 +264,7 @@ final class AppModel {
     }
 
     func startScan(automatic: Bool = false, refreshOverview: Bool = true) {
-        guard !isBusyWithDisk else { return }
+        guard !needsOnboarding, !isBusyWithDisk else { return }
         cleanupRemoval.resetOutcome()
         if !automatic { view = .scanner }
         cleanup.startScan()
@@ -251,7 +274,7 @@ final class AppModel {
     }
 
     func startFileDuplicateScan(roots: [URL]? = nil) {
-        guard !isBusyWithDisk else { return }
+        guard !needsOnboarding, !isBusyWithDisk else { return }
         let roots = roots ?? fileDuplicates.fileDuplicateResults?.roots ?? []
         guard !roots.isEmpty else { chooseFileDuplicateFolders(); return }
         duplicateKind = .files

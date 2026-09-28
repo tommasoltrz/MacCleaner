@@ -4,6 +4,16 @@
 It owns navigation, shared busy checks, and refreshes that affect more than one feature.
 Views read each feature model directly.
 
+## Initial setup
+
+`OnboardingView` replaces the main window content until the user completes Welcome and Access.
+`SettingsStore.onboardingStep` saves progress so setup can resume after a restart.
+The Access step opens Full Disk Access in System Settings and shows the current access status.
+Users can continue with limited access.
+`AppModel` blocks initial, manual, and scheduled scans until setup is complete.
+The main window then starts its initial cleanup scan.
+A pending Finder uninstall request opens its review instead.
+
 ## Ownership
 
 | Component | Responsibility |
@@ -145,17 +155,37 @@ Removal checks use the recorded ownership rules with a fresh process snapshot be
 Rules do not store running state, access permissions, or measurement results.
 Exclusions and protected-file checks remain in the scanners and removal services.
 
+Application Leftovers and App Uninstaller use registry ownership for named support folders and downloaded runtimes.
+Known application layouts remain available after cache marker files disappear.
+A rule must explicitly allow application-data removal and identify one exact application owner.
+Unverified rules, shared ownership, and protected storage do not establish leftover ownership.
+The planners split parent folders at protected rule boundaries. Saved sessions, workspace data, and worktrees remain protected after you remove an application.
+Removal plans retain the registry and check these boundaries again before removal.
+The app and CLI use the same planners. Storage Explorer retains its separate rules for direct file management.
+
 Photos library thumbnails and rendered images use the `managedLibrary` data type.
 The scanner shows their size and Photos ownership without a Regenerable badge or a removal option.
 Apple warns against changing library contents. Closing Photos does not make direct removal safe.
 The rule records [Apple's library guidance](https://support.apple.com/guide/photos/pht12e7a8015/mac) as its evidence.
 
+Downloaded Wallpapers appears under System Caches & Logs.
+The scanner reads downloaded videos from `~/Library/Application Support/com.apple.wallpaper/aerials/videos` and names them from the local Apple manifest.
+It checks `Store/Index.plist` for wallpaper and screen saver selections across current displays and existing Desktops.
+The Desktop list comes from `com.apple.spaces.plist`. Current display and Desktop settings override saved defaults.
+Saved records for deleted Desktops and disconnected displays do not mark downloads as selected.
+Missing Desktop information requires review. Wallpaper rows do not show filesystem dates as last-opened dates.
+Selected videos and dynamic variants stay locked. Unknown providers, shuffle settings, and unreadable settings require review.
+Only verified unused downloads qualify for Safe to Remove. Settings, manifests, and thumbnails remain untouched.
+Removal checks the file identity and selection again before each move. Wallpaper downloads always move to Trash.
+The scanner does not include the legacy system-wide `com.apple.idleassetsd` store.
+
 To add a known storage location:
 
 1. Add its path, owner, data type, and removal effect to the applicable catalog file.
 2. Record the evidence source. Use unverified evidence when support is incomplete.
-3. Add fixtures for the intended folder and nearby user-data folders.
-4. Test running owners, exclusions, conflicts, and path boundaries.
-5. Run the core tests and signed application build.
+3. Set the removal policy. Preserve saved work independently of application installation.
+4. Add fixtures for the intended folder and nearby user-data folders.
+5. Test installed owners, running owners, exclusions, conflicts, and path boundaries.
+6. Run the core tests and signed application build.
 
 Fixture tests verify classification and boundaries. They do not prove that an application recovers correctly after removal.

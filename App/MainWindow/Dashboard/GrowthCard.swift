@@ -249,10 +249,49 @@ private struct AttributionRow: View {
             Button { onReveal(attribution) } label: { line }
                 .buttonStyle(.plain)
                 .hoverHighlight(radius: Token.Radius.row)
-                .help("Open this folder in the Storage Explorer")
+                .help(helpText)
         } else {
             line
+                .help(helpText)
         }
+    }
+
+    private var folderDescription: (title: String, detail: String)? {
+        let path = URL(fileURLWithPath: attribution.path).standardizedFileURL.path
+        func isUnder(_ root: String) -> Bool {
+            path == root || path.hasPrefix(root + "/")
+        }
+        if isUnder("/private") {
+            return (
+                "System Runtime Data",
+                "Temporary files, caches, logs, databases, and virtual-memory files used by macOS and apps. "
+                    + "Storage used here is not necessarily safe to remove."
+            )
+        }
+        if isUnder("/Library") {
+            return (
+                "Shared App & System Data",
+                "Application support files, fonts, plug-ins, drivers, and background services available across this Mac. "
+                    + "Storage used here is not necessarily safe to remove."
+            )
+        }
+        let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library").standardizedFileURL.path
+        if isUnder(library),
+           path == library || attribution.segment == .appDataCaches || attribution.segment == .otherFilesInHome {
+            return (
+                "Your App Data",
+                "Settings, caches, and saved data for apps in your account. "
+                    + "Some files contain personal data and are not safe to remove."
+            )
+        }
+        return nil
+    }
+
+    private var helpText: String {
+        let detail = folderDescription?.detail ?? ""
+        guard isRevealable else { return detail }
+        let action = "Open this folder in the Storage Explorer"
+        return detail.isEmpty ? action : detail + "\n\n" + action
     }
 
     /// A folder that is not there any more cannot be opened. Those rows state the
@@ -269,7 +308,7 @@ private struct AttributionRow: View {
             CategoryDot(color: attribution.segment.color, size: 8)
 
             HStack(spacing: 8) {
-                Text(attribution.segment.displayName)
+                Text(folderDescription?.title ?? attribution.segment.displayName)
                     .font(.mcRowTitle)
                     .foregroundStyle(Token.Text.primary)
                     .fixedSize()

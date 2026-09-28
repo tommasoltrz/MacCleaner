@@ -461,8 +461,7 @@ struct DuplicateGrouperTests {
         let thresholds = PhotoSimilarity.allCases.compactMap(\.threshold)
         #expect(thresholds == thresholds.sorted(), "the picker reads top to bottom")
         #expect(Set(thresholds).count == thresholds.count, "two settings would do the same thing")
-        #expect(PhotoSimilarity.default.threshold == 0.35,
-                "the measured threshold is what an existing library keeps getting")
+        #expect(PhotoSimilarity.default == .identicalOnly)
         // The one setting with no threshold leads the scale, because it asks for
         // less than the tightest number does.
         #expect(PhotoSimilarity.allCases.first == .identicalOnly)

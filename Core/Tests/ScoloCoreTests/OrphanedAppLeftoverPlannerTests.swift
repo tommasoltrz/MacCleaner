@@ -485,6 +485,74 @@ struct OrphanedAppLeftoverPlannerTests {
         #expect(!installedPlan.groups.contains { $0.id == "com.microsoft.VSCode" })
     }
 
+    @Test("Registry ownership finds removed Cursor storage while preserving saved work")
+    func cursorRegistryOwnership() async throws {
+        let box = try Sandbox()
+        let identifier = "com.todesktop.230313mzl4w4u92"
+        let cache = try box.write("Library/Application Support/Cursor/Cache/blob").deletingLastPathComponent()
+        let settings = try box.write("Library/Application Support/Cursor/User/settings.json")
+        let workspace = try box.write("Library/Application Support/Cursor/User/workspaceStorage/project/state")
+        let worktree = try box.write(".cursor/worktrees/project/unfinished.swift")
+        let planner = box.planner()
+        #expect(planner.scanCandidates().identifiers.contains(identifier))
+        let plan = try await planner.plan()
+        let group = try #require(plan.groups.first { $0.id == identifier })
+        #expect(group.displayName == "Cursor")
+        #expect(group.items.contains { $0.url == cache })
+        #expect(group.items.contains { $0.url == settings })
+        for path in [workspace, worktree] {
+            #expect(!group.items.contains { path == $0.url || AppUninstallPlanner.isInside(path, root: $0.url) })
+        }
+        for item in group.items {
+            #expect(OrphanedAppLeftoverPlan.removalIsStillSafe(item, in: plan, installedBundleIdentifiers: []))
+            #expect(!OrphanedAppLeftoverPlan.removalIsStillSafe(item, in: plan, installedBundleIdentifiers: [identifier]))
+        }
+
+        let ai = try await AIToolsScanner(home: box.home).scan(context: ScanContext())
+        let leftovers = try await ApplicationLeftoversScanner(planner: planner).scan(context: ScanContext())
+        let combined = ScanCoordinator.removingApplicationLeftoverOverlaps(from: [ai, leftovers])
+        let remainingAI = try #require(combined.first { $0.categoryID == .aiTools })
+        #expect(!remainingAI.entries.contains { $0.url == cache })
+        #expect(remainingAI.entries.contains { $0.displayName == "Cursor workspace state" && $0.isRemovalLocked })
+        #expect(remainingAI.entries.contains { $0.displayName == "Cursor worktrees" && $0.isRemovalLocked })
+
+        let running = FileEntry.RunningOwner(name: "Cursor", bundleIdentifier: identifier, bundlePath: "/External/Cursor.app")
+        #expect(try await planner.plan(context: ScanContext(runningApplications: [running])).groups.isEmpty)
+        #expect(try await planner.plan(registeredApplicationBundleIdentifiers: [identifier]).groups.isEmpty)
+        _ = try box.application("Cursor", identifier: identifier)
+        #expect(try await planner.plan().groups.isEmpty)
+    }
+
+    @Test("Registry runtime ownership works without application support data")
+    func runtimeWithoutSupportFolder() async throws {
+        let box = try Sandbox()
+        let runtime = try box.write(".cache/codex-runtimes/runtime/bin/tool").deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        _ = try box.write(".codex/sessions/conversation.jsonl")
+        let planner = box.planner()
+        let plan = try await planner.plan()
+        let group = try #require(plan.groups.first { $0.id == "com.openai.codex" })
+        #expect(group.items.map(\.url) == [runtime])
+        #expect(group.items.first?.content == .regenerable)
+        let excluded = try await planner.plan(context: ScanContext(excludedPaths: [runtime.path]))
+        #expect(excluded.groups.isEmpty)
+    }
+
+    @Test("Every catalog application uses the same leftover ownership rule")
+    func allCatalogApplications() async throws {
+        for (identifier, layout) in StorageRuleRegistry.applicationLayouts {
+            let box = try Sandbox()
+            let root = try box.write(layout.root + "/settings.json").deletingLastPathComponent()
+            let planner = box.planner()
+            #expect(planner.scanCandidates().identifiers.contains(identifier))
+            let plan = try await planner.plan()
+            let group = try #require(plan.groups.first { $0.id == identifier })
+            #expect(group.items.contains { $0.url == root || AppUninstallPlanner.isInside($0.url, root: root) })
+            #expect(group.items.allSatisfy { $0.storageRule?.removalOwner == identifier })
+            _ = try box.application("Installed owner", identifier: identifier)
+            #expect(try await planner.plan().groups.isEmpty)
+        }
+    }
+
     @Test("exclusions and keychains stay protected")
     func protectedPathsStayOnDisk() async throws {
         let sandbox = try Sandbox()

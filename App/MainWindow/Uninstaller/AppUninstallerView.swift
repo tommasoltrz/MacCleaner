@@ -79,7 +79,9 @@ struct AppUninstallerView: View {
                                 .foregroundStyle(Token.textColor(.orange))
                         }
 
-                        if tab == .leftovers {
+                        if tab == .webApps {
+                            webAppsList
+                        } else if tab == .leftovers {
                             leftoversList
                         } else if let applications = model.uninstaller.library.installedApplications {
                             let shown = visibleApplications(applications)
@@ -117,6 +119,7 @@ struct AppUninstallerView: View {
                             }
                         }
                     }
+                    .frame(maxWidth: .infinity)
                     .frame(minHeight: isLibraryEmpty ? geometry.size.height : 0, alignment: .top)
                     .padding(.horizontal, isLibraryEmpty ? 0 : Token.Size.pageGutter)
                     .padding(.vertical, isLibraryEmpty ? 0 : 14)
@@ -147,10 +150,89 @@ struct AppUninstallerView: View {
     }
 
     private var isLibraryEmpty: Bool {
+        if tab == .webApps { return visibleWebApplications?.isEmpty == true }
         if tab == .leftovers {
             return model.uninstaller.library.applicationLeftovers?.groups.isEmpty == true
         }
         return model.uninstaller.library.installedApplications.map { visibleApplications($0).isEmpty } ?? false
+    }
+
+    private func webAppBrowserName(_ application: InstalledWebApplication) -> String? {
+        guard let identifier = application.browserIdentifier else { return "Browser unavailable" }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) else { return identifier }
+        return url.deletingPathExtension().lastPathComponent
+    }
+
+    private var visibleWebApplications: [InstalledWebApplication]? {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.uninstaller.library.webApplications?.filter {
+            query.isEmpty || $0.application.name.localizedCaseInsensitiveContains(query)
+                || ($0.site?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
+    private var browserRemovalActions: some View {
+        VStack(spacing: 10) {
+            ForEach(model.uninstaller.library.webAppBrowsers) { browser in
+                Button("Manage Web Apps in \(browser.name)") {
+                    model.uninstaller.library.openWebAppControls(in: browser)
+                }
+                .buttonStyle(SecondaryButtonStyle())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var webAppsList: some View {
+        if let error = model.uninstaller.library.webAppError {
+            Label(error, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        }
+        if let matching = visibleWebApplications {
+            if matching.isEmpty {
+                ContentUnavailableView {
+                    Label(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "Manage Web Apps in Your Browser" : "No Results", systemImage: "globe")
+                } description: {
+                    Text(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "No web app launchers were found. Your browser can still have installed web apps."
+                        : "No web app launcher matches your search.")
+                    Text("Open your browser’s app page to find and remove them. Select the profile used to install the app.")
+                } actions: {
+                    browserRemovalActions
+                }
+                .operationPageLayout()
+            }
+            ForEach(matching) { application in
+                HStack(spacing: 12) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: application.application.url.path))
+                        .resizable().frame(width: 40, height: 40)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(application.application.name).font(.headline)
+                        Text([webAppBrowserName(application), application.profileName ?? "Choose the correct browser profile"]
+                            .compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let site = application.site {
+                            Text(site).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    Button("Open Removal Controls") {
+                        model.uninstaller.library.openWebAppControls(application)
+                    }
+                    .disabled(model.isBusyWithDisk)
+                }
+                .padding(12)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+            }
+            if !matching.isEmpty {
+                Text("Select the web app in your browser to remove it. Refresh this list after removal.")
+                    .font(.caption).foregroundStyle(.secondary)
+                browserRemovalActions
+            }
+        } else {
+            ProgressView("Reading web apps…")
+        }
     }
 
     // MARK: Leftovers
@@ -295,7 +377,7 @@ struct AppUninstallerView: View {
                 ForEach(UninstallerModel.UninstallerTab.allCases, id: \.self) { tab in
                     PageTabPill(
                         title: tab.rawValue,
-                        symbol: tab == .installed ? "app" : "archivebox",
+                        symbol: tab == .installed ? "app" : tab == .webApps ? "globe" : "archivebox",
                         isSelected: model.uninstaller.uninstallerTab == tab
                     ) { model.uninstaller.uninstallerTab = tab }
                 }
@@ -304,6 +386,13 @@ struct AppUninstallerView: View {
             .padding(Token.Size.pageGutter)
             if tab == .leftovers {
                 leftoversSelectionControls
+            } else if tab == .webApps {
+                PageHeader {
+                    Text("Remove web apps through their browser.")
+                } trailing: {
+                    FindField(text: $searchText, findRequest: model.findRequest)
+                        .frame(minWidth: 90, idealWidth: 180, maxWidth: 180)
+                }
             } else {
                 PageHeader {
                     installedSummaryContent

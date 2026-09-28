@@ -19,6 +19,8 @@ struct PhotoDuplicatesView: View {
         Group {
             if model.photoDuplicates.isScanning {
                 sweeping
+            } else if let access = model.photoDuplicates.unavailableAccess {
+                accessRequired(access)
             } else if let reason = model.photoDuplicates.unavailableReason {
                 unavailable(reason)
             } else if model.photoDuplicates.results == nil {
@@ -43,6 +45,10 @@ struct PhotoDuplicatesView: View {
         }
         .onChange(of: model.photoDuplicates.similarity) { _, _ in animateEmptyResult = false }
         .onDisappear { animateEmptyResult = false }
+        .onAppear { model.photoDuplicates.refreshAccess(PhotoKitLibrary.currentAccess) }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.photoDuplicates.refreshAccess(PhotoKitLibrary.currentAccess)
+        }
     }
 
     // MARK: - States
@@ -110,6 +116,37 @@ struct PhotoDuplicatesView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(model.isBusyWithDisk)
         }
+    }
+
+    private func accessRequired(_ access: PhotoLibraryAccess) -> some View {
+        centred {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 36))
+                .foregroundStyle(Token.Text.secondary)
+                .accessibilityHidden(true)
+            Text("Allow access to Photos")
+                .font(.mcStatValue)
+                .foregroundStyle(Token.Text.primary)
+                .accessibilityAddTraits(.isHeader)
+            Text(access == .restricted
+                 ? "Photo access is restricted on this Mac. Check its restrictions in System Settings."
+                 : "Scolo needs full photo access to compare your photos and find duplicates.")
+                .font(.mcBody)
+                .foregroundStyle(Token.Text.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 440)
+            PermissionRow(
+                title: "Photos",
+                detail: "Find duplicates in your photo library",
+                symbol: "photo.on.rectangle",
+                status: access == .denied ? "Enable" : "Review",
+                isEnabled: false,
+                settingsHint: "Open Photos access in System Settings",
+                action: PhotoKitLibrary.openAccessSettings
+            )
+            .frame(maxWidth: 580)
+        }
+        .padding(.horizontal, 24)
     }
 
     private var nothingFound: some View {

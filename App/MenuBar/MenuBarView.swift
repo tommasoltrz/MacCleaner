@@ -46,7 +46,7 @@ struct MenuBarView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 model.startScan()
             }
-            .disabled(model.cleanup.isScanning)
+            .disabled(model.needsOnboarding || model.isBusyWithDisk)
 
             Button("Open Scolo") {
                 // Hide the menu window before the main window requests key status.

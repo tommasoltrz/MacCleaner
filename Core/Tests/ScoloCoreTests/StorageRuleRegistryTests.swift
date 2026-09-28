@@ -113,6 +113,33 @@ struct StorageRuleRegistryTests {
         #expect(registry.resolve(URL(fileURLWithPath: "/elsewhere/cache"), home: home) == .unknown)
     }
 
+    @Test("Removal policy preserves saved data, unverified owners, and conflicting child rules")
+    func removalPolicyBoundaries() throws {
+        var parent = rule("parent", path: "Library/App", type: .userData)
+        parent.removalPolicy = .applicationData
+        let saved = rule("saved", path: "Library/App/sessions", type: .userData)
+        let owner = try #require(parent.removalOwner)
+        let registry = StorageRuleRegistry(rules: [parent, saved])
+        #expect(!registry.permitsApplicationRemoval(home.appendingPathComponent(parent.path), home: home, owner: owner))
+        #expect(!registry.permitsApplicationRemoval(home.appendingPathComponent(saved.path), home: home, owner: owner))
+        #expect(registry.permitsApplicationRemoval(home.appendingPathComponent("Library/App/settings"), home: home, owner: owner))
+        let entry = registry.classify(FileEntry(url: home.appendingPathComponent(parent.path), kind: .folder, allocatedBytes: 10),
+                                      home: home, context: ScanContext())
+        #expect(!CleanupService.removalAllowed(entry, userDataRemovalOverrides: [entry.id]))
+
+        var first = rule("first", path: "Library/App/cache")
+        first.removalPolicy = .applicationData
+        var second = first
+        second.summary = "Conflicting description"
+        let conflict = StorageRuleRegistry(rules: [parent, first, second])
+        #expect(!conflict.permitsApplicationRemoval(home.appendingPathComponent(parent.path), home: home, owner: owner))
+
+        var unverified = rule("unverified", path: "Library/App", basis: .unverified)
+        unverified.removalPolicy = .applicationData
+        #expect(unverified.removalOwner == nil)
+        #expect(saved.removalOwner == nil)
+    }
+
     @Test("Symbolic links cannot inherit a cache classification")
     func symbolicLinks() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("scolo-registry-\(UUID().uuidString)").resolvingSymlinksInPath()

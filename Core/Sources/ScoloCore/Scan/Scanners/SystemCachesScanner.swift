@@ -243,9 +243,13 @@ public struct SystemCachesScanner: CategoryScanner {
             context: context, to: &entries, unreadableCount: &unreadableCount
         )
 
+        try await appendWallpaperDownloads(
+            context: context, to: &entries, unreadableCount: &unreadableCount
+        )
+
         // Every root refused us. Say how to fix it rather than reporting an empty
         // category, which would read as "nothing to clean".
-        if reachableRoots == 0, unreadableCount > 0 {
+        if reachableRoots == 0, unreadableCount > 0, entries.isEmpty {
             return ScanCategoryResult(
                 categoryID: id,
                 availability: .unavailable(
@@ -258,11 +262,11 @@ public struct SystemCachesScanner: CategoryScanner {
 
         // Largest first, as the expanded category body lists them. It also makes the
         // result deterministic: `measureChildren` returns an unordered dictionary.
-        entries.sort { $0.allocatedBytes > $1.allocatedBytes }
+        entries.sort { $0.displayBytes > $1.displayBytes }
 
         return ScanCategoryResult(
             categoryID: id,
-            totalBytes: entries.reduce(Int64(0)) { $0 + $1.allocatedBytes },
+            totalBytes: entries.reduce(Int64(0)) { $0 + $1.displayBytes },
             entries: entries,
             availability: entries.isEmpty ? .empty : .available,
             unreadableCount: unreadableCount

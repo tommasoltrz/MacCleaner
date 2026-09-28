@@ -34,6 +34,8 @@ final class UninstallerModel {
             let count = library.selectedApplicationIDs.count
             guard count > 0 else { return "Move to Trash" }
             return "Move to Trash (\(count) \(count == 1 ? "app" : "apps"))"
+        case .webApps:
+            return "Remove in Browser"
         case .leftovers:
             return "Move Leftovers to Trash"
         }
@@ -235,6 +237,7 @@ final class UninstallerModel {
 
     enum UninstallerTab: String, CaseIterable {
         case installed = "Installed"
+        case webApps = "Web apps"
         case leftovers = "Leftovers"
     }
 

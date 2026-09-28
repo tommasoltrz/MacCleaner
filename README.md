@@ -16,6 +16,12 @@ vale README.md AGENTS.md WRITING_STYLE.md  # check project writing
 project. Change targets or build settings only in `project.yml`. XcodeGen includes
 new source files from `App/` automatically.
 
+To test setup, select the **Scolo Onboarding** scheme in Xcode.
+Run the app with **⌘R**.
+This scheme opens Welcome on every launch and preserves normal setup progress.
+Select **Scolo** to return to normal launches.
+The onboarding override applies only to Debug builds.
+
 ## Layout
 
 ```
@@ -184,6 +190,11 @@ Scolo explains the data risk and always moves these files to the Trash.
 label and did not specify its function.
 
 ## Permissions
+
+Initial setup has two steps: Welcome and Access.
+The Access step links to Full Disk Access in System Settings.
+Users can enable access or continue with limited access.
+Setup resumes after a restart. Scans start only after setup is complete.
 
 The app measures `~/Documents`, `~/Desktop` and `~/Downloads`, all TCC-gated. The
 Debug target uses the stable Apple Development identity configured in `project.yml`,

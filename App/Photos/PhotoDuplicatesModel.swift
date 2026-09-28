@@ -37,6 +37,17 @@ final class PhotoDuplicatesModel {
     private(set) var isDeleting = false
     private(set) var selection: Set<String> = []
     private(set) var unavailableReason: String?
+    private(set) var unavailableAccess: PhotoLibraryAccess?
+
+    func refreshAccess(_ access: PhotoLibraryAccess) {
+        guard unavailableAccess != nil, !isScanning else { return }
+        unavailableAccess = access.canSweep ? nil : access
+        unavailableReason = access.unavailableReason
+        if access.canSweep {
+            results = nil
+            selection.removeAll()
+        }
+    }
 
     var similarity: PhotoSimilarity {
         didSet {
@@ -78,6 +89,7 @@ final class PhotoDuplicatesModel {
         isScanning = true
         progress = nil
         unavailableReason = nil
+        unavailableAccess = nil
         selection.removeAll()
 
         scanTask = Task { [weak self] in
@@ -109,6 +121,9 @@ final class PhotoDuplicatesModel {
                 guard self.scanID == requestID, !Task.isCancelled else { return }
                 // Shown on the page, with what to do about it.
                 self.unavailableReason = Self.describe(unavailable)
+                if case .access(let access) = unavailable {
+                    self.unavailableAccess = access
+                }
             } catch is CancellationError {
                 // The user stopped it.
             } catch {

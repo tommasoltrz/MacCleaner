@@ -12,12 +12,17 @@ struct ScoloApp: App {
     init() {
         // One store, handed to the model so the engine actually receives the
         // preferences the panes edit.
-        let settings = SettingsStore()
+        #if DEBUG
+        let forceOnboarding = ProcessInfo.processInfo.environment["SCOLO_SHOW_ONBOARDING"] == "1"
+        #else
+        let forceOnboarding = false
+        #endif
+        let settings = SettingsStore(forceOnboarding: forceOnboarding)
         let model = AppModel(settings: settings)
         _settings = State(initialValue: settings)
         _model = State(initialValue: model)
         FinderUninstallRequestCenter.shared.install { [weak model] applicationURL in
-            model?.uninstaller.planAppUninstall(applicationURL)
+            model?.requestAppUninstall(applicationURL)
         }
     }
 
@@ -28,7 +33,13 @@ struct ScoloApp: App {
 
     var body: some Scene {
         Window("Scolo", id: "main") {
-            MainWindow(model: model, settings: settings)
+            Group {
+                if model.needsOnboarding {
+                    OnboardingView(settings: settings, onFinish: model.completeOnboarding)
+                } else {
+                    MainWindow(model: model, settings: settings)
+                }
+            }
                 .frame(
                     minWidth: 1000, idealWidth: Token.Size.windowWidth,
                     minHeight: 640, idealHeight: Token.Size.windowHeight
@@ -68,7 +79,7 @@ struct ScoloApp: App {
             CommandMenu("Cleanup") {
                 Button("Scan for Cleanup Items") { model.startScan() }
                     .keyboardShortcut("r")
-                    .disabled(model.isBusyWithDisk)
+                    .disabled(model.needsOnboarding || model.isBusyWithDisk)
                 Button("Stop Scan") { model.cleanup.cancelScan() }
                     .keyboardShortcut(".")
                     .disabled(!model.cleanup.isScanning)
@@ -83,8 +94,7 @@ struct ScoloApp: App {
             }
             CommandGroup(after: .appSettings) {
                 Button("Grant Full Disk Access") {
-                    let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-                    NSWorkspace.shared.open(url)
+                    FullDiskAccess.openSystemSettings()
                 }
             }
         }
