@@ -15,12 +15,8 @@ struct SidebarView: View {
     @Bindable var model: AppModel
     var headerBand: CGFloat = 0
 
-    /// The row the user just pressed, before the app has moved there.
-    ///
-    /// The pill, the accent label and the filled icon all read this first and
-    /// `model.view` second, which is what lets the highlight arrive a frame ahead of the
-    /// content. It is set on mouse down and cleared the moment the view actually changes,
-    /// so it is never more than one frame out of step with the app.
+    /// The row highlight appears before the destination content loads.
+    /// The background, label, and icon use this selection until `model.view` changes.
     @State private var pendingView: AppSection?
 
     var body: some View {
@@ -90,10 +86,6 @@ struct SidebarView: View {
                     }
                 } icon: {
                     Image(systemName: isSelected(view) ? view.selectedSymbol : view.symbol)
-                        // 18pt in the expanded sidebar. The scale is
-                        // pinned because a sidebar list sets one through
-                        // the environment and it multiplies whatever the
-                        // font says.
                         .font(.system(size: 18, weight: .regular))
                         .imageScale(.medium)
                         .frame(width: 22, alignment: .leading)
@@ -141,10 +133,8 @@ struct SidebarView: View {
     /// On a heavy section that is long enough to read as a lag, and the click feels like
     /// it was dropped. Finder moves the highlight at once and lets the content catch up.
     ///
-    /// So `pendingView` is written first, synchronously, and it drives nothing but the
-    /// sidebar: the pill, the accent label and the filled icon. That update is cheap and
-    /// commits on the next frame. `model.view`, which rebuilds the content pane, is
-    /// written on the following turn of the run loop, once that frame is out.
+    /// `pendingView` updates the sidebar background, label, and icon first.
+    /// The next run loop updates `model.view` and loads the destination content.
     ///
     /// A sleep rather than `Task.yield()`, which can resume inside the same run loop pass
     /// that handled the mouse and coalesce the two writes back into one update. One

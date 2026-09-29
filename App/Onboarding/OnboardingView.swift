@@ -36,7 +36,7 @@ struct OnboardingView: View {
                         accessDetails
                     }
                 }
-                .frame(maxWidth: 580)
+                .frame(maxWidth: 520)
                 .padding(.horizontal, 32)
                 .padding(.vertical, 24)
                 .frame(maxWidth: .infinity, minHeight: 470)
@@ -71,11 +71,10 @@ struct OnboardingView: View {
                     .interpolation(.high)
                     .scaledToFit()
             } else {
-                Image(systemName: hasFullDiskAccess ? "checkmark.shield" : "externaldrive.badge.checkmark")
+                Image(systemName: "externaldrive.badge.checkmark")
                     .font(.system(size: 42, weight: .light))
                     .foregroundStyle(Token.textColor(hasFullDiskAccess ? .green : .accent))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Token.Fill.control, in: RoundedRectangle(cornerRadius: 20))
             }
         }
         .frame(width: 80, height: 80)
@@ -86,25 +85,25 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             feature("Review before removal", symbol: "checklist",
                     detail: "Scolo groups files by type and identifies items that need your review.")
-            Divider().padding(.leading, 58)
+            Rectangle().fill(Token.Fill.boxBorder).frame(height: 1).padding(.leading, 48)
             feature("Keep control", symbol: "hand.raised",
                     detail: "You choose what to remove. Scans do not delete files.")
-            Divider().padding(.leading, 58)
+            Rectangle().fill(Token.Fill.boxBorder).frame(height: 1).padding(.leading, 48)
             feature("Recover files from Trash", symbol: "trash",
                     detail: "Cleanup moves files to Trash so you can restore them.")
         }
-        .background(Token.Fill.control, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Token.Fill.controlBorder, lineWidth: 1))
+        .background(Token.Fill.well, in: RoundedRectangle(cornerRadius: Token.Radius.card))
+        .overlay(RoundedRectangle(cornerRadius: Token.Radius.card).strokeBorder(Token.Fill.boxBorder, lineWidth: 1))
     }
 
     private func feature(_ title: String, symbol: String, detail: String) -> some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 20))
+                .font(.system(size: 18))
                 .foregroundStyle(Token.textColor(.accent))
-                .frame(width: 24)
+                .frame(width: 20)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.system(size: 14, weight: .semibold))
                 Text(detail)
                     .font(.system(size: 13))
@@ -113,7 +112,8 @@ struct OnboardingView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(18)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private var accessDetails: some View {

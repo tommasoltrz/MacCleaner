@@ -12,15 +12,15 @@ struct PermissionRow: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 Image(systemName: symbol)
-                    .font(.system(size: 22))
+                    .font(.system(size: 18))
                     .foregroundStyle(Token.textColor(.accent))
-                    .frame(width: 26)
+                    .frame(width: 20)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Token.Text.primary)
                     Text(detail)
                         .font(.system(size: 13))
@@ -29,17 +29,18 @@ struct PermissionRow: View {
                 }
                 Spacer(minLength: 8)
                 Text(status)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isEnabled ? Token.Text.secondary : Token.textColor(.accent))
                     .fixedSize()
             }
-            .padding(20)
-            .background(Token.Fill.control, in: RoundedRectangle(cornerRadius: Token.Size.panelRadius))
-            .overlay(RoundedRectangle(cornerRadius: Token.Size.panelRadius)
-                .strokeBorder(Token.Fill.controlBorder, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: Token.Size.panelRadius))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Token.Fill.well, in: RoundedRectangle(cornerRadius: Token.Radius.card))
+            .overlay(RoundedRectangle(cornerRadius: Token.Radius.card)
+                .strokeBorder(Token.Fill.boxBorder, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: Token.Radius.card))
         }
-        .buttonStyle(CardPressButtonStyle(cornerRadius: Token.Size.panelRadius))
+        .buttonStyle(CardPressButtonStyle(cornerRadius: Token.Radius.card))
         .accessibilityLabel(title)
         .accessibilityValue(status)
         .accessibilityHint(settingsHint)

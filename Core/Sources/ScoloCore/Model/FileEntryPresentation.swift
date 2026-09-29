@@ -35,6 +35,9 @@ public struct FileEntryPresentation: Sendable, Equatable {
         } else if entry.kind == .appBundle || entry.kind == .downloadedApp {
             type = entry.kind == .appBundle ? "Installed application" : "Downloaded application"
             symbol = .application
+        } else if name == ".nvm", entry.kind == .folder {
+            type = "Node.js versions and tools"
+            symbol = .node
         } else if name == "node_modules" {
             type = "Node.js dependencies"
             symbol = .node
