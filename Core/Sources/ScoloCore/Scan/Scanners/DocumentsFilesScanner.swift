@@ -1,7 +1,6 @@
 import Foundation
 
-/// **Documents & Files** — the largest things sitting in the six user folders the
-/// design names: Documents, Downloads, Desktop, Movies, Pictures and Music.
+/// Finds large items and Git worktrees in user folders and project folders.
 ///
 /// A port of the Electron `largeFiles.ts`, whose sizing carried the worst bug in the
 /// old app: every total came from `du -sk`, and `du` exits non-zero the moment it
@@ -29,9 +28,10 @@ public struct DocumentsFilesScanner: CategoryScanner {
 
     // MARK: - Roots
 
-    /// `SCAN_ROOTS`, carried over unchanged.
+    /// User folders and common project folders.
     private static let rootNames = [
-        "Documents", "Downloads", "Desktop", "Movies", "Pictures", "Music"
+        "Documents", "Downloads", "Desktop", "Movies", "Pictures", "Music",
+        "Developer", "Projects"
     ]
 
     /// `ATOMIC_DIR_NAMES`: dependency, build and history trees that mean something
@@ -190,13 +190,14 @@ public struct DocumentsFilesScanner: CategoryScanner {
                 }
                 guard completeBytes >= minimum else { continue }
 
-                entries.append(Self.entry(
+                let entry = Self.entry(
                     for: candidate,
                     bytes: measured.bytes,
                     lastOpened: lastOpened,
                     childCount: measured.childCount,
                     children: dependencyChildren
-                ))
+                )
+                entries.append(try await GitWorktreeDetector.addingWorktrees(to: entry, context: context))
             }
         }
 
@@ -342,6 +343,7 @@ public struct DocumentsFilesScanner: CategoryScanner {
         children: [FileEntry]
     ) -> FileEntry {
         let isRegenerable = candidate.isDirectory && Self.isRegenerable(candidate.url)
+            && !GitWorktreeDetector.isWorktree(candidate.url)
         return FileEntry(
             url: candidate.url,
             kind: kind(for: candidate, isRegenerable: isRegenerable),

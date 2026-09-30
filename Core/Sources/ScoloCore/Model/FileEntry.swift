@@ -141,6 +141,22 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
     /// `BuildOutputDetector.reinstallEvidence(for:)`.
     public var safetyCaveat: String?
 
+    /// Git status at scan time. A failed check does not mean the worktree is clean.
+    public enum GitWorktreeStatus: Sendable, Equatable {
+        case clean, uncommittedChanges, unavailable
+    }
+
+    public var gitWorktreeStatus: GitWorktreeStatus?
+
+    /// Compares commits with local remote-tracking data, which can be out of date.
+    public enum GitWorktreePushStatus: Sendable, Equatable {
+        case noUnpushedCommits
+        case unpushedCommits(Int)
+        case unknown
+    }
+
+    public var gitWorktreePushStatus: GitWorktreePushStatus?
+
     /// The row and its children are one thing, removed together or not at all.
     ///
     /// Children are ordinarily targets in their own right: an application's cache
@@ -186,6 +202,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         manualRemoval: ManualRemoval? = nil,
         inUseBy: RunningOwner? = nil,
         safetyCaveat: String? = nil,
+        gitWorktreeStatus: GitWorktreeStatus? = nil,
+        gitWorktreePushStatus: GitWorktreePushStatus? = nil,
         removalAction: RemovalAction? = nil,
         childCount: Int? = nil,
         children: [FileEntry] = []
@@ -202,6 +220,8 @@ public struct FileEntry: Sendable, Equatable, Identifiable {
         self.manualRemoval = manualRemoval
         self.inUseBy = inUseBy
         self.safetyCaveat = safetyCaveat
+        self.gitWorktreeStatus = gitWorktreeStatus
+        self.gitWorktreePushStatus = gitWorktreePushStatus
         self.removalAction = removalAction
         self.childCount = childCount
         self.children = children

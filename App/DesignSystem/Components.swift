@@ -180,7 +180,7 @@ struct CategoryDot: View {
 }
 
 struct Badge: View {
-    enum Style { case neutral, safe }
+    enum Style { case neutral, safe, danger, positiveOutline }
 
     let text: String
     var style: Style = .neutral
@@ -188,17 +188,37 @@ struct Badge: View {
     var body: some View {
         Text(text)
             .font(.mcBadge)
-            // The label is read, so it takes the readable green; the capsule behind it
-            // is a fill and keeps the system one.
-            .foregroundStyle(style == .safe ? Token.textColor(.green) : Token.Text.secondary)
+            // Text uses readable colors. The capsule uses a lighter fill.
+            .foregroundStyle(foreground)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
             .background(
-                style == .safe
-                    ? Token.color(.green).opacity(0.16)
-                    : Token.Fill.control,
+                background,
                 in: Capsule()
             )
+            .overlay {
+                if style == .positiveOutline {
+                    Capsule().strokeBorder(Token.textColor(.green).opacity(0.4), lineWidth: 1)
+                }
+            }
+    }
+
+    private var foreground: Color {
+        switch style {
+        case .neutral: Token.Text.secondary
+        case .safe: Token.textColor(.green)
+        case .danger: Token.textColor(.red)
+        case .positiveOutline: Token.textColor(.green).opacity(0.8)
+        }
+    }
+
+    private var background: Color {
+        switch style {
+        case .neutral: Token.Fill.control
+        case .safe: Token.color(.green).opacity(0.16)
+        case .danger: Token.color(.red).opacity(0.16)
+        case .positiveOutline: .clear
+        }
     }
 }
 
