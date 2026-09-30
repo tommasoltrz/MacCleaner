@@ -19,20 +19,22 @@ new source files from `App/` automatically.
 ## Layout
 
 ```
-Core/                    Swift package — the scanning engine, testable without a UI
-  Measure/               AllocatedSizeMeasurer, ByteFormatting
-  System/                diskutil, snapshots, process running
-  Scan/                  breakdown + category scanners + coordinator
-  Act/                   cleanup, app uninstall, leftovers, trash, history
-  Duplicates/            verified file duplicate matching and removal
-  StorageExplorer/       one-level storage accounting and reviewed removal
-  scolo-cli/             headless harness
-App/                     SwiftUI app — a thin shell over Core
-  DesignSystem/          tokens, type ramp, shared components
-  MainWindow/            sidebar, toolbar, seven primary views, sheets
-  Photos/                PhotoKit access, thumbnails and deletion
-  Preferences/           four panes + settings store
-design/                  the design handoff — spec of record, kept locally
+Core/                         Swift package
+  Sources/ScoloCore/          Scanning engine and cleanup services
+    Measure/                 AllocatedSizeMeasurer, ByteFormatting
+    System/                  Disk information, snapshots, process execution
+    Scan/                    Category scanners and scan coordination
+    Act/                     Cleanup, app uninstall, Trash, history
+    Duplicates/              File duplicate detection and removal
+    StorageExplorer/         Folder measurement and reviewed removal
+  Sources/scolo-cli/         Command-line tools
+  Tests/ScoloCoreTests/      Engine tests
+App/                          SwiftUI app
+  DesignSystem/              Shared controls, colors, and text styles
+  MainWindow/                Main views, sidebar, and sheets
+  Photos/                    PhotoKit access and thumbnails
+  Preferences/               Four panes and the settings store
+design/                       Archived design handoff, kept locally
 ```
 
 Run `swift test` to prove engine correctness before you build the interface.
@@ -76,6 +78,39 @@ rules makes the two figures different kinds of measurement. The report states "n
 comparable" and shows no numbers. Scolo keeps this history in
 `~/Library/Application Support/Scolo/storage-history/`. Preferences › Advanced
 clears it.
+
+## Scanner rows and Git worktrees
+
+The Scanner groups cleanup items. It does not show a complete folder tree.
+Projects can expand to show dependencies and Git worktrees. Applications can
+expand to show associated files. Ordinary folders stay as single rows.
+
+Child rows have a 22-point indent. Size and action columns stay aligned.
+The Safe to Remove filter can show a child as a separate row without its parent.
+These separate rows use the normal alignment.
+
+Documents & Files includes the usual user folders, `~/Developer`, and `~/Projects`.
+The Scanner detects linked Git worktrees inside project folders and hidden
+folders, including `.codex` and `.claude`. Discovery searches up to eight folder
+levels and skips dependency stores and Git metadata. Worktree rows include their
+contents once in the parent total.
+
+Worktree badges report the state at scan time:
+
+- **Uncommitted changes:** staged changes, unstaged changes, or untracked files.
+- **Unpushed commits:** commits absent from the compared remote-tracking branches.
+- **No unpushed commits:** both checks pass. This badge has muted green text and an outline.
+- **Status unavailable** or **Push status unknown:** Scolo could not complete the corresponding check.
+
+Branches use their upstream branch for comparison. Detached worktrees use all
+local remote-tracking branches. Branches without an upstream have unknown push
+status. Incomplete Git history also gives unknown push status.
+
+Checks make no network requests. Local remote data can be out of date.
+The uncommitted check excludes ignored files, which can include local settings
+or databases. Every worktree stays in Needs Review, including worktrees with
+no uncommitted changes or unpushed commits. A green outline does not mean
+Safe to Remove.
 
 ## The boot snapshot
 
@@ -169,9 +204,8 @@ the category results.
 
 ## Design
 
-`design/README.md` is the specification of record. It lives beside the code but
-is not in the repository — ask the author for it. Its pixel values describe the
-appearance of standard native controls. The app uses these stock controls. The
+`design/README.md` contains the archived design handoff. It stays outside the repository.
+Its pixel values describe the appearance of standard native controls. The app uses these stock controls. The
 platform supplies all three glass tiers. They use `.listStyle(.sidebar)`, the
 unified toolbar, and `.bar` in a `safeAreaInset`. The app does not draw gradients.
 

@@ -535,9 +535,8 @@ private struct ChildRow: View {
 
     var body: some View {
         HStack(spacing: Metrics.gap) {
-            // Indented one slot past the parent, so the hierarchy reads without a
-            // tree line.
-            Color.clear.frame(width: Metrics.disclosureSlot, height: 0)
+            // Indent child content while the trailing columns keep their positions.
+            Color.clear.frame(width: Metrics.disclosureSlot + Metrics.childIndent, height: 0)
 
             Group {
                 if isReadOnly {
@@ -1030,6 +1029,7 @@ private enum Metrics {
     static let sidePadding: CGFloat = 15
     static let gap: CGFloat = 11
     static let disclosureSlot: CGFloat = 11
+    static let childIndent: CGFloat = 22
     static let checkbox: CGFloat = 28
     static let icon: CGFloat = 22
     /// Fixed, so the dates and sizes line up down the column while the name flexes
