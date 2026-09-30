@@ -10,7 +10,7 @@ public struct FileEntryPresentation: Sendable, Equatable {
     public let summary: String
     public let icon: Icon
 
-    public init(entry: FileEntry, project: Project? = nil) {
+    public init(entry: FileEntry, project: Project? = nil, showsSafetyCaveat: Bool = true) {
         let name = entry.url.lastPathComponent.lowercased()
         let ext = entry.url.pathExtension.lowercased()
         let parentURL = entry.url.deletingLastPathComponent()
@@ -94,7 +94,7 @@ public struct FileEntryPresentation: Sendable, Equatable {
         }
 
         var detail = type + location
-        if let caveat = entry.safetyCaveat { detail += " · \(caveat)" }
+        if showsSafetyCaveat, let caveat = entry.safetyCaveat { detail += " · \(caveat)" }
         if type == "Folder", let count = entry.childCount {
             detail += " · \(count.formatted()) \(count == 1 ? "item" : "items")"
         }

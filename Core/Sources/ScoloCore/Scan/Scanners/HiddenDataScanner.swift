@@ -175,7 +175,7 @@ public struct HiddenDataScanner: CategoryScanner {
         try await appendLargeArchives(skipping: claimed, context: context, to: &found)
 
         found.entries.sort { $0.allocatedBytes > $1.allocatedBytes }
-        let total = found.entries.reduce(Int64(0)) { $0 + $1.allocatedBytes }
+        let total = found.entries.reduce(Int64(0)) { $0 + $1.displayBytes }
 
         return ScanCategoryResult(
             categoryID: id,
@@ -319,9 +319,17 @@ public struct HiddenDataScanner: CategoryScanner {
             else { continue }
 
             claimed.append(child.path)
-            try await measureAndAppend(child, kind: .folder,
-                                       minimumBytes: Threshold.hiddenDirectory,
-                                       context: context, to: &found)
+            guard !context.isExcluded(child) else { continue }
+            let measurement = try await context.measurer.measure(child)
+            found.unreadableCount += measurement.unreadableCount
+            guard !measurement.containsProtectedPattern else { continue }
+            let entry = try await GitWorktreeDetector.addingWorktrees(to: FileEntry(
+                url: child, kind: .folder, allocatedBytes: measurement.allocatedBytes,
+                lastOpened: lastOpenedDate(for: child)
+            ), context: context)
+            if entry.displayBytes >= Threshold.hiddenDirectory || !entry.children.isEmpty {
+                found.entries.append(entry)
+            }
         }
     }
 

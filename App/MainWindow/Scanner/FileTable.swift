@@ -485,6 +485,7 @@ private struct FileRow: View {
                     // said nothing at all once a single row needed review.
                     Badge(text: "safe to remove", style: .safe).fixedSize()
                 }
+                WorktreeStatusBadge(status: entry.gitWorktreeStatus, pushStatus: entry.gitWorktreePushStatus)
             }
 
             Text(presentation.summary)
@@ -580,8 +581,9 @@ private struct ChildRow: View {
                     } else if let caveat = entry.safetyCaveat {
                         Badge(text: caveat).fixedSize()
                     }
+                    WorktreeStatusBadge(status: entry.gitWorktreeStatus, pushStatus: entry.gitWorktreePushStatus)
                 }
-                Text(FileEntryPresentation(entry: entry).summary)
+                Text(FileEntryPresentation(entry: entry, showsSafetyCaveat: false).summary)
                     .font(.mcSubtitle)
                     .foregroundStyle(Token.Text.secondary)
                     .lineLimit(1)
@@ -636,8 +638,11 @@ private struct ChildRow: View {
             return "\(owner.name) is open and may be using these files, so they are "
                 + "not counted as safe. Quit it first, or let Clean Up quit it for you."
         }
-        if entry.safetyCaveat != nil {
-            // The only caveat there is, so the sentence can be specific.
+        if let caveat = entry.safetyCaveat {
+            if caveat == "Git worktree" {
+                return "Review uncommitted files before removal."
+            }
+            if caveat != "no lockfile" { return caveat }
             return "No lockfile beside it, so reinstalling may not bring back the same "
                 + "dependencies. You can still remove it. It is not counted as safe."
         }
@@ -1129,4 +1134,45 @@ private enum PreviewEntries {
     )
 
     static let all = [archive, folder, designArchive, longName, cache]
+}
+
+/// Shows the result of the most recent worktree status check.
+private struct WorktreeStatusBadge: View {
+    let status: FileEntry.GitWorktreeStatus?
+    let pushStatus: FileEntry.GitWorktreePushStatus?
+
+    var body: some View {
+        if status == .clean, pushStatus == .noUnpushedCommits {
+            Badge(text: "No unpushed commits", style: .positiveOutline)
+                .fixedSize()
+                .help("Git found no uncommitted changes or unpushed commits during the scan. "
+                    + "Ignored files were not checked. Local remote data can be out of date. "
+                    + "Review this worktree before removal.")
+        }
+        switch status {
+        case .uncommittedChanges:
+            Badge(text: "Uncommitted changes", style: .danger)
+                .fixedSize()
+                .help("Git found staged changes, unstaged changes, or untracked files during the scan.")
+        case .unavailable:
+            Badge(text: "Status unavailable")
+                .fixedSize()
+                .help("Scolo could not check Git status. Review this worktree before removal.")
+        case .clean, nil:
+            EmptyView()
+        }
+        switch pushStatus {
+        case .unpushedCommits(let count):
+            Badge(text: "Unpushed commits", style: .danger)
+                .fixedSize()
+                .help("\(count) commits are absent from the compared remote-tracking branches. "
+                    + "Detached worktrees use all remote-tracking branches. Local remote data can be out of date.")
+        case .unknown:
+            Badge(text: "Push status unknown")
+                .fixedSize()
+                .help("Scolo could not compare commits with a remote branch. No network check was made.")
+        case .noUnpushedCommits, nil:
+            EmptyView()
+        }
+    }
 }
