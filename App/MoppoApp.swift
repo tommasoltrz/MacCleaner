@@ -14,7 +14,7 @@ struct MoppoApp: App {
         // One store, handed to the model so the engine actually receives the
         // preferences the panes edit.
         let settings = SettingsStore()
-        let model = AppModel(settings: settings)
+        let model = AppModel(settings: settings, launchAccess: OnboardingView.launchAccess)
         _settings = State(initialValue: settings)
         _model = State(initialValue: model)
         FinderUninstallRequestCenter.shared.install { [weak model] applicationURL in
@@ -29,7 +29,7 @@ struct MoppoApp: App {
 
     var body: some Scene {
         Window("Moppo", id: "main") {
-            MainWindow(model: model, settings: settings)
+            WelcomeRoot(model: model, settings: settings)
                 .frame(
                     minWidth: 1000, idealWidth: Token.Size.windowWidth,
                     minHeight: 640, idealHeight: Token.Size.windowHeight
@@ -64,31 +64,7 @@ struct MoppoApp: App {
             MenuBarLabel(volume: model.volume)
         }
         .menuBarExtraStyle(.window)
-        .commands {
-            // The design's Scan menu, with key equivalents.
-            CommandMenu("Cleanup") {
-                Button("Scan for Cleanup Items") { model.startScan() }
-                    .keyboardShortcut("r")
-                    .disabled(model.isBusyWithDisk)
-                Button("Stop Scan") { model.cancelScan() }
-                    .keyboardShortcut(".")
-                    .disabled(!model.isScanning)
-            }
-            // Replacing, not adding: the stock group is the text system's Find,
-            // Spelling and Substitutions submenus, which act on a document this app
-            // does not have — and its Find would hold ⌘F and do nothing with it.
-            CommandGroup(replacing: .textEditing) {
-                Button("Find") { model.requestFind() }
-                    .keyboardShortcut("f")
-                    .disabled(!model.canFind)
-            }
-            CommandGroup(after: .appSettings) {
-                Button("Grant Full Disk Access") {
-                    let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-                    NSWorkspace.shared.open(url)
-                }
-            }
-        }
+        .commands { MoppoCommands(model: model) }
     }
 }
 
@@ -130,7 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // With the menu bar item switched off there is nothing to become: an
         // accessory app with no status item and no window is a process the user
         // can neither see nor quit. It keeps its Dock icon instead.
-        if Self.launchedAsLoginItem, Self.menuBarItemIsVisible {
+        if Self.launchedAsLoginItem, Self.menuBarItemIsVisible,
+           !OnboardingView.launchAccess.requiresOnboarding {
             isSettlingLoginLaunch = true
             Self.setPolicy(.accessory)
             closeMainWindows()
@@ -235,5 +212,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return event.eventID == kAEOpenApplication
             && event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
                 == keyAELaunchedAsLogInItem
+    }
+}
+
+/// Keeps command updates separate from the application scene.
+private struct MoppoCommands: Commands {
+    @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        // Update menu availability without rebuilding the application scene.
+        CommandMenu("Cleanup") {
+            Button("Scan for Cleanup Items") { model.startScan() }
+                .keyboardShortcut("r")
+                .disabled(model.isShowingWelcome || model.isBusyWithDisk)
+            Button("Stop Scan") { model.cancelScan() }
+                .keyboardShortcut(".")
+                .disabled(!model.isScanning)
+        }
+        // Replace document editing commands with the application search command.
+        CommandGroup(replacing: .textEditing) {
+            Button("Find") { model.requestFind() }
+                .keyboardShortcut("f")
+                .disabled(!model.canFind)
+        }
+        CommandGroup(after: .appSettings) {
+            Button("Show Welcome Guide") {
+                model.showWelcomeGuide()
+                MainWindowPresenter.present { openWindow(id: "main") }
+            }
+            .disabled(model.isBusyWithDisk || model.isDeletingPhotos)
+            Button("Grant Full Disk Access") {
+                let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+}
+
+private struct WelcomeRoot: View {
+    @Bindable var model: AppModel
+    let settings: SettingsStore
+
+    var body: some View {
+        Group {
+            if model.isShowingWelcome {
+                OnboardingView(startsAtAccess: model.launchAccess == .diskAccess) {
+                    guard model.finishWelcomeGuide() else { return }
+                    UserDefaults.standard.set(true, forKey: "onboarding.completed")
+                }
+            } else {
+                MainWindow(model: model, settings: settings)
+            }
+        }
     }
 }

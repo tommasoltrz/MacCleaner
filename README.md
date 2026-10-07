@@ -27,6 +27,13 @@ has changed.
 and dark appearances with neutral background gradients. The menu bar uses a
 vector template image that follows the system appearance.
 
+Select the `Moppo Onboarding` scheme to show the welcome guide on every Debug run.
+This scheme passes `--show-onboarding`. It keeps saved settings and system permissions.
+The `Moppo` scheme shows the guide until you complete it and enable Full Disk Access.
+If access is missing on a later launch, Moppo shows the access step again.
+Disk scans wait until access is ready. Photos access remains a separate permission.
+Use **Moppo > Show Welcome Guide** to read the guide again.
+
 ## Layout
 
 ```

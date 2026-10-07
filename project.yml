@@ -98,6 +98,14 @@ targets:
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 
 schemes:
+  Moppo Onboarding:
+    build:
+      targets:
+        Moppo: all
+    run:
+      config: Debug
+      commandLineArguments:
+        "--show-onboarding": true
   Moppo:
     build:
       targets:
