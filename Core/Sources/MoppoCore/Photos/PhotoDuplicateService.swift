@@ -75,6 +75,11 @@ public actor PhotoDuplicateService {
 
     public var isSweeping: Bool { running != nil }
 
+    /// Requests permission without reading assets or starting a sweep.
+    public func requestAccess() async -> PhotoLibraryAccess {
+        await library.authorize()
+    }
+
     public func cancel() {
         runningCancellation?.cancel()
         running?.cancel()

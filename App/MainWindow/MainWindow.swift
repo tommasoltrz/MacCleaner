@@ -371,7 +371,7 @@ struct MainWindow: View {
         case .scanner:         return !model.cleanupSelection(in: .all).isEmpty
         case .duplicates:      return model.duplicateKind == .files
             ? !model.fileDuplicateSelection.isEmpty && !model.isScanningDuplicateFiles
-            : !model.photoSelection.isEmpty && !model.isRegroupingPhotos
+            : model.canAccessPhotos && !model.photoSelection.isEmpty && !model.isRegroupingPhotos
         case .uninstaller:     return model.uninstallerTab == .installed
             ? !model.selectedApplicationIDs.isEmpty
             : !model.selectedLeftoverIdentifiers.isEmpty && !model.isLoadingApplicationLeftovers
@@ -553,7 +553,7 @@ struct MainWindow: View {
             }
         case .duplicates:
             if model.duplicateKind == .photos,
-               model.photoResults != nil, model.photoUnavailable == nil {
+               model.canAccessPhotos, model.photoResults != nil, model.photoUnavailable == nil {
                 Button { model.startPhotoSweep() } label: {
                     Label("Scan Again", systemImage: "arrow.clockwise")
                 }
