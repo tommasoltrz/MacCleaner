@@ -14,7 +14,7 @@ struct DuplicatesView: View {
                         isSelected: model.duplicateKind == kind
                     ) { model.duplicateKind = kind }
                 }
-                if (model.duplicateKind == .photos && model.photoUnavailable == nil)
+                if (model.duplicateKind == .photos && model.canAccessPhotos && model.photoUnavailable == nil)
                     || (model.duplicateKind == .files && model.fileDuplicateResults != nil) {
                     Rectangle()
                         .fill(Token.Fill.controlBorder)

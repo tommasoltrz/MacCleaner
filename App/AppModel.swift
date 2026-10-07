@@ -2612,6 +2612,28 @@ final class AppModel {
     /// Set when a sweep could not run at all, with copy naming the remedy.
     var photoUnavailable: String?
 
+    private(set) var photoLibraryAccess: PhotoLibraryAccess?
+    private(set) var isRequestingPhotoAccess = false
+
+    var canAccessPhotos: Bool {
+        photoLibraryAccess?.canSweep == true && !isRequestingPhotoAccess
+    }
+
+    /// Requests Photos access only while the photo duplicate view is open.
+    func requestPhotoAccess() async {
+        guard view == .duplicates, duplicateKind == .photos, !isShowingWelcome,
+              !isRequestingPhotoAccess, !Task.isCancelled else { return }
+        isRequestingPhotoAccess = true
+        defer { isRequestingPhotoAccess = false }
+        let access = await photoService.requestAccess()
+        photoLibraryAccess = access
+        if !access.canSweep {
+            cancelPhotoSweep()
+            photoSelection.removeAll()
+            photoPreview = nil
+        }
+    }
+
     /// How alike the similar tier requires two photographs to be.
     ///
     /// Persisted: it is a calibration against this library, not a per-session
@@ -2681,7 +2703,7 @@ final class AppModel {
     }
 
     func startPhotoSweep() {
-        guard !isBusyWithDisk else { return }
+        guard canAccessPhotos, !isBusyWithDisk else { return }
         // Captured here rather than read inside the task: the picker is on the page
         // the sweep is running under, and results labelled with one threshold must
         // have been produced by it.
@@ -2724,7 +2746,11 @@ final class AppModel {
             } catch let unavailable as PhotoSweepUnavailable {
                 guard self.photoScanID == scanID, !Task.isCancelled else { return }
                 // Shown on the page, with what to do about it.
-                self.photoUnavailable = Self.describe(unavailable)
+                if case .access(let access) = unavailable {
+                    self.photoLibraryAccess = access
+                } else {
+                    self.photoUnavailable = Self.describe(unavailable)
+                }
             } catch is CancellationError {
                 // The user stopped it.
             } catch {
@@ -2867,7 +2893,7 @@ final class AppModel {
     }
 
     func deleteSelectedPhotos() async {
-        guard !isBusyWithDisk, !isRegroupingPhotos else { return }
+        guard canAccessPhotos, !isBusyWithDisk, !isRegroupingPhotos else { return }
         let removableIDs = Set(photoGroups.flatMap(\.removable).map(\.id))
         let ids = Array(photoSelection.intersection(removableIDs))
         guard !ids.isEmpty else { return }

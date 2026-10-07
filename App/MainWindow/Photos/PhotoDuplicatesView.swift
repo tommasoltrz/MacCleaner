@@ -18,13 +18,18 @@ struct PhotoDuplicatesView: View {
     }
 
     @Bindable var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var animateEmptyResult = false
     @State private var resultBeforeScan: Date?
     private var thumbnails: PhotoThumbnailLoader { model.photoThumbnails }
 
     var body: some View {
         Group {
-            if model.isSweepingPhotos {
+            if model.photoLibraryAccess == nil || model.isRequestingPhotoAccess {
+                ProgressView("Checking Photos access…")
+            } else if let reason = model.photoLibraryAccess?.unavailableReason {
+                unavailable(reason, canRetryScan: false)
+            } else if model.isSweepingPhotos {
                 sweeping
             } else if let reason = model.photoUnavailable {
                 unavailable(reason)
@@ -39,6 +44,10 @@ struct PhotoDuplicatesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .disabled(model.isDeletingPhotos)
         .operationResultAnimation(isRunning: model.isSweepingPhotos)
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await model.requestPhotoAccess()
+        }
         .onChange(of: model.isSweepingPhotos, initial: true) { wasRunning, isRunning in
             if isRunning {
                 resultBeforeScan = model.photoResults?.finishedAt
@@ -70,7 +79,7 @@ struct PhotoDuplicatesView: View {
                 .scanActionAnchor()
                 // The sweep refuses to start over another disk walk; say so here
                 // rather than swallowing the click.
-                .disabled(model.isBusyWithDisk)
+                .disabled(!model.canAccessPhotos || model.isBusyWithDisk)
         }
         .pageStateLayout()
     }
@@ -103,7 +112,7 @@ struct PhotoDuplicatesView: View {
         }
     }
 
-    private func unavailable(_ reason: String) -> some View {
+    private func unavailable(_ reason: String, canRetryScan: Bool = true) -> some View {
         centred {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 30))
@@ -113,9 +122,18 @@ struct PhotoDuplicatesView: View {
                 .foregroundStyle(Token.Text.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
-            Button("Try Again") { model.startPhotoSweep() }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(model.isBusyWithDisk)
+            if canRetryScan {
+                Button("Try Again") { model.startPhotoSweep() }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(!model.canAccessPhotos || model.isBusyWithDisk)
+            } else {
+                Button("Open Photos Privacy Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
+            }
         }
     }
 

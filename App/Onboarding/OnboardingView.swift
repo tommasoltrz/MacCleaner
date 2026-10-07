@@ -161,7 +161,7 @@ struct OnboardingView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if !hasFullDiskAccess {
-                Text("If access stays off, quit and reopen Moppo after you enable it. Moppo requests Photos access separately when needed.")
+                Text("If access stays off, quit and reopen Moppo after you enable it. Moppo requests Photos access when you open Duplicates > Photos.")
                     .font(.system(size: 12))
                     .foregroundStyle(Token.Text.secondary)
                     .multilineTextAlignment(.center)
