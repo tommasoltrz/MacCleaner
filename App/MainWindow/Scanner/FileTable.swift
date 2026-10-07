@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import ScoloCore
+import MoppoCore
 
 /// The expanded body of a Scanner category: a recessed well holding a column header
 /// and one row per removable thing.
@@ -95,7 +95,7 @@ struct FileTable: View {
                 message: Text(
                     "This folder can contain profiles, logins, history, and settings. "
                     + "Removing it may sign you out or reset the app. Quit the app first. "
-                    + "Scolo will always move this protected data to the Trash."
+                    + "Moppo will always move this protected data to the Trash."
                 ),
                 primaryButton: .destructive(Text("Unlock & Select")) {
                     userDataRemovalOverrides.insert(entry.id)
@@ -723,7 +723,7 @@ struct ProtectedSelectionControl: View {
                 + "You can remove its listed support files separately."
         }
         if entry.manualRemoval != nil {
-            return "Scolo cannot remove this item directly. "
+            return "Moppo cannot remove this item directly. "
                 + "Use the terminal badge to review the command."
         }
         return help
@@ -1157,7 +1157,7 @@ private struct WorktreeStatusBadge: View {
         case .unavailable:
             Badge(text: "Status unavailable")
                 .fixedSize()
-                .help("Scolo could not check Git status. Review this worktree before removal.")
+                .help("Moppo could not check Git status. Review this worktree before removal.")
         case .clean, nil:
             EmptyView()
         }
@@ -1170,7 +1170,7 @@ private struct WorktreeStatusBadge: View {
         case .unknown:
             Badge(text: "Push status unknown")
                 .fixedSize()
-                .help("Scolo could not compare commits with a remote branch. No network check was made.")
+                .help("Moppo could not compare commits with a remote branch. No network check was made.")
         case .noUnpushedCommits, nil:
             EmptyView()
         }

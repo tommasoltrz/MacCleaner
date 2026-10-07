@@ -1,4 +1,4 @@
-name: Scolo
+name: Moppo
 
 # The .xcodeproj is generated from this file — never hand-edited. Regenerate with:
 #   xcodegen generate
@@ -10,11 +10,11 @@ options:
   groupSortPosition: top
 
 packages:
-  ScoloCore:
+  MoppoCore:
     path: Core
 
 targets:
-  Scolo:
+  Moppo:
     type: application
     platform: macOS
     info:
@@ -26,22 +26,22 @@ targets:
         NSHumanReadableCopyright: ""
         # PhotoKit terminates the process if the app fetches the photo library
         # without this description.
-        NSPhotoLibraryUsageDescription: "Scolo reads your photo library to find duplicates. Nothing is deleted until you confirm it."
+        NSPhotoLibraryUsageDescription: "Moppo reads your photo library to find duplicates. Nothing is deleted until you confirm it."
         # macOS protects another app's bundle and sandbox data separately. An
         # administrator retry cannot bypass either privacy decision.
-        NSAppDataUsageDescription: "Scolo needs access to data from removed apps so it can move files that you select to the Trash."
-        NSAppBundlesUsageDescription: "Scolo needs permission to move applications that you select to the Trash."
+        NSAppDataUsageDescription: "Moppo needs access to data from removed apps so it can move files that you select to the Trash."
+        NSAppBundlesUsageDescription: "Moppo needs permission to move applications that you select to the Trash."
         NSServices:
           - NSMenuItem:
-              default: "Review Uninstall with Scolo"
+              default: "Review Uninstall with Moppo"
             NSMessage: reviewUninstall
-            NSPortName: Scolo
+            NSPortName: Moppo
             NSRequiredContext:
               NSApplicationIdentifier: com.apple.finder
             NSRestricted: true
             NSSendFileTypes:
               - com.apple.application-bundle
-            NSServiceDescription: "Open the selected application in Scolo for uninstall review."
+            NSServiceDescription: "Open the selected application in Moppo for uninstall review."
     sources:
       # Everything but the app icon, which is declared as a single file below:
       # `AppIcon.icon` is an Icon Composer bundle, and xcodegen would otherwise
@@ -54,33 +54,33 @@ targets:
       - path: App/Resources/AppIcon.icon
         type: file
     dependencies:
-      - package: ScoloCore
-        product: ScoloCore
+      - package: MoppoCore
+        product: MoppoCore
     preBuildScripts:
       - name: Require signed build
         basedOnDependencyAnalysis: false
         showEnvVars: false
         script: |
           if [ "${CODE_SIGNING_ALLOWED:-NO}" != "YES" ]; then
-            echo "error: Scolo requires code signing because macOS ties privacy grants to its signed identity."
+            echo "error: Moppo requires code signing because macOS ties privacy grants to its signed identity."
             exit 1
           fi
           case "${CODE_SIGN_IDENTITY:-}" in
             ""|"-")
-              echo "error: Scolo requires an Apple Development signing identity."
+              echo "error: Moppo requires an Apple Development signing identity."
               exit 1
               ;;
           esac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.Scolo
-        PRODUCT_NAME: Scolo
+        PRODUCT_BUNDLE_IDENTIFIER: com.tommasolaterza.Moppo
+        PRODUCT_NAME: Moppo
         MARKETING_VERSION: "0.2.0"
         CURRENT_PROJECT_VERSION: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
 
-        # Scolo must traverse the whole disk, read other volumes, and shell out
+        # Moppo must traverse the whole disk, read other volumes, and shell out
         # to diskutil. A sandboxed app cannot do any of that, and Full Disk Access is
         # granted to an unsandboxed bundle identity.
         ENABLE_APP_SANDBOX: NO
@@ -98,10 +98,10 @@ targets:
         ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: YES
 
 schemes:
-  Scolo:
+  Moppo:
     build:
       targets:
-        Scolo: all
+        Moppo: all
     run:
       config: Debug
     archive:

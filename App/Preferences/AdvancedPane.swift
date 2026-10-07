@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Preferences → Advanced: how removal behaves, the diagnostics, and the reset.
 struct AdvancedPane: View {
@@ -58,7 +58,7 @@ struct AdvancedPane: View {
             PrefDivider()
             PrefToggleRow(
                 title: "Keep Put Back receipts",
-                description: "Save original locations so Scolo can put items back from the Trash.",
+                description: "Save original locations so Moppo can put items back from the Trash.",
                 isOn: $settings.keepReceipt
             )
             // "Follow symlinks while measuring" used to live here. It was removed
@@ -147,7 +147,7 @@ struct AdvancedPane: View {
 enum RemovalLog {
 
     static var url: URL {
-        URL.libraryDirectory.appending(path: "Logs/Scolo/removals.log")
+        MoppoCore.RemovalLog().logFileURL
     }
 
     /// Tilde-abbreviated, as the design prints it.

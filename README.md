@@ -1,34 +1,45 @@
-# Scolo
+# Moppo
 
 A native macOS disk-cleanup utility, rewritten in Swift from an Electron predecessor.
 
 ## Build and run
 
 ```sh
-xcodegen generate                 # regenerates Scolo.xcodeproj from project.yml
-open Scolo.xcodeproj              # ⌘R to run
+xcodegen generate                 # regenerates Moppo.xcodeproj from project.yml
+open Moppo.xcodeproj              # ⌘R to run
 cd Core && swift test             # no Xcode needed
-swift run scolo-cli scan          # exercise the engine headlessly
+swift run moppo-cli scan          # exercise the engine headlessly
 vale README.md AGENTS.md WRITING_STYLE.md  # check project writing
 ```
 
-`project.yml` generates `Scolo.xcodeproj`, and Git ignores the generated
+`project.yml` generates `Moppo.xcodeproj`, and Git ignores the generated
 project. Change targets or build settings only in `project.yml`. XcodeGen includes
 new source files from `App/` automatically.
+
+Moppo imports preferences from the previous app identity once. Existing Moppo
+preferences take priority. When a Moppo data folder does not exist, Moppo moves
+the previous folder to the new name. This preserves caches, measurement history,
+and cleanup records for Put Back. If both folders exist, Moppo keeps them and uses
+the Moppo folder. macOS can request permissions again because the app identifier
+has changed.
+
+`App/Resources/AppIcon.icon` contains the Icon Composer source. It includes light
+and dark appearances with neutral background gradients. The menu bar uses a
+vector template image that follows the system appearance.
 
 ## Layout
 
 ```
 Core/                         Swift package
-  Sources/ScoloCore/          Scanning engine and cleanup services
+  Sources/MoppoCore/          Scanning engine and cleanup services
     Measure/                 AllocatedSizeMeasurer, ByteFormatting
     System/                  Disk information, snapshots, process execution
     Scan/                    Category scanners and scan coordination
     Act/                     Cleanup, app uninstall, Trash, history
     Duplicates/              File duplicate detection and removal
     StorageExplorer/         Folder measurement and reviewed removal
-  Sources/scolo-cli/         Command-line tools
-  Tests/ScoloCoreTests/      Engine tests
+  Sources/moppo-cli/         Command-line tools
+  Tests/MoppoCoreTests/      Engine tests
 App/                          SwiftUI app
   DesignSystem/              Shared controls, colors, and text styles
   MainWindow/                Main views, sidebar, and sheets
@@ -71,12 +82,12 @@ files and no per-file API can see it, so removing two clones frees less than the
 sum. The measurer counts hard links once. Do not change this estimate into a
 promise.
 
-**Compare only measurements that use the same rules.** Scolo stores each
+**Compare only measurements that use the same rules.** Moppo stores each
 finished measurement together with the rules that produced it. The Dashboard then
 subtracts two stored measurements and reports what grew, and where. A change to the
 rules makes the two figures different kinds of measurement. The report states "not
-comparable" and shows no numbers. Scolo keeps this history in
-`~/Library/Application Support/Scolo/storage-history/`. Preferences › Advanced
+comparable" and shows no numbers. Moppo keeps this history in
+`~/Library/Application Support/Moppo/storage-history/`. Preferences › Advanced
 clears it.
 
 ## Scanner rows and Git worktrees
@@ -100,7 +111,7 @@ Worktree badges report the state at scan time:
 - **Uncommitted changes:** staged changes, unstaged changes, or untracked files.
 - **Unpushed commits:** commits absent from the compared remote-tracking branches.
 - **No unpushed commits:** both checks pass. This badge has muted green text and an outline.
-- **Status unavailable** or **Push status unknown:** Scolo could not complete the corresponding check.
+- **Status unavailable** or **Push status unknown:** Moppo could not complete the corresponding check.
 
 Branches use their upstream branch for comparison. Detached worktrees use all
 local remote-tracking branches. Branches without an upstream have unknown push
@@ -127,7 +138,7 @@ seven tests provide more protection.
 
 ## Deliberate limitations
 
-**Put Back only restores what Scolo trashed.** macOS exposes no API for the
+**Put Back only restores what Moppo trashed.** macOS exposes no API for the
 original location of a trashed item. Finder stores this location privately. Items
 from Finder have a disabled button and an explanatory tooltip.
 
@@ -141,11 +152,11 @@ alone, it made every row show "Never opened". The design treats this label as th
 strongest safe-to-delete signal. The app now falls back through modification dates.
 It uses `nil` only when the date is unknown.
 
-**File duplicate scans use selected folders.** Scolo narrows candidates by size,
+**File duplicate scans use selected folders.** Moppo narrows candidates by size,
 sampled SHA-256, and full SHA-256. It then compares the bytes before it reports a
 match. The app skips hard links, hidden files, exclusions, and cloud-only files. It
 does not compare documents that macOS saves as packages, such as Pages and Keynote
-files. Scolo does not select any file automatically. Each set keeps
+files. Moppo does not select any file automatically. Each set keeps
 one copy, and selected copies move to the Trash.
 
 APFS clones can share storage. Therefore, the available space for duplicate files
@@ -156,18 +167,18 @@ in each group and requires a review before deletion.
 
 **Storage Explorer measures one folder level at a time.** Each row includes all
 allocated bytes below that item. Hard links count once across sibling rows.
-Scolo protects system locations, applications, managed media libraries, volumes,
+Moppo protects system locations, applications, managed media libraries, volumes,
 exclusions, cloud-only files, and items with unreadable contents. Alias targets do
 not count towards a row. A mounted volume is separate from its parent. Reviewed
-unlocked items move to the Trash. Scolo refreshes each selected size and checks
+unlocked items move to the Trash. Moppo refreshes each selected size and checks
 each file identity before it shows the removal confirmation. Use List for exact
 rows. Use Map to compare direct-child sizes visually.
 
-**Automatic scanning is process-resident.** Scolo evaluates daily and weekly
+**Automatic scanning is process-resident.** Moppo evaluates daily and weekly
 schedules while it runs. This includes menu-bar-only login launches. No separate
 launch daemon wakes the application after a full quit.
 
-**Low-space notifications are process-resident too.** Scolo checks the live
+**Low-space notifications are process-resident too.** Moppo checks the live
 volume total on launch, after its own storage operations, and every five minutes
 while running. It warns on a transition below the threshold in General settings,
 persists that state across launches, and limits repeated crossings to one per day.
@@ -176,14 +187,14 @@ persists that state across launches, and limits repeated crossings to one per da
 attributes related files from the selected app's verified identity.
 
 **Finder only starts an uninstall review.** Select one application in Finder. Then
-choose Services › Review Uninstall with Scolo. Scolo opens the existing
+choose Services › Review Uninstall with Moppo. Moppo opens the existing
 App Uninstaller review. The Finder action never removes files.
 
 **Application Leftovers uses strict ownership rules.** The Scanner finds exact
 bundle-identifier paths and roots from curated app rules. It ignores loose name
 matches and shared containers. It keeps exclusions, keychains, ambiguous paths,
 and files for installed applications protected. Safe to Remove includes each
-verified application group. Scolo checks the owner and the file identity
+verified application group. Moppo checks the owner and the file identity
 again before removal.
 
 **The app does not include "Storage Report…".** The design specified only its
@@ -197,8 +208,8 @@ so TCC grants survive rebuilds. Do not validate the app with
 `CODE_SIGNING_ALLOWED=NO`: that replaces the Debug product with an ad-hoc identity
 and macOS correctly asks for access again. The app target rejects unsigned builds.
 
-Scolo stores the last breakdown at
-`~/Library/Application Support/Scolo/breakdown-cache.json`. This data seeds the
+Moppo stores the last breakdown at
+`~/Library/Application Support/Moppo/breakdown-cache.json`. This data seeds the
 initial layout. The Dashboard refreshes it at launch. A scan also refreshes it with
 the category results.
 

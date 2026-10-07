@@ -1,0 +1,265 @@
+import Foundation
+import Testing
+@testable import MoppoCore
+
+/// `SystemCachesScanner.scan` against a fixture home, for its third root.
+///
+/// `~/.cache` came here from Hidden & System Data on 20 Sep 2026. That category
+/// shipped switched off, so on a default install nothing under `~/.cache` was offered
+/// at all, and where it was offered it was one row: 4.07 GB on this Mac, holding
+/// uv's cache, a Codex runtime with its binaries, and Hugging Face models.
+@Suite("System Caches: ~/.cache")
+struct SystemCachesScanTests {
+
+    private final class Sandbox {
+        let home: URL
+        init() throws {
+            home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("moppo-syscache-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        }
+        deinit { try? FileManager.default.removeItem(at: home) }
+
+        @discardableResult
+        func file(_ relative: String, bytes: Int = 2 * 1024 * 1024) throws -> URL {
+            let url = home.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(count: bytes).write(to: url)
+            return url
+        }
+
+        /// The Cache Directory Tagging Specification's marker, as `uv` writes it.
+        func tag(_ directory: String, signature: String = CacheDirectoryTag.signature) throws {
+            let url = home.appendingPathComponent(directory).appendingPathComponent("CACHEDIR.TAG")
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data((signature + "\n# This file is a cache directory tag.\n").utf8).write(to: url)
+        }
+
+        func scanner() -> SystemCachesScanner {
+            SystemCachesScanner(
+                cachesRoot: home.appendingPathComponent("Library/Caches"),
+                logsRoot: home.appendingPathComponent("Library/Logs"),
+                dotCacheRoot: home.appendingPathComponent(".cache"),
+                containersRoot: home.appendingPathComponent("Library/Containers"),
+                systemApplicationDirectories: [home.appendingPathComponent("System/Applications")],
+                applicationSupportRoot: home.appendingPathComponent("Library/Application Support")
+            )
+        }
+
+        /// A bundle in the fixture's `/System/Applications`, real enough for
+        /// `Bundle(url:)` to read an identifier out of it.
+        func systemApplication(_ name: String, identifier: String) throws {
+            let plist = home.appendingPathComponent("System/Applications/\(name).app/Contents/Info.plist")
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleIdentifier": identifier, "CFBundleName": name,
+                                   "CFBundlePackageType": "APPL"],
+                format: .xml, options: 0
+            ).write(to: plist)
+        }
+    }
+
+    @Test("~/.cache is listed by what is in it, never as one row")
+    func dotCacheIsListedByChild() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file(".cache/sometool/index.bin", bytes: 3 * 1024 * 1024)
+        try sandbox.file(".cache/runtime/bin/engine", bytes: 5 * 1024 * 1024)
+        try sandbox.file(".cache/loose.log", bytes: 2 * 1024 * 1024)
+
+        let result = try await sandbox.scanner().scan(context: ScanContext())
+
+        #expect(result.entries.map(\.url.lastPathComponent) == ["runtime", "sometool", "loose.log"],
+                "largest first")
+        // The parts are the folder, once.
+        let whole = try await AllocatedSizeMeasurer()
+            .measure(sandbox.home.appendingPathComponent(".cache"))
+        #expect(result.totalBytes == whole.allocatedBytes)
+    }
+
+    /// Sitting under `~/.cache` is where a tool *may* put a cache. `CACHEDIR.TAG` is
+    /// the tool saying that it has. In this category the difference is not a badge:
+    /// it decides what is counted safe and ticked for the user.
+    @Test("under ~/.cache only a folder carrying its tool's tag is safe; the rest needs review")
+    func safeNeedsTheCacheDirectoryTag() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file(".cache/tagged/wheels/pkg.whl", bytes: 4 * 1024 * 1024)
+        try sandbox.tag(".cache/tagged")
+        try sandbox.file(".cache/untagged/bin/engine")
+        // Hugging Face tags `hub`, one level down. The row is the whole folder, which
+        // also holds logs and a second store, so the row is not the tagged thing.
+        try sandbox.file(".cache/models/hub/blobs/weights")
+        try sandbox.tag(".cache/models/hub")
+        // A file called CACHEDIR.TAG proves nothing; the signature does.
+        try sandbox.file(".cache/forged/data.bin")
+        try sandbox.tag(".cache/forged", signature: "Signature: not-the-real-one")
+        // The system's own cache folder needs no tag: that is what the folder is for.
+        try sandbox.file("Library/Caches/com.example.app/blob", bytes: 3 * 1024 * 1024)
+
+        let result = try await sandbox.scanner().scan(context: ScanContext())
+        func row(_ name: String) throws -> FileEntry {
+            try #require(result.entries.first { $0.url.lastPathComponent == name })
+        }
+
+        #expect(try row("tagged").isRegenerable)
+        #expect(try row("com.example.app").isRegenerable)
+        #expect(try !row("untagged").isRegenerable)
+        #expect(try !row("models").isRegenerable)
+        #expect(try !row("forged").isRegenerable)
+
+        let safe = Set(result.tileRows(safeToRemove: true).map(\.url.lastPathComponent))
+        #expect(safe == ["tagged", "com.example.app"])
+        let review = Set(result.tileRows(safeToRemove: false).map(\.url.lastPathComponent))
+        #expect(review == ["untagged", "models", "forged"])
+        #expect(result.safeToRemoveBytes + result.needsReviewBytes == result.totalBytes)
+    }
+
+    @Test("a cache that Package Manager Caches claims is left to it")
+    func packageManagerCachesAreSkipped() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file(".cache/uv/wheels-v6/pkg.whl", bytes: 4 * 1024 * 1024)
+        try sandbox.tag(".cache/uv")
+        try sandbox.file(".cache/other/blob", bytes: 3 * 1024 * 1024)
+
+        let system = try await sandbox.scanner().scan(context: ScanContext())
+        let packages = try await PackageManagerScanner(home: sandbox.home)
+            .scan(context: ScanContext())
+
+        #expect(system.entries.map(\.url.lastPathComponent) == ["other"])
+        #expect(packages.entries.map(\.displayName) == ["uv cache"])
+        #expect(packages.safeToRemoveBytes == packages.totalBytes)
+    }
+
+    @Test("an excluded child of ~/.cache is not listed, and the rest still is")
+    func excludedChildIsSkipped() async throws {
+        let sandbox = try Sandbox()
+        let kept = try sandbox.file(".cache/keep/blob").deletingLastPathComponent()
+        try sandbox.file(".cache/offer/blob")
+
+        let result = try await sandbox.scanner()
+            .scan(context: ScanContext(excludedPaths: [kept.standardizedFileURL.path]))
+
+        #expect(result.entries.map(\.url.lastPathComponent) == ["offer"])
+    }
+
+    /// "Everything in ~/Library/Caches regenerates" is true, and for one family it is
+    /// the wrong question. What Apple's account and identity daemons regenerate is
+    /// an *authorization*, which they get by going back to the login keychain — the
+    /// storm of "… wants to use the login keychain" prompts. Nine of these folders
+    /// were on this Mac on 20 Sep 2026, every one offered as safe and ticked.
+    @Test("the account and identity daemons' caches are never offered")
+    func identityCachesAreNotOffered() async throws {
+        let sandbox = try Sandbox()
+        for name in [
+            "com.apple.akd", "com.apple.accountsd", "com.apple.appleaccountd",
+            "com.apple.amsaccountsd", "com.apple.itunescloudd", "com.apple.icloudwebd",
+            "com.apple.iCloudNotificationAgent",
+            "com.apple.AuthenticationServicesCore.AuthenticationServicesAgent",
+            "PassKit",
+            // macOS refuses to remove these two even with Full Disk Access.
+            "CloudKit", "FamilyCircle",
+            // Not on any list: refused for what its name says it is.
+            "com.apple.SomeFutureAuthKitHelper"
+        ] {
+            try sandbox.file("Library/Caches/\(name)/state.db")
+        }
+        try sandbox.file("Library/Caches/com.apple.helpd/index")
+        try sandbox.file("Library/Caches/com.example.app/blob")
+        // A log is a log, whoever wrote it.
+        try sandbox.file("Library/Logs/com.apple.akd/today.log")
+
+        let result = try await sandbox.scanner().scan(context: ScanContext())
+
+        #expect(Set(result.entries.map(\.url.lastPathComponent))
+            == ["com.apple.helpd", "com.example.app", "com.apple.akd"])
+        #expect(result.entries.first { $0.url.lastPathComponent == "com.apple.akd" }?
+            .url.path.contains("/Library/Logs/") == true)
+    }
+
+    /// Podcasts, Music, TV and Mail live in `/System/Applications`, which the
+    /// Applications scanner does not list, so their sandboxed caches — often the
+    /// largest caches on a Mac that has never seen a developer tool — had no row.
+    @Test("a system application's container cache is a review row named for the app")
+    func systemApplicationContainerCaches() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.systemApplication("Podcasts", identifier: "com.apple.podcasts")
+        try sandbox.systemApplication("Passwords", identifier: "com.apple.Passwords")
+        let caches = "Data/Library/Caches"
+        try sandbox.file("Library/Containers/com.apple.podcasts/\(caches)/episodes/ep1.mp3",
+                         bytes: 9 * 1024 * 1024)
+        try sandbox.file("Library/Containers/com.apple.podcasts/Data/Documents/library.sqlite")
+        // A system application, and never offered: see `IdentityState`.
+        try sandbox.file("Library/Containers/com.apple.Passwords/\(caches)/icons/a.png")
+        // An agent's container. Nothing in /System/Applications answers to it.
+        try sandbox.file("Library/Containers/com.apple.CalendarAgent/\(caches)/blob")
+        // A third party's: the Applications scanner or Application Leftovers owns it.
+        try sandbox.file("Library/Containers/com.vendor.app/\(caches)/blob")
+
+        let result = try await sandbox.scanner().scan(context: ScanContext(
+            runningApplications: [FileEntry.RunningOwner(
+                name: "Podcasts", bundleIdentifier: "com.apple.podcasts",
+                bundlePath: "/System/Applications/Podcasts.app"
+            )]
+        ))
+
+        let row = try #require(result.entries.first)
+        #expect(result.entries.count == 1)
+        #expect(row.displayName == "Podcasts · episodes")
+        #expect(row.url.path.hasSuffix("com.apple.podcasts/Data/Library/Caches/episodes"))
+        // Review only. Music's cache is read by an agent that outlives Music, and no
+        // list of open applications shows an agent.
+        #expect(!row.isRegenerable && !row.isRemovalLocked)
+        #expect(row.inUseBy?.name == "Podcasts")
+        #expect(result.safeToRemoveBytes == 0)
+        #expect(result.needsReviewBytes == row.allocatedBytes)
+    }
+
+    /// Premiere Pro and After Effects keep rendered previews and conformed audio
+    /// outside `~/Library/Caches`, where no cache sweep looks, and they run to tens
+    /// of gigabytes on a machine that edits video.
+    @Test("Adobe's media cache is two safe rows, held while any Adobe application is open")
+    func adobeMediaCache() async throws {
+        let sandbox = try Sandbox()
+        let common = "Library/Application Support/Adobe/Common"
+        try sandbox.file("\(common)/Media Cache Files/clip.cfa", bytes: 9 * 1024 * 1024)
+        try sandbox.file("\(common)/Media Cache/index.mcdb", bytes: 3 * 1024 * 1024)
+        // Beside them, and not a cache: what the user installed and configured.
+        try sandbox.file("\(common)/Plug-ins/7.0/MediaCore/filter.plugin", bytes: 4 * 1024 * 1024)
+        try sandbox.file("Library/Application Support/Adobe/Premiere Pro/24.0/Profile/prefs")
+
+        let closed = try await sandbox.scanner().scan(context: ScanContext())
+        #expect(closed.entries.map(\.displayName)
+            == ["Adobe media cache files", "Adobe media cache database"])
+        #expect(closed.entries.allSatisfy { $0.isRegenerable })
+        #expect(closed.safeToRemoveBytes == closed.totalBytes)
+        // The two folders and nothing around them: `Common` also holds the plug-ins.
+        #expect(closed.entries.map(\.url.lastPathComponent) == ["Media Cache Files", "Media Cache"])
+        #expect(closed.totalBytes < 13 * 1024 * 1024, "nine and three, not the four beside them")
+
+        // The identifier carries the year: `com.adobe.PremierePro.24`.
+        let open = try await sandbox.scanner().scan(context: ScanContext(
+            runningApplications: [FileEntry.RunningOwner(
+                name: "Adobe Premiere Pro 2024", bundleIdentifier: "com.adobe.PremierePro.24",
+                bundlePath: "/Applications/Adobe Premiere Pro 2024/Adobe Premiere Pro 2024.app"
+            )]
+        ))
+        #expect(open.entries.allSatisfy { $0.inUseBy?.name == "Adobe Premiere Pro 2024" })
+        #expect(open.safeToRemoveBytes == 0)
+    }
+
+    @Test("a Mac with no ~/.cache is an ordinary Mac")
+    func missingDotCacheIsNotAnError() async throws {
+        let sandbox = try Sandbox()
+        try sandbox.file("Library/Caches/com.example.app/blob")
+
+        let result = try await sandbox.scanner().scan(context: ScanContext())
+
+        #expect(result.availability == .available)
+        #expect(result.entries.map(\.url.lastPathComponent) == ["com.example.app"])
+    }
+}

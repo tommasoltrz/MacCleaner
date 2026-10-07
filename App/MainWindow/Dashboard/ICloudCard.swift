@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import ScoloCore
+import MoppoCore
 
 /// Compact iCloud usage beside the cleanup totals.
 struct ICloudCard: View {

@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The preferences window: four tabs behind ⌘,.
 ///

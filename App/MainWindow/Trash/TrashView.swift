@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The Trash: what is in it, how much it is holding, and the one destructive button
 /// in the app.
@@ -280,12 +280,12 @@ private struct TrashRow: View {
     }
 
     /// macOS publishes no API for where a trashed item came from — Finder keeps that
-    /// privately — so Scolo can only restore what its own removal log recorded.
+    /// privately — so Moppo can only restore what its own removal log recorded.
     /// Anything dragged in from Finder is Finder's to put back.
     private var putBackHelp: String {
         item.canPutBack
-            ? "Move this back to the folder Scolo removed it from."
-            : "Scolo did not move this to the Trash, and macOS does not say where a trashed item came from. Use Finder's Put Back for this one."
+            ? "Move this back to the folder Moppo removed it from."
+            : "Moppo did not move this to the Trash, and macOS does not say where a trashed item came from. Use Finder's Put Back for this one."
     }
 
     /// `nil` renders as no caption rather than an invented date.

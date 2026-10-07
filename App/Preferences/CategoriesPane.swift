@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Preferences → Categories: which categories the Scanner is allowed to measure.
 struct CategoriesPane: View {

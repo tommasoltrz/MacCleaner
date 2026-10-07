@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Shows removal progress and keeps the result visible until the user continues.
 struct CleanupOperationView: View {

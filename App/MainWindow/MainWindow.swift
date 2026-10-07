@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The main window: a shell, with panels laid on it.
 ///
@@ -100,7 +100,7 @@ struct MainWindow: View {
             Button("Not Now", role: .cancel) {}
         } message: {
             Text(
-                "Scolo could not move files from another app's container. "
+                "Moppo could not move files from another app's container. "
                     + "Allow access to other application data. Then try again."
             )
         }

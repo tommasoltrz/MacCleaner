@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Confirms permanent erasure or cleanup that needs user review.
 struct ConfirmationSheet: View {

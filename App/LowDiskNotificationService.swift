@@ -1,6 +1,6 @@
 import Foundation
 import UserNotifications
-import ScoloCore
+import MoppoCore
 
 /// Bridges the pure threshold policy to Notification Center.
 ///
@@ -9,7 +9,7 @@ import ScoloCore
 /// not ask again after a denial.
 @MainActor
 final class LowDiskNotificationService {
-    nonisolated static let notificationIdentifier = "com.tommasolaterza.Scolo.low-disk"
+    nonisolated static let notificationIdentifier = "com.tommasolaterza.Moppo.low-disk"
 
     private let center: UNUserNotificationCenter
     private let defaults: UserDefaults

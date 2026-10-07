@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Cleanup totals and iCloud usage share one row.
 struct StatTiles: View {

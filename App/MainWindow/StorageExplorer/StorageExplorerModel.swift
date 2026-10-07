@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import ScoloCore
+import MoppoCore
 import Observation
 
 struct StorageExplorerLocation: Identifiable, Hashable {
@@ -103,7 +103,7 @@ final class StorageExplorerModel {
     func chooseFolder() {
         let panel = NSOpenPanel()
         panel.title = "Choose a Folder"
-        panel.message = "Scolo will measure the folder and its immediate contents."
+        panel.message = "Moppo will measure the folder and its immediate contents."
         panel.prompt = "Explore"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

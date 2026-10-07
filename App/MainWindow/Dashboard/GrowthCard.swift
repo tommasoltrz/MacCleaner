@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The Dashboard's "what grew" card: what changed since a dated measurement, and
 /// where.
@@ -18,7 +18,7 @@ struct GrowthCard: View {
     /// Everything the card draws.
     ///
     /// Deliberately not ``GrowthComparison`` itself. A report carries the two stored
-    /// measurements, and a measurement cannot be built outside `ScoloCore` —
+    /// measurements, and a measurement cannot be built outside `MoppoCore` —
     /// `VolumeInfo` has no public initializer — so a preview would have nothing to
     /// show. The card needs the figures, not the snapshots they came from.
     enum Presentation: Equatable {

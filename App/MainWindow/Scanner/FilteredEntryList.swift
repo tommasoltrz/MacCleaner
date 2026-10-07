@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The line above the Scanner's outline when a tab narrows it: how much that tab
 /// holds, and what the tab means.

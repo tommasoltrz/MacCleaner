@@ -4,25 +4,25 @@ import PackageDescription
 // The scanning engine lives here, deliberately separate from the app target, so it
 // can be built and tested headlessly with `swift test` — no Xcode, no signing, no UI.
 let package = Package(
-    name: "ScoloCore",
+    name: "MoppoCore",
     platforms: [.macOS("15.0")],
     products: [
-        .library(name: "ScoloCore", targets: ["ScoloCore"]),
-        .executable(name: "scolo-cli", targets: ["scolo-cli"])
+        .library(name: "MoppoCore", targets: ["MoppoCore"]),
+        .executable(name: "moppo-cli", targets: ["moppo-cli"])
     ],
     targets: [
         .target(
-            name: "ScoloCore",
+            name: "MoppoCore",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
-            name: "scolo-cli",
-            dependencies: ["ScoloCore"],
+            name: "moppo-cli",
+            dependencies: ["MoppoCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
-            name: "ScoloCoreTests",
-            dependencies: ["ScoloCore"],
+            name: "MoppoCoreTests",
+            dependencies: ["MoppoCore"],
             // Recorded `diskutil -plist` output, read directly from #filePath.
             exclude: ["Fixtures"],
             swiftSettings: [.swiftLanguageMode(.v6)]
