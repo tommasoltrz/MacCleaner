@@ -19,11 +19,27 @@ final class AppModel {
     /// previews and tests can build a model without a store.
     @ObservationIgnored var settings: SettingsStore?
     let storageExplorer: StorageExplorerModel
+    private(set) var launchAccess: LaunchAccess
+    var isShowingWelcome: Bool { launchAccess.requiresOnboarding }
 
-    init(settings: SettingsStore? = nil) {
+    init(settings: SettingsStore? = nil, launchAccess: LaunchAccess = .ready) {
         self.settings = settings
+        self.launchAccess = launchAccess
         self.storageExplorer = StorageExplorerModel(settings: settings)
         startScheduler()
+    }
+
+    func showWelcomeGuide() {
+        launchAccess = .welcome
+    }
+
+    func finishWelcomeGuide() -> Bool {
+        launchAccess.finishOnboarding(hasFullDiskAccess: FullDiskAccess.isGranted)
+    }
+
+    /// Returns to the access guide before a scan can request folder permissions.
+    func checkDiskAccess() -> Bool {
+        launchAccess.authorizeScan(hasFullDiskAccess: FullDiskAccess.isGranted)
     }
 
     // MARK: - Automatic scanning
@@ -41,6 +57,7 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.schedulerTick)
                 guard let self, !Task.isCancelled else { return }
+                guard self.checkDiskAccess() else { continue }
                 await self.refreshVolumeInfo()
                 if self.scheduledScanIsDue() {
                     // Automatic: the view does not jump to the Scanner under
@@ -300,6 +317,7 @@ final class AppModel {
 
     /// Scan on entry when no current results remain.
     func startInitialCleanupScan() {
+        guard checkDiskAccess() else { return }
         guard view == .scanner, scanResults == nil, !hasStartedInitialCleanupScan,
               cleanupCompletion == nil, !isBusyWithDisk else { return }
         hasStartedInitialCleanupScan = true
@@ -897,6 +915,7 @@ final class AppModel {
     /// Opens the dedicated review for an installed application. Called by the
     /// Uninstaller's picker/drop target and by “Uninstall App…” on scanner rows.
     func planAppUninstall(_ applicationURL: URL) {
+        guard checkDiskAccess() else { return }
         appUninstallTask?.cancel()
         appUninstallPlan = nil
         appUninstallOutcome = nil
@@ -2055,6 +2074,7 @@ final class AppModel {
     /// The cache supplies the first frame but does not replace measurement.
     /// Stable build signing now keeps the TCC grant across launches.
     func loadDashboard() async {
+        guard checkDiskAccess() else { return }
         // A recreated main window runs this task again. Treat that refresh like the
         // first one too, rather than briefly presenting cached values as final.
         hasCompletedInitialDashboardLoad = false
@@ -2084,6 +2104,7 @@ final class AppModel {
     ///   snapshot, and `removal` is the one "since the last clean-up" reads, so a
     ///   wrong trigger costs the user a baseline rather than a figure.
     func measureStorage(trigger: SnapshotTrigger = .manual) async {
+        guard checkDiskAccess() else { return }
         guard !isLoadingBreakdown else {
             if trigger == .removal { needsPostCleanupMeasurement = true }
             return
@@ -2262,6 +2283,7 @@ final class AppModel {
     ///   must not steal the view they are looking at; the status bar and the
     ///   toolbar's progress readout say it is running.
     func startScan(automatic: Bool = false, refreshOverview: Bool = true) {
+        guard checkDiskAccess() else { return }
         // Not during a removal either: a scan replaces the results the removal
         // is about to edit, and the scheduler can fire at any moment.
         guard !isBusyWithDisk else { return }

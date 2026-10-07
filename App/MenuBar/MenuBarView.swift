@@ -46,7 +46,7 @@ struct MenuBarView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 model.startScan()
             }
-            .disabled(model.isScanning)
+            .disabled(model.isShowingWelcome || model.isScanning)
 
             Button("Open Moppo") {
                 // Hide the menu window before the main window requests key status.

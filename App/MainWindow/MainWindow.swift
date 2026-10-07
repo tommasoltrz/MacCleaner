@@ -86,6 +86,7 @@ struct MainWindow: View {
         // in Finder, doing things this snapshot cannot know about.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                guard model.checkDiskAccess() else { return }
                 model.pruneVanishedEntries()
                 model.startInitialCleanupScan()
             }
