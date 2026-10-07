@@ -3,7 +3,7 @@ import AppKit
 import CoreGraphics
 import IOKit.ps
 import Observation
-import ScoloCore
+import MoppoCore
 
 /// The design's `State Management` block, as one observable object.
 ///
@@ -423,9 +423,9 @@ final class AppModel {
                 return "\(ByteFormatting.string(bytes)). Each copy and its keeper are "
                     + "verified byte for byte before it goes, so large files take a moment."
             case .waitingForApplicationsToQuit:
-                return "Save your work if an app asks. Scolo waits for the apps to close."
+                return "Save your work if an app asks. Moppo waits for the apps to close."
             case .reviewingStorageItems:
-                return "Scolo is checking the selected items before moving them to the Trash."
+                return "Moppo is checking the selected items before moving them to the Trash."
             case .uninstalling(_, let applicationOnly, let waiting):
                 if waiting {
                     return "The application and its helpers are asked to quit. "
@@ -501,7 +501,7 @@ final class AppModel {
                 } else if !review.protectedPaths.isEmpty {
                     report(
                         "Some Items Are Protected",
-                        "Scolo will not remove some of the selected items. "
+                        "Moppo will not remove some of the selected items. "
                             + "Review the list and try again."
                     )
                 } else {
@@ -521,7 +521,7 @@ final class AppModel {
             activity = nil
             report(
                 "The Selection Could Not Be Checked",
-                "Scolo could not check the selected items. Nothing was removed."
+                "Moppo could not check the selected items. Nothing was removed."
             )
         }
     }
@@ -1626,8 +1626,8 @@ final class AppModel {
     /// `RunningOwner`.
     ///
     /// Ordinary Dock applications only. The first real scan named "Siri" as an
-    /// owner — a background agent — and by the same reading Finder, or Scolo's own
-    /// cache folder, would put Finder or Scolo on the list "Quit and Clean" works
+    /// owner — a background agent — and by the same reading Finder, or Moppo's own
+    /// cache folder, would put Finder or Moppo on the list "Quit and Clean" works
     /// through. An owner is something the user opened and can close.
     static func currentRunningOwners() -> [FileEntry.RunningOwner] {
         NSWorkspace.shared.runningApplications.compactMap { application in
@@ -1735,7 +1735,7 @@ final class AppModel {
                 let names = ListFormatter.localizedString(byJoining: stragglers.map(\.name))
                 report(
                     "Nothing Was Removed",
-                    "\(names) did not quit, so Scolo stopped before touching anything. "
+                    "\(names) did not quit, so Moppo stopped before touching anything. "
                         + "Quit it yourself and try Clean Up again."
                 )
                 return
@@ -1981,7 +1981,7 @@ final class AppModel {
             // like, and the permission is the fix.
             report(
                 "The Trash Could Not Be Read",
-                "Grant Scolo Full Disk Access in System Settings, Privacy & Security, "
+                "Grant Moppo Full Disk Access in System Settings, Privacy & Security, "
                     + "then try again."
             )
         }
@@ -2228,7 +2228,7 @@ final class AppModel {
     func revealGrowth(_ attribution: GrowthAttribution) {
         guard !isBusyWithDisk else {
             report(
-                "Scolo Is Already Measuring",
+                "Moppo Is Already Measuring",
                 "Wait for the measurement in progress to finish, then open the folder."
             )
             return
@@ -2362,7 +2362,7 @@ final class AppModel {
             } catch {
                 self.report(
                     "The Scan Did Not Finish",
-                    "Scolo could not finish measuring. Nothing was removed; try scanning again."
+                    "Moppo could not finish measuring. Nothing was removed; try scanning again."
                 )
             }
             try? await presentation.wait()
@@ -2413,7 +2413,7 @@ final class AppModel {
     func chooseFileDuplicateFolders() {
         let panel = NSOpenPanel()
         panel.title = "Choose Folders to Scan"
-        panel.message = "Scolo compares the contents of files in these folders."
+        panel.message = "Moppo compares the contents of files in these folders."
         panel.prompt = "Scan"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -2465,7 +2465,7 @@ final class AppModel {
             } catch {
                 report(
                     "The Duplicate Scan Did Not Finish",
-                    "Scolo could not finish comparing those folders. Try scanning again."
+                    "Moppo could not finish comparing those folders. Try scanning again."
                 )
             }
             try? await presentation.wait()
@@ -2709,7 +2709,7 @@ final class AppModel {
                 guard self.photoScanID == scanID, !Task.isCancelled else { return }
                 self.report(
                     "The Photo Sweep Did Not Finish",
-                    "Scolo could not finish comparing the library. Nothing was deleted; "
+                    "Moppo could not finish comparing the library. Nothing was deleted; "
                         + "try again."
                 )
             }
@@ -2752,7 +2752,7 @@ final class AppModel {
             } catch {
                 self.report(
                     "The Photos Could Not Be Regrouped",
-                    "Scolo could not apply that setting to the sweep it has. "
+                    "Moppo could not apply that setting to the sweep it has. "
                         + "Scan again to use it."
                 )
             }

@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Gives cards immediate feedback while the mouse button is held.
 struct CardPressButtonStyle: ButtonStyle {

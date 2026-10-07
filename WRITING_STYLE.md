@@ -1,6 +1,6 @@
 # Writing style
 
-Scolo uses ADS-STE100 Simplified Technical English. Use this standard for
+Moppo uses ADS-STE100 Simplified Technical English. Use this standard for
 documentation, interface text, code comments, release notes, and support text.
 
 ## Core rules

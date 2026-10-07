@@ -76,7 +76,7 @@ enum MainWindowPresenter {
 }
 
 struct MainWindowIdentityView: NSViewRepresentable {
-    static let identifier = NSUserInterfaceItemIdentifier("Scolo.mainWindow")
+    static let identifier = NSUserInterfaceItemIdentifier("Moppo.mainWindow")
 
     func makeNSView(context: Context) -> NSView {
         IdentityView()

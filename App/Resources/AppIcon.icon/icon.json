@@ -3,38 +3,18 @@
     {
       "value" : {
         "linear-gradient" : [
-          "extended-gray:0.75000,1.00000",
-          "extended-gray:0.50000,1.00000"
-        ],
-        "orientation" : {
-          "start" : {
-            "x" : 0.5,
-            "y" : 0
-          },
-          "stop" : {
-            "x" : 0.5,
-            "y" : 0.7
-          }
-        }
+          "srgb:0.94902,0.94902,0.95686,1.00000",
+          "srgb:0.86275,0.86275,0.86275,1.00000"
+        ]
       }
     },
     {
       "appearance" : "dark",
       "value" : {
         "linear-gradient" : [
-          "extended-gray:0.25000,1.00000",
-          "extended-gray:0.00000,1.00000"
-        ],
-        "orientation" : {
-          "start" : {
-            "x" : 0.5,
-            "y" : 0
-          },
-          "stop" : {
-            "x" : 0.5,
-            "y" : 0.7
-          }
-        }
+          "srgb:0.09020,0.09020,0.09020,1.00000",
+          "srgb:0.05490,0.05490,0.05490,1.00000"
+        ]
       }
     }
   ],
@@ -44,88 +24,34 @@
         {
           "fill-specializations" : [
             {
-              "appearance" : "dark",
               "value" : {
-                "solid" : "extended-gray:1.00000,1.00000"
+                "solid" : "srgb:0.09020,0.09020,0.09020,1.00000"
               }
-            }
-          ],
-          "glass" : true,
-          "image-name" : "Subtract 2.svg",
-          "name" : "Subtract 2",
-          "opacity-specializations" : [
-            {
-              "value" : 1
             },
             {
               "appearance" : "dark",
-              "value" : 1
-            }
-          ]
-        },
-        {
-          "glass" : false,
-          "hidden-specializations" : [
-            {
-              "idiom" : "square",
-              "value" : true
-            }
-          ],
-          "image-name" : "Mask group 2.svg",
-          "name" : "Mask group 2"
-        },
-        {
-          "fill-specializations" : [
-            {
-              "appearance" : "dark",
               "value" : {
-                "linear-gradient" : [
-                  "display-p3:0.20000,0.20000,0.20000,1.00000",
-                  "display-p3:0.28688,0.46184,0.45107,1.00000"
-                ],
-                "orientation" : {
-                  "start" : {
-                    "x" : 0.321010723577314,
-                    "y" : 0.3862970256271318
-                  },
-                  "stop" : {
-                    "x" : 0.6593490084217892,
-                    "y" : 0.7150395554184785
-                  }
-                }
+                "solid" : "srgb:1.00000,0.97255,0.92941,1.00000"
               }
             }
           ],
           "glass" : false,
-          "hidden-specializations" : [
-            {
-              "idiom" : "square",
-              "value" : false
-            }
-          ],
-          "image-name" : "Rectangle 1439 2.svg",
-          "name" : "Rectangle 1439 2"
-        },
-        {
-          "hidden" : true,
-          "image-name" : "Vector 2.svg",
-          "name" : "Vector 2"
+          "image-name" : "Moppo.svg",
+          "name" : "Moppo"
         }
       ],
+      "name" : "Moppo",
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.12
       },
       "translucency" : {
-        "enabled" : true,
-        "value" : 0.5
+        "enabled" : false,
+        "value" : 0
       }
     }
   ],
   "supported-platforms" : {
-    "circles" : [
-      "watchOS"
-    ],
     "squares" : "shared"
   }
 }

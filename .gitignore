@@ -1,5 +1,5 @@
 # Generated from project.yml — never commit
-Scolo.xcodeproj/
+*.xcodeproj/
 
 .DS_Store
 .build/
@@ -13,3 +13,4 @@ BACKLOG.local.md
 
 # Design sources and concept renders — kept locally, not in the repo
 design/
+output/

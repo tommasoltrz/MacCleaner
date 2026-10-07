@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Shows a category name, item count, and size above its files.
 struct CategoryRow: View {

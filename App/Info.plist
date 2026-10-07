@@ -21,25 +21,25 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSAppBundlesUsageDescription</key>
-	<string>Scolo needs permission to move applications that you select to the Trash.</string>
+	<string>Moppo needs permission to move applications that you select to the Trash.</string>
 	<key>NSAppDataUsageDescription</key>
-	<string>Scolo needs access to data from removed apps so it can move files that you select to the Trash.</string>
+	<string>Moppo needs access to data from removed apps so it can move files that you select to the Trash.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Scolo reads your photo library to find duplicates. Nothing is deleted until you confirm it.</string>
+	<string>Moppo reads your photo library to find duplicates. Nothing is deleted until you confirm it.</string>
 	<key>NSServices</key>
 	<array>
 		<dict>
 			<key>NSMenuItem</key>
 			<dict>
 				<key>default</key>
-				<string>Review Uninstall with Scolo</string>
+				<string>Review Uninstall with Moppo</string>
 			</dict>
 			<key>NSMessage</key>
 			<string>reviewUninstall</string>
 			<key>NSPortName</key>
-			<string>Scolo</string>
+			<string>Moppo</string>
 			<key>NSRequiredContext</key>
 			<dict>
 				<key>NSApplicationIdentifier</key>
@@ -52,7 +52,7 @@
 				<string>com.apple.application-bundle</string>
 			</array>
 			<key>NSServiceDescription</key>
-			<string>Open the selected application in Scolo for uninstall review.</string>
+			<string>Open the selected application in Moppo for uninstall review.</string>
 		</dict>
 	</array>
 </dict>

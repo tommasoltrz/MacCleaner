@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Presents one floating preview without blocking the main window.
 struct PhotoPreviewWindowPresenter: NSViewRepresentable {

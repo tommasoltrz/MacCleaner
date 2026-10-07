@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The source list, inside the sidebar panel.
 ///
@@ -185,7 +185,7 @@ struct SidebarView: View {
     /// much is left, how full it is.
     private var capacityFooter: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // No volume name. Scolo measures the startup disk and nothing else,
+            // No volume name. Moppo measures the startup disk and nothing else,
             // so naming it answered a question with one possible answer — and it
             // was taking the line that the figure someone opens this app for
             // should have to itself.

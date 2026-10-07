@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// The menu bar item: a live free-space readout and a one-click purge, as the
 /// design's Preferences › General describes it.
@@ -48,7 +48,7 @@ struct MenuBarView: View {
             }
             .disabled(model.isScanning)
 
-            Button("Open Scolo") {
+            Button("Open Moppo") {
                 // Hide the menu window before the main window requests key status.
                 NSApp.keyWindow?.orderOut(nil)
                 // Wait until AppKit finishes the menu click and releases key status.
@@ -62,7 +62,7 @@ struct MenuBarView: View {
             Divider()
                 .padding(.horizontal, 6)
 
-            Button("Quit Scolo") { NSApp.terminate(nil) }
+            Button("Quit Moppo") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }
         .buttonStyle(MenuItemButtonStyle())
@@ -76,12 +76,8 @@ struct MenuBarLabel: View {
     let volume: VolumeInfo?
 
     var body: some View {
-        // Icon only: the menu bar is crowded real estate, and the figure is one
-        // click away inside the menu. The asset is the app mark as a vector with
-        // its own 6 pt of padding baked in, tagged `template-rendering-intent`
-        // so the menu bar tints it — black on light, white on dark, inverted
-        // while the popover is open. 18 pt total puts the 15 pt glyph at the
-        // same optical weight as the SF Symbol it replaces.
+        // The 18-point template image contains the mascot and transparent padding.
+        // macOS selects its color for the menu bar appearance and selection state.
         Image(.menuBarIcon)
             .renderingMode(.template)
     }

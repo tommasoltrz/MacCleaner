@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Keeps the cleanup filters above the file list.
 struct ScannerView: View {

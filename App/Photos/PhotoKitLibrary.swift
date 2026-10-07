@@ -2,7 +2,7 @@ import Foundation
 import Photos
 import Vision
 import AppKit
-import ScoloCore
+import MoppoCore
 
 /// `PhotoLibraryProviding` backed by the real photo library.
 ///
@@ -167,7 +167,7 @@ final class PhotoKitLibrary: PhotoLibraryProviding, @unchecked Sendable {
     /// free to make progress, which is the rule this violated: never block in async
     /// code.
     private static let visionQueue = DispatchQueue(
-        label: "com.tommasolaterza.Scolo.vision",
+        label: "com.tommasolaterza.Moppo.vision",
         qos: .userInitiated,
         attributes: .concurrent
     )

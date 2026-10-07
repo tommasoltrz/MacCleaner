@@ -1,6 +1,6 @@
 import Combine
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Preferences → General: startup, scanning schedule, and the Full Disk Access status.
 struct GeneralPane: View {

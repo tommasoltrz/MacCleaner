@@ -1,7 +1,7 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
-/// Shows a read-only record of Scolo removal results.
+/// Shows a read-only record of Moppo removal results.
 struct CleanupHistoryView: View {
     @Bindable var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -249,8 +249,8 @@ private enum HistoryFilter: String, CaseIterable, Identifiable {
         switch self {
         case .all: "All recorded removal results."
         case .inTrash: "Items that are still in the Trash."
-        case .restored: "Items that Scolo restored from the Trash to their original locations."
-        case .failed: "Items that Scolo could not remove."
+        case .restored: "Items that Moppo restored from the Trash to their original locations."
+        case .failed: "Items that Moppo could not remove."
         }
     }
 
@@ -405,13 +405,13 @@ private struct ResultLabel: View {
         case .inTrash:
             "The Trash path exists, but the receipt cannot prove that it contains the same item."
         case .restored:
-            "Scolo put this item back at its original location."
+            "Moppo put this item back at its original location."
         case .removedPermanently:
             "This item did not move to the Trash, so it cannot be put back."
         case .noLongerInTrash:
             "This receipt no longer matches an item in the Trash."
         case .failed:
-            "Scolo did not remove this item."
+            "Moppo did not remove this item."
         }
     }
 }

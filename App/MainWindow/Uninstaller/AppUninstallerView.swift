@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Removes selected applications after checking their related files and ownership.
 struct AppUninstallerView: View {
@@ -627,7 +627,7 @@ struct AppUninstallerView: View {
                         .foregroundStyle(Token.Text.primary)
                     Text(
                         plan.isApplicationOnly
-                            ? "Scolo cannot identify related files safely. Only the application will move to the Trash."
+                            ? "Moppo cannot identify related files safely. Only the application will move to the Trash."
                             : plan.protectedItems.isEmpty
                             ? "Every verified related file below will move to the Trash."
                             : "Every verified related file below will move to the Trash, including profiles and settings."
@@ -686,7 +686,7 @@ struct AppUninstallerView: View {
                         .foregroundStyle(Token.Text.primary)
                     Text(
                         "Remove the cask through Homebrew so its package receipt stays correct. "
-                        + "Scolo will not trash only the app bundle."
+                        + "Moppo will not trash only the app bundle."
                     )
                     .font(.mcCaption)
                     .foregroundStyle(Token.Text.secondary)

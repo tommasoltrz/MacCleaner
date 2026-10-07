@@ -1,5 +1,5 @@
 import SwiftUI
-import ScoloCore
+import MoppoCore
 
 /// Keeps one opaque surface between removal progress and its result.
 struct RemovalOperationSurface: View {
