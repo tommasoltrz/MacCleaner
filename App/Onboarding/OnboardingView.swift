@@ -141,33 +141,15 @@ struct OnboardingView: View {
     }
 
     private var accessDetails: some View {
-        VStack(spacing: 18) {
-            PermissionRow(
-                title: "Full Disk Access",
-                detail: "Allow disk scans without separate requests for common folders",
-                symbol: "externaldrive.badge.checkmark",
-                status: hasFullDiskAccess ? "On" : "Enable",
-                isEnabled: hasFullDiskAccess,
-                settingsHint: "Open Full Disk Access in System Settings",
-                action: FullDiskAccess.openSystemSettings
-            )
-
-            Text(hasFullDiskAccess
-                 ? "Access is ready. You can change permissions later in System Settings."
-                 : "Enable Moppo in System Settings > Privacy & Security > Full Disk Access. Scans will wait until access is ready.")
-                .font(.system(size: 13))
-                .foregroundStyle(Token.Text.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if !hasFullDiskAccess {
-                Text("If access stays off, quit and reopen Moppo after you enable it. Moppo requests Photos access when you open Duplicates > Photos.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Token.Text.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+        PermissionRow(
+            title: "Full Disk Access",
+            detail: "Allow disk scans without separate requests for common folders",
+            symbol: "externaldrive.badge.checkmark",
+            status: hasFullDiskAccess ? "On" : "Enable",
+            isEnabled: hasFullDiskAccess,
+            settingsHint: "Open Full Disk Access in System Settings",
+            action: FullDiskAccess.openSystemSettings
+        )
     }
 
     private var footer: some View {
