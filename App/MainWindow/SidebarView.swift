@@ -89,16 +89,10 @@ struct SidebarView: View {
                         }
                     }
                 } icon: {
-                    Image(systemName: isSelected(view) ? view.selectedSymbol : view.symbol)
-                        // 18pt in the expanded sidebar. The scale is
-                        // pinned because a sidebar list sets one through
-                        // the environment and it multiplies whatever the
-                        // font says.
-                        .font(.system(size: 18, weight: .regular))
-                        .imageScale(.medium)
+                    sidebarIcon(for: view)
                         .frame(width: 22, alignment: .leading)
-                        .symbolRenderingMode(.monochrome)
                         .foregroundStyle(Token.Text.primary)
+                        .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
             }
@@ -128,6 +122,24 @@ struct SidebarView: View {
                     .padding(.horizontal, Token.Size.sidebarRowInset)
             )
             .accessibilityAddTraits(isSelected(view) ? .isSelected : [])
+        }
+    }
+
+    /// Cleanup uses the Moppo icon in both selection states.
+    @ViewBuilder
+    private func sidebarIcon(for view: AppModel.View) -> some View {
+        if view == .scanner {
+            Image(isSelected(view) ? "MoppoFilled" : "MoppoOutline")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+        } else {
+            Image(systemName: isSelected(view) ? view.selectedSymbol : view.symbol)
+                // Keep the symbol size fixed when the sidebar sets an image scale.
+                .font(.system(size: 18, weight: .regular))
+                .imageScale(.medium)
+                .symbolRenderingMode(.monochrome)
         }
     }
 
