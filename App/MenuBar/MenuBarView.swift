@@ -76,7 +76,7 @@ struct MenuBarLabel: View {
     let volume: VolumeInfo?
 
     var body: some View {
-        // The 18-point template image contains the mascot and transparent padding.
+        // The 20-point template image contains the mascot and transparent padding.
         // macOS selects its color for the menu bar appearance and selection state.
         Image(.menuBarIcon)
             .renderingMode(.template)
