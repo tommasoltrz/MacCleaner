@@ -33,13 +33,13 @@ final class AppModel {
         launchAccess = .welcome
     }
 
-    func finishWelcomeGuide() -> Bool {
+    func finishWelcomeGuide() {
         launchAccess.finishOnboarding(hasFullDiskAccess: FullDiskAccess.isGranted)
     }
 
-    /// Returns to the access guide before a scan can request folder permissions.
-    func checkDiskAccess() -> Bool {
-        launchAccess.authorizeScan(hasFullDiskAccess: FullDiskAccess.isGranted)
+    /// Keeps automatic scans off when the user continues with limited access.
+    func checkDiskAccess(automatic: Bool = false) -> Bool {
+        launchAccess.authorizeScan(hasFullDiskAccess: FullDiskAccess.isGranted, automatic: automatic)
     }
 
     // MARK: - Automatic scanning
@@ -57,7 +57,7 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.schedulerTick)
                 guard let self, !Task.isCancelled else { return }
-                guard self.checkDiskAccess() else { continue }
+                guard self.checkDiskAccess(automatic: true) else { continue }
                 await self.refreshVolumeInfo()
                 if self.scheduledScanIsDue() {
                     // Automatic: the view does not jump to the Scanner under
@@ -317,7 +317,7 @@ final class AppModel {
 
     /// Scan on entry when no current results remain.
     func startInitialCleanupScan() {
-        guard checkDiskAccess() else { return }
+        guard checkDiskAccess(automatic: true) else { return }
         guard view == .scanner, scanResults == nil, !hasStartedInitialCleanupScan,
               cleanupCompletion == nil, !isBusyWithDisk else { return }
         hasStartedInitialCleanupScan = true
@@ -2045,6 +2045,7 @@ final class AppModel {
     var iCloudPlanBytes: Int64?
 
     func loadICloud() async {
+        guard checkDiskAccess(automatic: true) else { return }
         iCloudStorage = try? await iCloudService.storage(planBytes: iCloudPlanBytes)
     }
 
@@ -2063,18 +2064,14 @@ final class AppModel {
     /// Last measured figures, shown immediately on launch.
     private(set) var measuredAt: Date?
     var breakdownIsStale: Bool {
+        if launchAccess == .limited { return true }
         guard let measuredAt else { return true }
         return Date().timeIntervalSince(measuredAt) > BreakdownCache.freshnessWindow
     }
 
-    /// Loads the Dashboard. Cached figures seed its layout while the skeleton stays
-    /// visible. A fresh measurement always follows. The Dashboard presents only the
-    /// completed refresh as real data. This prevents a stale-bar flash at launch.
-    ///
-    /// The cache supplies the first frame but does not replace measurement.
-    /// Stable build signing now keeps the TCC grant across launches.
+    /// Loads saved figures and storage history. Full Disk Access permits a new measurement at launch.
     func loadDashboard() async {
-        guard checkDiskAccess() else { return }
+        guard !isShowingWelcome else { return }
         // A recreated main window runs this task again. Treat that refresh like the
         // first one too, rather than briefly presenting cached values as final.
         hasCompletedInitialDashboardLoad = false
@@ -2095,7 +2092,11 @@ final class AppModel {
         // leaving the card blank for the length of a disk walk.
         await loadStorageHistory()
 
-        await measureStorage(trigger: .launch)
+        if checkDiskAccess(automatic: true) {
+            await measureStorage(trigger: .launch)
+        } else {
+            await refreshVolumeInfo(notifyLowSpace: false)
+        }
     }
 
     /// Walks the disk. Only ever called deliberately.
@@ -2104,7 +2105,8 @@ final class AppModel {
     ///   snapshot, and `removal` is the one "since the last clean-up" reads, so a
     ///   wrong trigger costs the user a baseline rather than a figure.
     func measureStorage(trigger: SnapshotTrigger = .manual) async {
-        guard checkDiskAccess() else { return }
+        let automatic = trigger == .launch || trigger == .scheduled || trigger == .removal
+        guard checkDiskAccess(automatic: automatic) else { return }
         guard !isLoadingBreakdown else {
             if trigger == .removal { needsPostCleanupMeasurement = true }
             return
@@ -2261,7 +2263,7 @@ final class AppModel {
 
     /// Refreshes only the cheap volume totals, without walking user folders. This is
     /// safe to run periodically and is the observation point for low-space alerts.
-    private func refreshVolumeInfo() async {
+    private func refreshVolumeInfo(notifyLowSpace: Bool = true) async {
         volume = (try? await diskInfo.volumeInfo()) ?? volume
         if let volume, let breakdown {
             self.breakdown = breakdown.reconcilingVolume(
@@ -2269,7 +2271,7 @@ final class AppModel {
                 freeBytes: volume.freeBytes
             )
         }
-        guard let volume, let settings else { return }
+        guard notifyLowSpace, let volume, let settings else { return }
         await lowDiskNotifications.observe(
             freeBytes: volume.freeBytes,
             volumeName: volume.name,
@@ -2283,7 +2285,7 @@ final class AppModel {
     ///   must not steal the view they are looking at; the status bar and the
     ///   toolbar's progress readout say it is running.
     func startScan(automatic: Bool = false, refreshOverview: Bool = true) {
-        guard checkDiskAccess() else { return }
+        guard checkDiskAccess(automatic: automatic) else { return }
         // Not during a removal either: a scan replaces the results the removal
         // is about to edit, and the scheduler can fire at any moment.
         guard !isBusyWithDisk else { return }

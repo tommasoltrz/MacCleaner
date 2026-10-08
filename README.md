@@ -29,9 +29,11 @@ vector template image that follows the system appearance.
 
 Select the `Moppo Onboarding` scheme to show the welcome guide on every Debug run.
 This scheme passes `--show-onboarding`. It keeps saved settings and system permissions.
-The `Moppo` scheme shows the guide until you complete it and enable Full Disk Access.
+The `Moppo` scheme shows the guide until you complete it.
 If access is missing on a later launch, Moppo shows the access step again.
-Disk scans wait until access is ready. Moppo requests Photos access when you open
+Select **Enable** to open System Settings, or select **Continue with Limited Access** to enter the app.
+Automatic scans wait for Full Disk Access. With limited access, select **Scan** or **Refresh Overview** to start a scan.
+macOS can request folder access during a manual scan. Moppo requests Photos access when you open
 Duplicates > Photos. Returning from System Settings refreshes the permission state.
 The photo scan starts only when you select Find Duplicates.
 Use **Moppo > Show Welcome Guide** to read the guide again.
