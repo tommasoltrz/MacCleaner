@@ -20,7 +20,7 @@ public enum LaunchAccess: Sendable, Equatable {
         self = hasFullDiskAccess ? .ready : .limited
     }
 
-    /// Limited access permits manual scans. Automatic scans require Full Disk Access.
+    /// Limited access permits scans in the open view. Background scans require Full Disk Access.
     public mutating func authorizeScan(hasFullDiskAccess: Bool, automatic: Bool = false) -> Bool {
         guard !requiresOnboarding else { return false }
         if hasFullDiskAccess {

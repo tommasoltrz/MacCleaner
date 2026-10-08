@@ -32,8 +32,9 @@ This scheme passes `--show-onboarding`. It keeps saved settings and system permi
 The `Moppo` scheme shows the guide until you complete it.
 If access is missing on a later launch, Moppo shows the access step again.
 Select **Enable** to open System Settings, or select **Continue with Limited Access** to enter the app.
-Automatic scans wait for Full Disk Access. With limited access, select **Scan** or **Refresh Overview** to start a scan.
-macOS can request folder access during a manual scan. Moppo requests Photos access when you open
+The cleanup scan starts when you enter Cleanup, including with limited access.
+Scheduled scans and automatic storage measurements wait for Full Disk Access.
+macOS can request folder access during a scan. Moppo requests Photos access when you open
 Duplicates > Photos. Returning from System Settings refreshes the permission state.
 The photo scan starts only when you select Find Duplicates.
 Use **Moppo > Show Welcome Guide** to read the guide again.

@@ -315,13 +315,13 @@ final class AppModel {
     }
     private var hasStartedInitialCleanupScan = false
 
-    /// Scan on entry when no current results remain.
+    /// Starts the first Cleanup scan with the access the user chose.
     func startInitialCleanupScan() {
-        guard checkDiskAccess(automatic: true) else { return }
+        guard checkDiskAccess() else { return }
         guard view == .scanner, scanResults == nil, !hasStartedInitialCleanupScan,
               cleanupCompletion == nil, !isBusyWithDisk else { return }
         hasStartedInitialCleanupScan = true
-        startScan(automatic: true, refreshOverview: false)
+        startScan(refreshOverview: false)
     }
 
     // MARK: - Data
