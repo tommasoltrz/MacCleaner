@@ -26,8 +26,14 @@ struct ScannerView: View {
                 .id(completion.id)
                 .transition(.opacity)
             } else if model.isScanning {
-                scanProgress
-                    .transition(.opacity)
+                Group {
+                    if model.isInterruptingScan {
+                        ScanInterruptionView().operationPageLayout()
+                    } else {
+                        scanProgress
+                    }
+                }
+                .transition(.opacity)
             } else if let results = model.scanResults {
                 VStack(spacing: 0) {
                     VStack(spacing: 12) {

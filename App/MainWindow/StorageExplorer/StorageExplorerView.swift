@@ -222,6 +222,7 @@ struct StorageExplorerView: View {
         PageProgressView(
             title: "Measuring \(model.currentURL?.lastPathComponent.nonEmpty ?? "the selected folder")",
             detail: progressText,
+            isInterrupting: model.isInterrupting,
             onStop: { model.cancel() }
         )
     }

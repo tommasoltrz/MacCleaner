@@ -43,6 +43,7 @@ final class StorageExplorerModel {
     private(set) var isMapSelectionPending = false
     @ObservationIgnored private var mapSelectionTask: Task<Void, Never>?
     var isLoading = false
+    private(set) var isInterrupting = false
     var progress = SizeMeasurement.zero
     var error: StorageExplorerError?
     var wasCancelled = false
@@ -170,11 +171,9 @@ final class StorageExplorerModel {
     }
 
     func cancel() {
-        scanGeneration += 1
+        guard isLoading, !isInterrupting else { return }
+        isInterrupting = true
         scanTask?.cancel()
-        scanTask = nil
-        isLoading = false
-        wasCancelled = true
     }
 
     func remove(_ items: [StorageExplorerItem], keepReceipt: Bool) async throws -> CleanupOutcome {
@@ -218,6 +217,7 @@ final class StorageExplorerModel {
         progress = .zero
         error = nil
         wasCancelled = false
+        isInterrupting = false
 
         if useCache, let cached = cachedSnapshot(for: url) {
             currentURL = cached.directory
@@ -237,6 +237,14 @@ final class StorageExplorerModel {
         scanTask = Task { [weak self] in
             guard let self else { return }
             let presentation = OperationPresentationDuration()
+            defer {
+                if scanGeneration == generation {
+                    isLoading = false
+                    isInterrupting = false
+                    scanTask = nil
+                    if Task.isCancelled { wasCancelled = true }
+                }
+            }
             do {
                 let snapshot = try await service.scan(
                     directory: url,
@@ -248,7 +256,7 @@ final class StorageExplorerModel {
                         // was releasing something. A later navigation is ruled out
                         // by the generation, not by the reference.
                         Task { @MainActor in
-                            guard self.scanGeneration == generation else { return }
+                            guard self.scanGeneration == generation, !self.isInterrupting else { return }
                             self.progress = measurement
                         }
                     }
@@ -258,25 +266,17 @@ final class StorageExplorerModel {
                 self.snapshot = snapshot
                 store(snapshot)
                 currentURL = snapshot.directory
-                isLoading = false
-                scanTask = nil
                 applyPendingSelection()
             } catch is CancellationError {
-                guard scanGeneration == generation else { return }
-                isLoading = false
-                scanTask = nil
+                // The completion block keeps the view busy until the task ends.
             } catch let explorerError as StorageExplorerError {
                 try? await presentation.wait()
-                guard scanGeneration == generation else { return }
+                guard scanGeneration == generation, !Task.isCancelled else { return }
                 error = explorerError
-                isLoading = false
-                scanTask = nil
             } catch {
                 try? await presentation.wait()
-                guard scanGeneration == generation else { return }
+                guard scanGeneration == generation, !Task.isCancelled else { return }
                 self.error = .unavailable(url.path)
-                isLoading = false
-                scanTask = nil
             }
         }
     }

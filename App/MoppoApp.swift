@@ -226,9 +226,9 @@ private struct MoppoCommands: Commands {
             Button("Scan for Cleanup Items") { model.startScan() }
                 .keyboardShortcut("r")
                 .disabled(model.isShowingWelcome || model.isBusyWithDisk)
-            Button("Stop Scan") { model.cancelScan() }
+            Button(model.isInterruptingScan ? ScanInterruptionView.title : "Stop Scan") { model.cancelScan() }
                 .keyboardShortcut(".")
-                .disabled(!model.isScanning)
+                .disabled(!model.isScanning || model.isInterruptingScan)
         }
         // Replace document editing commands with the application search command.
         CommandGroup(replacing: .textEditing) {

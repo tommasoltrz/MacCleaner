@@ -438,6 +438,7 @@ struct MainWindow: View {
                 title: "Cleanup scan",
                 detail: "\(model.scanProgress)% complete",
                 progress: Double(model.scanProgress) / 100,
+                isInterrupting: model.isInterruptingScan,
                 onStop: { model.cancelScan() }
             )
         } else if model.storageExplorer.isLoading, model.view != .storageExplorer {
@@ -445,6 +446,7 @@ struct MainWindow: View {
                 title: "Storage Explorer scan",
                 detail: "\(model.storageExplorer.progress.fileCount.formatted()) files · "
                     + ByteFormatting.string(model.storageExplorer.progress.allocatedBytes),
+                isInterrupting: model.storageExplorer.isInterrupting,
                 onStop: { model.storageExplorer.cancel() }
             )
         } else if model.isScanningDuplicateFiles,
@@ -455,6 +457,7 @@ struct MainWindow: View {
                 detail: progress.map { "\($0.completed.formatted()) of \($0.total.formatted()) files" }
                     ?? "Preparing scan",
                 progress: progress.flatMap { $0.total > 0 ? Double($0.completed) / Double($0.total) : nil },
+                isInterrupting: model.isInterruptingFileDuplicateScan,
                 onStop: { model.cancelFileDuplicateScan() }
             )
         } else if model.isSweepingPhotos,
@@ -463,12 +466,14 @@ struct MainWindow: View {
                 title: "Duplicate photo scan",
                 detail: "\(model.photoProgress?.percent ?? 0)% complete",
                 progress: Double(model.photoProgress?.percent ?? 0) / 100,
+                isInterrupting: model.isInterruptingPhotoSweep,
                 onStop: { model.cancelPhotoSweep() }
             )
         } else if model.isPlanningAppUninstall, model.view != .uninstaller {
             backgroundWorkStatus(
                 title: "Checking selected apps",
                 detail: model.appUninstallPlanningDetail ?? "Finding related files",
+                isInterrupting: model.isInterruptingAppUninstall,
                 onStop: { model.resetAppUninstall() }
             )
         }
@@ -476,27 +481,32 @@ struct MainWindow: View {
 
     private func backgroundWorkStatus(
         title: String, detail: String, progress: Double? = nil,
+        isInterrupting: Bool = false,
         onStop: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 8) {
-            Text(title)
-                .font(.mcControlLabel)
-                .foregroundStyle(Token.Text.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            ProgressView(value: progress)
-                .progressViewStyle(.linear)
-                .tint(Token.Text.primary)
-                .frame(width: 60)
-                .accessibilityLabel(title)
-            Button(action: onStop) {
-                Image(systemName: "stop.fill")
-                    .frame(width: 24, height: 28)
-                    .contentShape(Rectangle())
+            if isInterrupting {
+                ScanInterruptionView()
+            } else {
+                Text(title)
+                    .font(.mcControlLabel)
+                    .foregroundStyle(Token.Text.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(Token.Text.primary)
+                    .frame(width: 60)
+                    .accessibilityLabel(title)
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill")
+                        .frame(width: 24, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Stop \(title)")
+                .help("Stop \(title)")
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Stop \(title)")
-            .help("Stop \(title)")
         }
         .padding(.leading, 14)
         .padding(.trailing, 6)
@@ -505,7 +515,8 @@ struct MainWindow: View {
         .overlay {
             Capsule().strokeBorder(Token.Fill.controlBorder, lineWidth: Token.hairline)
         }
-        .help("\(title): \(detail). Finish or stop this operation to start another scan.")
+        .help(isInterrupting ? ScanInterruptionView.title
+              : "\(title): \(detail). Finish or stop this operation to start another scan.")
         .accessibilityElement(children: .contain)
     }
 
@@ -517,14 +528,18 @@ struct MainWindow: View {
             Button {
                 if model.isScanning { model.cancelScan() } else { model.startScan() }
             } label: {
-                Label(
-                    model.isScanning ? "Stop Scan" : "Scan",
-                    systemImage: model.isScanning ? "stop.fill" : "magnifyingglass"
-                )
+                if model.isInterruptingScan {
+                    ScanInterruptionView()
+                } else {
+                    Label(
+                        model.isScanning ? "Stop Scan" : "Scan",
+                        systemImage: model.isScanning ? "stop.fill" : "magnifyingglass"
+                    )
+                }
             }
             .buttonStyle(PageActionButtonStyle())
             .controlSize(.large)
-            .disabled(!model.isScanning && model.isBusyWithDisk)
+            .disabled(model.isInterruptingScan || (!model.isScanning && model.isBusyWithDisk))
         case .dashboard:
             Button { Task { await model.measureStorage() } } label: {
                 Label("Refresh Overview", systemImage: "arrow.clockwise")

@@ -61,6 +61,7 @@ struct FileDuplicatesView: View {
                 progress: model.fileDuplicateProgress.flatMap {
                     $0.total > 0 ? Double($0.completed) / Double($0.total) : nil
                 },
+                isInterrupting: model.isInterruptingFileDuplicateScan,
                 onStop: { model.cancelFileDuplicateScan() },
                 actionBottom: actionBottom
             )

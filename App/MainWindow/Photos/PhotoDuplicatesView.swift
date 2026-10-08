@@ -92,6 +92,7 @@ struct PhotoDuplicatesView: View {
                 title: "Scanning for duplicate photos",
                 detail: "\(progressLabel)\nThis may take a few minutes.",
                 progress: Double(model.photoProgress?.percent ?? 0) / 100,
+                isInterrupting: model.isInterruptingPhotoSweep,
                 onStop: { model.cancelPhotoSweep() },
                 actionBottom: actionBottom
             )
