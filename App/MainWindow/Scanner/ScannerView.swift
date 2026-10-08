@@ -26,14 +26,8 @@ struct ScannerView: View {
                 .id(completion.id)
                 .transition(.opacity)
             } else if model.isScanning {
-                Group {
-                    if model.isInterruptingScan {
-                        ScanInterruptionView().operationPageLayout()
-                    } else {
-                        scanProgress
-                    }
-                }
-                .transition(.opacity)
+                scanProgress
+                    .transition(.opacity)
             } else if let results = model.scanResults {
                 VStack(spacing: 0) {
                     VStack(spacing: 12) {
@@ -156,19 +150,20 @@ struct ScannerView: View {
     private var scanProgress: some View {
         VStack(spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Scanning for cleanup items")
+                Text(model.isInterruptingScan ? ScanInterruptionView.title : "Scanning for cleanup items")
                     .font(.system(size: 18, weight: .medium))
                 Spacer()
-                Text("\(model.scanProgress)%")
+                Text(model.isInterruptingScan ? "" : "\(model.scanProgress)%")
                     .font(.mcRowValue)
                     .foregroundStyle(Token.Text.secondary)
                     .contentTransition(reduceMotion ? .identity : .numericText())
+                    .accessibilityHidden(model.isInterruptingScan)
             }
-            ProgressView(value: Double(model.scanProgress), total: 100)
+            ProgressView(value: model.isInterruptingScan ? nil : Double(model.scanProgress), total: 100)
                 .progressViewStyle(.linear)
                 .tint(Token.Text.primary)
-                .accessibilityLabel("Cleanup scan")
-                .accessibilityValue("\(model.scanProgress)%")
+                .accessibilityLabel(model.isInterruptingScan ? ScanInterruptionView.title : "Cleanup scan")
+                .accessibilityValue(model.isInterruptingScan ? "" : "\(model.scanProgress)%")
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.scanProgress)
         .frame(maxWidth: 380)

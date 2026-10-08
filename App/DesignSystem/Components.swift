@@ -820,7 +820,7 @@ extension View {
     }
 }
 
-/// Confirms a stop request while the scan finishes its current work.
+/// Confirms a stop request in buttons and status controls.
 struct ScanInterruptionView: View {
     static let title = "Interrupting Scan"
 
@@ -830,8 +830,6 @@ struct ScanInterruptionView: View {
                 .controlSize(.small)
                 .accessibilityHidden(true)
             Text(Self.title)
-                .font(.mcControlLabel)
-                .foregroundStyle(Token.Text.primary)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.title)
@@ -848,19 +846,14 @@ struct PageProgressView: View {
     var actionBottom: CGFloat? = nil
 
     var body: some View {
-        Group {
-            if isInterrupting {
-                ScanInterruptionView()
-            } else {
-                content
-            }
-        }
-        .operationPageLayout(actionBottom: actionBottom)
+        content.operationPageLayout(actionBottom: actionBottom)
     }
+
+    private var displayedTitle: String { isInterrupting ? ScanInterruptionView.title : title }
 
     private var content: some View {
         VStack(spacing: 18) {
-            Text(title)
+            Text(displayedTitle)
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(Token.Text.primary)
             if let detail {
@@ -868,14 +861,17 @@ struct PageProgressView: View {
                     .font(.mcSubtitle)
                     .foregroundStyle(Token.Text.secondary)
                     .multilineTextAlignment(.center)
+                    .opacity(isInterrupting ? 0 : 1)
+                    .accessibilityHidden(isInterrupting)
             }
-            ProgressView(value: progress)
+            ProgressView(value: isInterrupting ? nil : progress)
                 .progressViewStyle(.linear)
                 .tint(Token.Text.primary)
-                .accessibilityLabel(title)
+                .accessibilityLabel(displayedTitle)
             if let onStop {
                 Button(action: onStop) { Label("Stop", systemImage: "stop.fill") }
                     .buttonStyle(PageActionButtonStyle())
+                    .disabled(isInterrupting)
             }
         }
         .frame(maxWidth: 380)
