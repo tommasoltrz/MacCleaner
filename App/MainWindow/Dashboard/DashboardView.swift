@@ -35,7 +35,7 @@ struct DashboardView: View {
                         staleNote
                     }
                 } else {
-                    measuringPlaceholder
+                    unmeasuredPlaceholder
                 }
 
                 StatTiles(
@@ -136,17 +136,16 @@ struct DashboardView: View {
         .padding(.horizontal, 2)
     }
 
-    /// The first breakdown walks the whole home directory, which takes real time.
-    /// Saying so beats an empty card or a spinner with no explanation.
-    private var measuringPlaceholder: some View {
+    /// Keeps the Dashboard ready for a manual measurement when no saved figures exist.
+    private var unmeasuredPlaceholder: some View {
         GroupedBox(radius: Token.Radius.card) {
             VStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Measuring storage…")
+                Image(systemName: "externaldrive")
+                    .foregroundStyle(Token.Text.secondary)
+                Text("Storage has not been measured")
                     .font(.mcControlLabel)
                     .foregroundStyle(Token.Text.secondary)
-                Text("Reading every file's allocated size. Anything unreadable is reported as Unmeasured rather than guessed at.")
+                Text("Use Refresh Overview to measure storage.")
                     .font(.mcSubtitle)
                     .foregroundStyle(Token.Text.tertiary)
                     .multilineTextAlignment(.center)

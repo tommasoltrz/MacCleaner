@@ -48,7 +48,7 @@ struct OnboardingView: View {
                             .accessibilityAddTraits(.isHeader)
                         Text(isWelcome
                              ? "Find unused files, review your storage, and choose what to remove."
-                             : "Moppo needs Full Disk Access before it scans protected folders on your Mac.")
+                             : "Enable access to scan protected folders, or continue with limited access.")
                             .font(.system(size: 15))
                             .foregroundStyle(Token.Text.secondary)
                             .multilineTextAlignment(.center)
@@ -172,13 +172,9 @@ struct OnboardingView: View {
                         .buttonStyle(PageActionButtonStyle())
                     }
                     Spacer()
-                    Button(isWelcome ? "Continue" : (hasFullDiskAccess ? "Start Scan" : "Open System Settings")) {
+                    Button(isWelcome ? "Continue" : (hasFullDiskAccess ? "Start Scan" : "Continue with Limited Access")) {
                         if isWelcome { changeStep(to: .access) }
-                        else {
-                            hasFullDiskAccess = FullDiskAccess.isGranted
-                            if hasFullDiskAccess { onFinish() }
-                            else { FullDiskAccess.openSystemSettings() }
-                        }
+                        else { onFinish() }
                     }
                     .buttonStyle(PageActionButtonStyle(tint: Token.color(.accent)))
                     .keyboardShortcut(.defaultAction)

@@ -258,7 +258,7 @@ private struct WelcomeRoot: View {
         Group {
             if model.isShowingWelcome {
                 OnboardingView(startsAtAccess: model.launchAccess == .diskAccess) {
-                    guard model.finishWelcomeGuide() else { return }
+                    model.finishWelcomeGuide()
                     UserDefaults.standard.set(true, forKey: "onboarding.completed")
                 }
             } else {

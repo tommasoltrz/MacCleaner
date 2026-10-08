@@ -1,7 +1,8 @@
-/// Keeps disk scans behind the welcome guide and the current permission check.
+/// Separates the welcome guide, limited access, and full access.
 public enum LaunchAccess: Sendable, Equatable {
     case welcome
     case diskAccess
+    case limited
     case ready
 
     public init(hasCompletedOnboarding: Bool, hasFullDiskAccess: Bool, forceWelcome: Bool = false) {
@@ -12,22 +13,22 @@ public enum LaunchAccess: Sendable, Equatable {
         }
     }
 
-    public var requiresOnboarding: Bool { self != .ready }
+    public var requiresOnboarding: Bool { self == .welcome || self == .diskAccess }
 
-    /// Rechecks access before the user leaves the welcome guide.
-    @discardableResult
-    public mutating func finishOnboarding(hasFullDiskAccess: Bool) -> Bool {
-        self = hasFullDiskAccess ? .ready : .diskAccess
-        return self == .ready
+    /// Allows the user to continue without Full Disk Access.
+    public mutating func finishOnboarding(hasFullDiskAccess: Bool) {
+        self = hasFullDiskAccess ? .ready : .limited
     }
 
-    /// Stops new scans when access is missing or the guide is open.
-    public mutating func authorizeScan(hasFullDiskAccess: Bool) -> Bool {
-        guard self == .ready else { return false }
-        guard hasFullDiskAccess else {
-            self = .diskAccess
-            return false
+    /// Limited access permits manual scans. Automatic scans require Full Disk Access.
+    public mutating func authorizeScan(hasFullDiskAccess: Bool, automatic: Bool = false) -> Bool {
+        guard !requiresOnboarding else { return false }
+        if hasFullDiskAccess {
+            self = .ready
+            return true
         }
-        return true
+        if self == .limited { return !automatic }
+        self = .diskAccess
+        return false
     }
 }

@@ -123,15 +123,15 @@ struct GeneralPane: View {
         PrefSection("Permissions") {
             HStack(spacing: PrefMetrics.controlGap) {
                 Circle()
-                    .fill(Token.color(hasFullDiskAccess ? .green : .red))
+                    .fill(Token.color(hasFullDiskAccess ? .green : .orange))
                     .frame(width: 8, height: 8)
                     .accessibilityHidden(true)
 
                 PrefLabel(
                     title: hasFullDiskAccess
                         ? "Full Disk Access granted"
-                        : "Full Disk Access required",
-                    description: "Required to measure other users’ caches and iOS backups."
+                        : "Full Disk Access is off",
+                    description: "Enable access for automatic scans and protected folders."
                 )
 
                 Spacer(minLength: PrefMetrics.controlGap)
