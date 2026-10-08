@@ -346,6 +346,7 @@ final class AppModel {
         !hasCompletedInitialDashboardLoad || isLoadingBreakdown
     }
     var isScanning = false
+    private(set) var isInterruptingScan = false
     var scanProgress = 0
 
     var snapshotsExpanded = false
@@ -894,6 +895,7 @@ final class AppModel {
 
     var appUninstallPlan: AppUninstallPlan?
     var isPlanningAppUninstall = false
+    private(set) var isInterruptingAppUninstall = false
     /// The one application being planned, so its review can draw its header before
     /// the plan exists. Nil while several are planned in turn.
     private(set) var appUninstallPlanningURL: URL?
@@ -925,6 +927,7 @@ final class AppModel {
         batchUninstallReview = nil
         batchUninstallOutcome = nil
         isPlanningAppUninstall = true
+        isInterruptingAppUninstall = false
         appUninstallPlanningURL = applicationURL.standardizedFileURL
         view = .uninstaller
         let planningID = UUID()
@@ -948,6 +951,7 @@ final class AppModel {
                     self.appUninstallPlanningURL = nil
                     self.appUninstallTask = nil
                     self.appUninstallPlanningID = nil
+                    if self.isInterruptingAppUninstall { self.resetAppUninstall() }
                 }
             }
             do {
@@ -959,6 +963,7 @@ final class AppModel {
             } catch is CancellationError {
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 // Shown on the review page itself, where the user is waiting.
                 self.appUninstallError = error.localizedDescription
             }
@@ -968,6 +973,12 @@ final class AppModel {
 
     func resetAppUninstall() {
         guard !isUninstallingApp else { return }
+        if isPlanningAppUninstall {
+            guard !isInterruptingAppUninstall else { return }
+            isInterruptingAppUninstall = true
+            appUninstallTask?.cancel()
+            return
+        }
         appUninstallTask?.cancel()
         appUninstallTask = nil
         appUninstallPlanningID = nil
@@ -977,6 +988,7 @@ final class AppModel {
         lastUninstalledApplicationName = nil
         pendingAppUninstall = nil
         isPlanningAppUninstall = false
+        isInterruptingAppUninstall = false
         appUninstallPlanningURL = nil
         appUninstallPlanningDetail = nil
         batchUninstallReview = nil
@@ -1340,6 +1352,7 @@ final class AppModel {
                     self.appUninstallPlanningDetail = nil
                     self.appUninstallTask = nil
                     self.appUninstallPlanningID = nil
+                    if self.isInterruptingAppUninstall { self.resetAppUninstall() }
                 }
             }
             var plans: [AppUninstallPlan] = []
@@ -2059,6 +2072,7 @@ final class AppModel {
     private let lowDiskNotifications = LowDiskNotificationService()
     private let coordinator = ScanCoordinator.standard()
     private var scanTask: Task<Void, Never>?
+    @ObservationIgnored private var cleanupScanID: UUID?
     @ObservationIgnored private var needsPostCleanupMeasurement = false
 
     /// Last measured figures, shown immediately on launch.
@@ -2299,6 +2313,9 @@ final class AppModel {
         cleanupOutcome = nil
         cleanupCompletion = nil
         isScanning = true
+        isInterruptingScan = false
+        let scanID = UUID()
+        cleanupScanID = scanID
         scanProgress = 0
         if !automatic { view = .scanner }
 
@@ -2317,7 +2334,9 @@ final class AppModel {
             let presentation = OperationPresentationDuration()
             defer {
                 self.isScanning = false
+                self.isInterruptingScan = false
                 self.scanTask = nil
+                self.cleanupScanID = nil
             }
             do {
                 // Ground truth for app protection: what is running right now.
@@ -2344,6 +2363,7 @@ final class AppModel {
                 if enabled?.contains(.applicationLeftovers) ?? true {
                     let planner = self.orphanedAppLeftoverPlanner
                     let candidates = await Task.detached { planner.scanCandidates() }.value
+                    try Task.checkCancellation()
                     leftoverCandidates = candidates
                     registeredIdentifiers = Self.registeredApplicationBundleIdentifiers(
                         for: candidates.identifiers
@@ -2366,9 +2386,13 @@ final class AppModel {
                     enabled: enabled,
                     context: context,
                     onProgress: { progress in
-                        Task { @MainActor in self.scanProgress = progress.percent }
+                        Task { @MainActor in
+                            guard self.cleanupScanID == scanID, !self.isInterruptingScan else { return }
+                            self.scanProgress = progress.percent
+                        }
                     }
                 )
+                try Task.checkCancellation()
                 self.scanResults = results
                 self.lastScanFinishedAt = results.finishedAt
                 UserDefaults.standard.set(results.finishedAt, forKey: "lastScanFinishedAt")
@@ -2384,6 +2408,7 @@ final class AppModel {
             } catch is CancellationError {
                 // The user stopped it.
             } catch {
+                guard !Task.isCancelled else { return }
                 self.report(
                     "The Scan Did Not Finish",
                     "Moppo could not finish measuring. Nothing was removed; try scanning again."
@@ -2394,8 +2419,9 @@ final class AppModel {
     }
 
     func cancelScan() {
+        guard isScanning, !isInterruptingScan else { return }
+        isInterruptingScan = true
         scanTask?.cancel()
-        Task { await coordinator.cancel() }
     }
 
     // MARK: - File duplicates
@@ -2403,10 +2429,12 @@ final class AppModel {
     private let fileDuplicateService = FileDuplicateService()
     private let fileDuplicateRemovalService = FileDuplicateRemovalService()
     @ObservationIgnored private var fileDuplicateTask: Task<Void, Never>?
+    @ObservationIgnored private var fileDuplicateScanID: UUID?
 
     var fileDuplicateResults: FileDuplicateResults?
     var fileDuplicateProgress: FileDuplicateService.Progress?
     var isScanningDuplicateFiles = false
+    private(set) var isInterruptingFileDuplicateScan = false
     var fileDuplicateSelection: Set<DuplicateFile.ID> = []
     var fileDuplicateMinimumBytes: Int64 = 1_000_000 {
         didSet {
@@ -2459,6 +2487,9 @@ final class AppModel {
         }
 
         isScanningDuplicateFiles = true
+        isInterruptingFileDuplicateScan = false
+        let scanID = UUID()
+        fileDuplicateScanID = scanID
         fileDuplicateProgress = .init(stage: .enumerating)
         fileDuplicateSelection.removeAll()
         duplicateKind = .files
@@ -2469,7 +2500,9 @@ final class AppModel {
             let presentation = OperationPresentationDuration()
             defer {
                 self.isScanningDuplicateFiles = false
+                self.isInterruptingFileDuplicateScan = false
                 self.fileDuplicateTask = nil
+                self.fileDuplicateScanID = nil
             }
             do {
                 let results = try await fileDuplicateService.scan(
@@ -2479,14 +2512,19 @@ final class AppModel {
                     excludedPaths: settings?.excludedFolderPaths ?? [],
                     excludedPatterns: settings?.excludedPatterns ?? [],
                     onProgress: { progress in
-                        Task { @MainActor in self.fileDuplicateProgress = progress }
+                        Task { @MainActor in
+                            guard self.fileDuplicateScanID == scanID, !self.isInterruptingFileDuplicateScan else { return }
+                            self.fileDuplicateProgress = progress
+                        }
                     }
                 )
+                try Task.checkCancellation()
                 // The results page counts what was checked and what was found.
                 fileDuplicateResults = results
             } catch is CancellationError {
                 // The user stopped it.
             } catch {
+                guard !Task.isCancelled else { return }
                 report(
                     "The Duplicate Scan Did Not Finish",
                     "Moppo could not finish comparing those folders. Try scanning again."
@@ -2497,8 +2535,9 @@ final class AppModel {
     }
 
     func cancelFileDuplicateScan() {
+        guard isScanningDuplicateFiles, !isInterruptingFileDuplicateScan else { return }
+        isInterruptingFileDuplicateScan = true
         fileDuplicateTask?.cancel()
-        Task { await fileDuplicateService.cancel() }
     }
 
     func selectAllFileDuplicates() {
@@ -2607,6 +2646,7 @@ final class AppModel {
     var photoResults: PhotoDuplicateResults?
     var photoProgress: PhotoDuplicateService.Progress?
     var isSweepingPhotos = false
+    private(set) var isInterruptingPhotoSweep = false
     private(set) var isDeletingPhotos = false
     /// Asset ids the user has marked to delete. Only ever populated from a group's
     /// `removable`, never from `assets` — a keeper cannot reach this set.
@@ -2713,6 +2753,7 @@ final class AppModel {
         let scanID = UUID()
         photoScanID = scanID
         isSweepingPhotos = true
+        isInterruptingPhotoSweep = false
         photoProgress = nil
         removalCompletion = nil
         photoUnavailable = nil
@@ -2726,6 +2767,8 @@ final class AppModel {
             defer {
                 if self.photoScanID == scanID {
                     self.isSweepingPhotos = false
+                    self.isInterruptingPhotoSweep = false
+                    if Task.isCancelled { self.photoProgress = nil }
                     self.photoTask = nil
                     self.photoScanID = nil
                 }
@@ -2735,7 +2778,7 @@ final class AppModel {
                     similarity: similarity,
                     onProgress: { progress in
                         Task { @MainActor in
-                            guard self.photoScanID == scanID else { return }
+                            guard self.photoScanID == scanID, !self.isInterruptingPhotoSweep else { return }
                             self.photoProgress = progress
                         }
                     }
@@ -2810,11 +2853,9 @@ final class AppModel {
     }
 
     func cancelPhotoSweep() {
+        guard isSweepingPhotos, !isInterruptingPhotoSweep else { return }
+        isInterruptingPhotoSweep = true
         photoTask?.cancel()
-        photoScanID = nil
-        photoTask = nil
-        isSweepingPhotos = false
-        photoProgress = nil
     }
 
     private static func describe(_ unavailable: PhotoSweepUnavailable) -> String {

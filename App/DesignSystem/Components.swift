@@ -820,16 +820,42 @@ extension View {
     }
 }
 
+/// Confirms a stop request while the scan finishes its current work.
+struct ScanInterruptionView: View {
+    static let title = "Interrupting Scan"
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityHidden(true)
+            Text(Self.title)
+                .font(.mcControlLabel)
+                .foregroundStyle(Token.Text.primary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Self.title)
+    }
+}
+
 /// Shows progress in the content area with an optional stop action.
 struct PageProgressView: View {
     let title: String
     var detail: String? = nil
     var progress: Double? = nil
+    var isInterrupting = false
     var onStop: (() -> Void)? = nil
     var actionBottom: CGFloat? = nil
 
     var body: some View {
-        content.operationPageLayout(actionBottom: actionBottom)
+        Group {
+            if isInterrupting {
+                ScanInterruptionView()
+            } else {
+                content
+            }
+        }
+        .operationPageLayout(actionBottom: actionBottom)
     }
 
     private var content: some View {

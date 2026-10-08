@@ -111,6 +111,7 @@ public actor ScanCoordinator {
         onProgress: (@Sendable (ScanProgress) -> Void)? = nil,
         onCategory: (@Sendable (ScanCategoryResult) -> Void)? = nil
     ) async throws -> ScanResults {
+        try Task.checkCancellation()
         if let runningTask { return try await runningTask.value }
 
         let active = scanners.filter { enabled?.contains($0.id) ?? true }
@@ -124,14 +125,18 @@ public actor ScanCoordinator {
         }
         runningTask = task
         defer { runningTask = nil }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            let results = try await task.value
+            try Task.checkCancellation()
+            return results
+        } onCancel: {
+            task.cancel()
+        }
     }
 
-    /// Cancels an in-flight scan. Measurement checks cancellation periodically, so
-    /// this returns promptly rather than at the end of the current category.
+    /// Requests cancellation. The scan stays active until its workers finish.
     public func cancel() {
         runningTask?.cancel()
-        runningTask = nil
     }
 
     private static func run(
