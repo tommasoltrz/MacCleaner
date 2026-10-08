@@ -487,6 +487,8 @@ struct MainWindow: View {
         HStack(spacing: 8) {
             if isInterrupting {
                 ScanInterruptionView()
+                    .font(.mcControlLabel)
+                    .foregroundStyle(Token.Text.primary)
             } else {
                 Text(title)
                     .font(.mcControlLabel)

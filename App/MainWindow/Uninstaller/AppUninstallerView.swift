@@ -37,7 +37,7 @@ struct AppUninstallerView: View {
     var body: some View {
         Group {
             if model.isInterruptingAppUninstall {
-                ScanInterruptionView().operationPageLayout()
+                PageProgressView(title: ScanInterruptionView.title, isInterrupting: true)
             } else if model.isPlanningAppUninstall, let url = model.appUninstallPlanningURL {
                 planningState(url)
             } else if model.isPlanningAppUninstall {
